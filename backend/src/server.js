@@ -16,6 +16,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const { startIndexer } = require("./services/indexerService");
 const { createCorsMiddleware, getAllowedOrigins } = require("./middleware/corsPolicy");
+const { initializeEventSourcing, shutdownEventSourcing } = require("./eventSourcing");
 
 const app  = express();
 const PORT = process.env.PORT || 4000;
@@ -81,18 +82,17 @@ app.use((err, req, res, next) => {
 async function startServer() {
   await runMigrations();
 
+  await initializeEventSourcing();
+
   const { start: startSummaryQueue } = require("./services/summaryQueue");
   await startSummaryQueue(io);
 
-  // Start the indexer service
   startIndexer(io).catch(err => console.error("[Indexer Error]", err.message));
 
-  // Start the main API server
   server.listen(PORT, () => {
     console.log(`\n  🌱 Stellar GreenPay API\n  🚀 Running at http://localhost:${PORT}\n  🌐 Network: ${process.env.STELLAR_NETWORK || "testnet"}\n`);
   });
 
-  // Start the Turrets server for donation matching (if enabled)
   if (process.env.ENABLE_TURRETS === "true") {
     const turretsPort = process.env.TURRETS_PORT || 3001;
     startTurretsServer(turretsPort);
@@ -103,6 +103,11 @@ if (require.main === module) {
   startServer().catch((err) => {
     console.error("[Startup Error]", err.message);
     process.exit(1);
+  });
+
+  process.on("SIGINT", async () => {
+    await shutdownEventSourcing();
+    process.exit(0);
   });
 }
 

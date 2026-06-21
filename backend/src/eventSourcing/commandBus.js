@@ -1,0 +1,365 @@
+"use strict";
+
+const pool = require("../db/pool");
+const { ProjectAggregate, DonorAggregate, MatchAggregate, JobAggregate, round7 } = require("./aggregates");
+
+const COMMAND_HANDLERS = new Map();
+
+class CommandHandler {
+  static register(commandType, handler) {
+    COMMAND_HANDLERS.set(commandType, handler);
+  }
+}
+
+async function getProjectState(projectId) {
+  const result = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
+  return ProjectAggregate.fromState(result.rows[0]);
+}
+
+async function getDonorState(donorAddress) {
+  const result = await pool.query("SELECT * FROM donor_stats WHERE public_key = $1", [donorAddress]);
+  return DonorAggregate.fromState(result.rows[0]);
+}
+
+async function getMatchState(matchId) {
+  const result = await pool.query("SELECT * FROM match_state WHERE match_id = $1", [matchId]);
+  return MatchAggregate.fromState(result.rows[0]);
+}
+
+async function getJobState(jobId) {
+  const result = await pool.query("SELECT * FROM jobs WHERE id = $1", [jobId]);
+  if (!result.rows[0]) return null;
+  return JobAggregate.fromState(result.rows[0]);
+}
+
+async function loadAggregateStream(aggregateType, aggregateId) {
+  const streamId = `${aggregateType}:${aggregateId}`;
+  const result = await pool.query(
+    `SELECT event_id, stream_id, aggregate_type, aggregate_id, event_type,
+            version, aggregate_version, payload, actor, occurred_at, created_at
+     FROM event_stream
+     WHERE stream_id = $1
+     ORDER BY version ASC`,
+    [streamId]
+  );
+  return result.rows.map((row) => {
+    const { fromPayload } = require("./events");
+    return fromPayload(row.payload);
+  });
+}
+
+class DonationCommandHandler {
+  async handle(command) {
+    const errors = command.validate();
+    if (errors.length > 0) throw new Error(errors.join("; "));
+
+    const existingCheck = await pool.query(
+      `SELECT event_id FROM event_stream
+       WHERE aggregate_type = 'Donation' AND event_type = 'DonationRecorded'
+         AND payload->'data'->>'transactionHash' = $1`,
+      [command.getTransactionHash()]
+    );
+    if (existingCheck.rows.length > 0) {
+      const existing = existingCheck.rows[0];
+      const row = await pool.query("SELECT * FROM event_stream WHERE event_id = $1", [existing.event_id]);
+      return { success: true, data: fromRow(row.rows[0]), deduplicated: true };
+    }
+
+    const projectResult = await pool.query("SELECT id FROM projects WHERE id = $1", [command.payload.projectId]);
+    if (!projectResult.rows[0]) throw new Error("Project not found");
+
+    const amount = command.getAmount();
+    const project = await getProjectState(command.payload.projectId);
+    const donor = await getDonorState(command.payload.donorAddress);
+
+    const donationEvent = new (require("./events").DonationRecordedEvent)({
+      aggregateId: `Donation:${command.getTransactionHash()}`,
+      version: await getNextVersion("Donation", `Donation:${command.getTransactionHash()}`),
+      actor: command.actor,
+      projectId: command.payload.projectId,
+      donorAddress: command.payload.donorAddress,
+      amountXlm: amount,
+      currency: command.payload.currency,
+      message: command.payload.message,
+      transactionHash: command.getTransactionHash(),
+    });
+
+    project.apply(donationEvent);
+    donor.apply(donationEvent);
+
+    await storeProjectAggregate(pool, command.payload.projectId, project);
+    await storeDonorAggregate(pool, command.payload.donorAddress, donor);
+
+    const donationRow = donationEvent.toRow();
+    await pool.query(
+      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
+      [
+        donationRow.event_id,
+        donationRow.stream_id,
+        donationRow.aggregate_type,
+        donationRow.aggregate_id,
+        donationRow.event_type,
+        donationRow.version,
+        donationRow.aggregate_version,
+        JSON.stringify(donationRow.payload),
+        donationRow.actor,
+        donationRow.occurred_at,
+        donationRow.created_at,
+      ]
+    );
+
+    return { events: [donationEvent], data: { donationId: donationRow.event_id, amountXlm: amount }, deduplicated: false };
+  }
+}
+
+class ApplyMatchCommandHandler {
+  async handle(command) {
+    const errors = command.validate();
+    if (errors.length > 0) throw new Error(errors.join("; "));
+
+    const matchId = command.payload.matchId;
+
+    if (command.payload.originalTxHash) {
+      const existingMatchTx = await pool.query(
+        `SELECT event_id FROM event_stream
+         WHERE aggregate_type = 'Match' AND event_type = 'MatchApplied'
+           AND payload->'data'->>'originalTxHash' = $1
+           AND payload->'data'->>'matchId' = $2`,
+        [command.payload.originalTxHash, matchId]
+      );
+      if (existingMatchTx.rows.length > 0) return { success: true, data: null, deduplicated: true };
+    }
+
+    const matchState = await getMatchState(matchId);
+    if (matchState) {
+      matchState.validateApplyMatch(command.payload.matchAmount);
+    }
+
+    const donorAddress = command.payload.donorAddress;
+    const donor = await getDonorState(donorAddress);
+
+    const matchEvent = new (require("./events").MatchAppliedEvent)({
+      aggregateId: `Match:${matchId}`,
+      version: await getNextVersion("Match", `Match:${matchId}`),
+      actor: command.actor,
+      matchId,
+      projectId: command.payload.projectId,
+      donorAddress,
+      matchAmount: command.payload.matchAmount,
+      originalTxHash: command.payload.originalTxHash,
+      multiplier: command.payload.multiplier,
+    });
+
+    donor.apply(matchEvent);
+    await storeDonorAggregate(pool, donorAddress, donor);
+
+    const matchRow = matchEvent.toRow();
+    await pool.query(
+      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
+      [matchRow.event_id, matchRow.stream_id, matchRow.aggregate_type, matchRow.aggregate_id, matchRow.event_type, matchRow.version, matchRow.aggregate_version, JSON.stringify(matchRow.payload), matchRow.actor, matchRow.occurred_at, matchRow.created_at]
+    );
+
+    return { events: [matchEvent], data: { matchId, matchAmount: command.payload.matchAmount }, deduplicated: false };
+  }
+}
+
+class ChangeProjectStatusCommandHandler {
+  async handle(command) {
+    const errors = command.validate();
+    if (errors.length > 0) throw new Error(errors.join("; "));
+
+    const projectResult = await pool.query("SELECT * FROM projects WHERE id = $1", [command.payload.projectId]);
+    if (!projectResult.rows[0]) throw new Error("Project not found");
+
+    const project = ProjectAggregate.fromState(projectResult.rows[0]);
+
+    if (project.state.status === command.payload.status) {
+      return { success: true, events: [], noop: true };
+    }
+
+    const projectId = command.payload.projectId;
+    const statusChangeEvent = new (require("./events").ProjectStatusChangedEvent)({
+      aggregateId: `Project:${projectId}`,
+      version: await getNextVersion("Project", `Project:${projectId}`),
+      actor: command.actor,
+      previousStatus: project.state.status,
+      newStatus: command.payload.status,
+      reason: command.payload.reason,
+    });
+
+    project.apply(statusChangeEvent);
+    await storeProjectAggregate(pool, projectId, project);
+
+    const row = statusChangeEvent.toRow();
+    await pool.query(
+      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
+      [row.event_id, row.stream_id, row.aggregate_type, row.aggregate_id, row.event_type, row.version, row.aggregate_version, JSON.stringify(row.payload), row.actor, row.occurred_at, row.created_at]
+    );
+
+    return { events: [statusChangeEvent], data: { previousStatus: project.state.status, newStatus: command.payload.status } };
+  }
+}
+
+class ReachMilestoneCommandHandler {
+  async handle(command) {
+    const errors = command.validate();
+    if (errors.length > 0) throw new Error(errors.join("; "));
+
+    const milestoneId = command.payload.milestoneId;
+    const milestoneEvent = new (require("./events").MilestoneReachedEvent)({
+      aggregateId: `Milestone:${milestoneId}`,
+      version: await getNextVersion("Milestone", `Milestone:${milestoneId}`),
+      actor: command.actor,
+      milestoneId,
+      projectId: command.payload.projectId,
+      percentage: parseInt(command.payload.percentage, 10) || 0,
+      title: command.payload.title,
+      transactionHash: command.payload.transactionHash,
+    });
+
+    const row = milestoneEvent.toRow();
+    await pool.query(
+      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
+      [row.event_id, row.stream_id, row.aggregate_type, row.aggregate_id, row.event_type, row.version, row.aggregate_version, JSON.stringify(row.payload), row.actor, row.occurred_at, row.created_at]
+    );
+
+    return { events: [milestoneEvent], data: { milestoneId } };
+  }
+}
+
+class ReleaseEscrowCommandHandler {
+  async handle(command) {
+    const errors = command.validate();
+    if (errors.length > 0) throw new Error(errors.join("; "));
+
+    const jobId = command.payload.jobId;
+    const jobState = await getJobState(jobId);
+    if (!jobState) throw new Error("Job not found");
+    const jobRow = await pool.query("SELECT * FROM jobs WHERE id = $1", [jobId]);
+
+    const jobReleasedEvent = new (require("./events").JobReleasedEvent)({
+      aggregateId: `Job:${jobId}`,
+      version: await getNextVersion("Job", `Job:${jobId}`),
+      actor: command.actor,
+      clientPublicKey: jobRow.rows[0].client_public_key,
+      freelancerPublicKey: jobRow.rows[0].freelancer_public_key,
+      amountXlm: parseFloat(jobRow.rows[0].amount_escrow_xlm?.toString() || "0"),
+      releaseTransactionHash: command.payload.releaseTransactionHash,
+    });
+
+    const row = jobReleasedEvent.toRow();
+    await pool.query(
+      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
+      [row.event_id, row.stream_id, row.aggregate_type, row.aggregate_id, row.event_type, row.version, row.aggregate_version, JSON.stringify(row.payload), row.actor, row.occurred_at, row.created_at]
+    );
+
+    return { events: [jobReleasedEvent], data: { jobId, releaseTransactionHash: command.payload.releaseTransactionHash } };
+  }
+}
+
+class CreateMatchOfferCommandHandler {
+  async handle(command) {
+    const errors = command.validate();
+    if (errors.length > 0) throw new Error(errors.join("; "));
+
+    const matchId = uuid();
+    const matchCreatedEvent = new (require("./events").MatchCreatedEvent)({
+      aggregateId: `Match:${command.payload.projectId}`,
+      version: await getNextVersion("Match", `Match:${command.payload.projectId}`),
+      actor: command.actor,
+      matchId,
+      projectId: command.payload.projectId,
+      matcherAddress: command.payload.matcherAddress,
+      capXlm: command.payload.capXlm,
+      multiplier: command.payload.multiplier,
+      expiresAt: command.payload.expiresAt,
+    });
+
+    const row = matchCreatedEvent.toRow();
+    await pool.query(
+      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
+      [row.event_id, row.stream_id, row.aggregate_type, row.aggregate_id, row.event_type, row.version, row.aggregate_version, JSON.stringify(row.payload), row.actor, row.occurred_at, row.created_at]
+    );
+
+    return { events: [matchCreatedEvent], data: { matchId } };
+  }
+}
+
+async function storeProjectAggregate(pool, projectId, aggregate) {
+  const state = aggregate.getState();
+  await pool.query(
+    `UPDATE projects
+     SET raised_xlm = $1::numeric,
+         donor_count = $2,
+         status = $3,
+         updated_at = NOW()
+     WHERE id = $4`,
+    [state.raisedXlm.toFixed(7), state.donorCount, state.status, projectId]
+  );
+}
+
+async function storeDonorAggregate(pool, donorAddress, aggregate) {
+  const state = aggregate.getState();
+  await pool.query(
+    `INSERT INTO donor_stats (public_key, total_donated_xlm, projects_supported, badges, projection_cursor)
+     VALUES ($1, $2::numeric, $3, $4::jsonb, 0)
+     ON CONFLICT (public_key) DO UPDATE SET
+       total_donated_xlm = EXCLUDED.total_donated_xlm,
+       projects_supported = EXCLUDED.projects_supported,
+       badges = EXCLUDED.badges`,
+    [donorAddress, state.totalDonatedXlm.toFixed(7), state.projectsSupported.size, JSON.stringify(state.badges)]
+  );
+}
+
+async function getNextVersion(aggregateType, aggregateId) {
+  const result = await pool.query(
+    "SELECT MAX(version) AS max_version FROM event_stream WHERE aggregate_type = $1 AND aggregate_id = $2",
+    [aggregateType, aggregateId]
+  );
+  return (result.rows[0]?.max_version || 0) + 1;
+}
+
+function fromRow(row) {
+  return {
+    eventId: row.event_id,
+    streamId: row.stream_id,
+    aggregateType: row.aggregate_type,
+    aggregateId: row.aggregate_id,
+    eventType: row.event_type,
+    version: row.version,
+    aggregateVersion: row.aggregate_version,
+    payload: row.payload,
+    actor: row.actor,
+    occurredAt: row.occurred_at,
+    createdAt: row.created_at,
+  };
+}
+
+const handlers = {
+  RecordDonation: new DonationCommandHandler(),
+  ApplyMatch: new ApplyMatchCommandHandler(),
+  ChangeProjectStatus: new ChangeProjectStatusCommandHandler(),
+  ReachMilestone: new ReachMilestoneCommandHandler(),
+  ReleaseEscrow: new ReleaseEscrowCommandHandler(),
+  CreateMatchOffer: new CreateMatchOfferCommandHandler(),
+};
+
+async function execute(command) {
+  const handler = handlers[command.commandType];
+  if (!handler) throw new Error(`No handler registered for command: ${command.commandType}`);
+  return handler.handle(command);
+}
+
+module.exports = {
+  CommandHandler,
+  execute,
+  COMMAND_HANDLERS,
+  getProjectState,
+  getDonorState,
+  getMatchState,
+  getJobState,
+  loadAggregateStream,
+  storeProjectAggregate,
+  storeDonorAggregate,
+  fromRow,
+};
