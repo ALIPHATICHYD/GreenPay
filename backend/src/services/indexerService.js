@@ -6,7 +6,8 @@
 const { server: stellarServer } = require("./stellar");
 const pool = require("../db/pool");
 const { v4: uuid } = require("uuid");
-const { computeBadges } = require("./store");
+const { execute } = require("../eventSourcing/commandBus");
+const { DonationRecordedEvent, MatchAppliedEvent } = require("../eventSourcing/events");
 
 let lastProcessedLedger = 0;
 let isRunning = false;
@@ -86,7 +87,7 @@ async function startIndexer(socketIo) {
 // exported as `startIndexer`
 
 /**
- * Handle a payment to a project.
+ * Handle a payment to a project via Event Sourcing CQRS.
  */
 async function handleDonation(projectId, op) {
   const txHash = op.transaction_hash;
@@ -97,9 +98,10 @@ async function handleDonation(projectId, op) {
   let inTransaction = false;
 
   try {
-    // 1. Deduplicate by transaction hash
     const existingResult = await client.query(
-      "SELECT id FROM donations WHERE transaction_hash = $1",
+      `SELECT event_id FROM event_stream
+       WHERE event_type = 'DonationRecorded'
+         AND payload->'data'->>'transactionHash' = $1`,
       [txHash]
     );
     if (existingResult.rows.length > 0) {
@@ -109,57 +111,55 @@ async function handleDonation(projectId, op) {
     await client.query("BEGIN");
     inTransaction = true;
 
-    // 2. Record the donation
-    const donationId = uuid();
-    await client.query(
-      `INSERT INTO donations (id, project_id, donor_address, amount_xlm, amount, currency, transaction_hash, created_at)
-       VALUES ($1, $2, $3, $4, $5, 'XLM', $6, NOW())`,
-      [donationId, projectId, donorAddress, amountXLM, amountXLM, txHash]
+    const matchesResult = await client.query(
+      `SELECT id, matcher_address, cap_xlm, matched_xlm, multiplier
+       FROM donation_matches
+       WHERE project_id = $1 AND expires_at > NOW()`,
+      [projectId],
     );
 
-    // 3. Update project raised amount and donor count
-    await client.query(
-      `UPDATE projects
-       SET raised_xlm = raised_xlm + $1,
-           donor_count = (SELECT COUNT(DISTINCT donor_address) FROM donations WHERE project_id = $2),
-           updated_at = NOW()
-       WHERE id = $2`,
-      [amountXLM, projectId]
+    const donationResult = await execute(
+      new (require("../eventSourcing/commands").RecordDonationCommand)({
+        actor: donorAddress,
+        projectId,
+        donorAddress,
+        amountXLM,
+        amount: amountXLM,
+        currency: "XLM",
+        message: null,
+        transactionHash: txHash,
+      })
     );
 
-    // 4. Update donor profile (total donated, projects supported, badges)
-    const existingProfileResult = await client.query(
-      "SELECT total_donated_xlm FROM profiles WHERE public_key = $1",
-      [donorAddress]
-    );
-    const existingProfile = existingProfileResult.rows[0];
-    const previousTotal = existingProfile ? parseFloat(existingProfile.total_donated_xlm || "0") : 0;
-    const newTotal = previousTotal + amountXLM;
-    
-    const projectsSupportedResult = await client.query(
-      "SELECT COUNT(DISTINCT project_id) AS count FROM donations WHERE donor_address = $1",
-      [donorAddress]
-    );
-    const projectsSupported = parseInt(projectsSupportedResult.rows[0].count, 10) || 1;
-    const badges = computeBadges(newTotal);
+    if (matchesResult.rows.length > 0 && !donationResult.deduplicated) {
+      for (const match of matchesResult.rows) {
+        const matchedXlm = parseFloat(match.matched_xlm || "0");
+        const capXlm = parseFloat(match.cap_xlm);
+        const remaining = capXlm - matchedXlm;
 
-    await client.query(
-      `INSERT INTO profiles (public_key, total_donated_xlm, projects_supported, badges, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, NOW(), NOW())
-       ON CONFLICT (public_key) DO UPDATE SET
-         total_donated_xlm = EXCLUDED.total_donated_xlm,
-         projects_supported = EXCLUDED.projects_supported,
-         badges = EXCLUDED.badges,
-         updated_at = NOW()`,
-      [donorAddress, newTotal.toFixed(7), projectsSupported, JSON.stringify(badges)]
-    );
+        if (remaining > 0) {
+          const matchAmount = Math.min(amountXLM * match.multiplier, remaining);
+
+          await execute(
+            new (require("../eventSourcing/commands").ApplyMatchCommand)({
+              actor: donorAddress,
+              matchId: match.id,
+              projectId,
+              donorAddress: match.matcher_address,
+              matchAmount,
+              originalTxHash: txHash,
+              multiplier: match.multiplier,
+            })
+          );
+        }
+      }
+    }
 
     await client.query("COMMIT");
     inTransaction = false;
 
     console.log(`[Indexer] New donation: ${amountXLM} XLM from ${donorAddress} to project ${projectId}`);
 
-    // 5. Emit WebSocket event
     if (io) {
       io.emit("newDonation", {
         projectId,
@@ -176,15 +176,6 @@ async function handleDonation(projectId, op) {
     client.release();
   }
 }
-
-/**
- * Handle a Horizon payment operation observed for a project wallet.
- *
- * @param {string} projectId - Internal project UUID.
- * @param {object} op - Horizon operation object for the payment.
- * @returns {Promise<void>} Resolves once processing (DB updates, profiles) completes.
- */
-// internal helper
 
 /**
  * Returns the indexer status for the health endpoint.

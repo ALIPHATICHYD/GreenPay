@@ -152,3 +152,75 @@ CREATE TABLE IF NOT EXISTS project_follows (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(project_id, device_token_id)
 );
+
+-- CQRS Read-Model Tables
+-- donor_stats: materialized donor profile aggregates (updated by projection, not direct writes)
+CREATE TABLE IF NOT EXISTS donor_stats (
+  public_key TEXT PRIMARY KEY REFERENCES profiles(public_key) ON DELETE CASCADE,
+  total_donated_xlm NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  projects_supported INTEGER NOT NULL DEFAULT 0,
+  badges JSONB NOT NULL DEFAULT '[]'::JSONB,
+  projection_cursor BIGINT NOT NULL DEFAULT 0
+);
+
+-- match_state: materialized match status (updated by projection, not direct writes)
+CREATE TABLE IF NOT EXISTS match_state (
+  match_id UUID PRIMARY KEY REFERENCES donation_matches(id) ON DELETE CASCADE,
+  matched_xlm NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  cap_xlm NUMERIC(20, 7) NOT NULL,
+  multiplier INTEGER NOT NULL DEFAULT 1,
+  projection_cursor BIGINT NOT NULL DEFAULT 0
+);
+
+-- ============================================================
+-- Event Stream (Event Sourcing write store)
+-- Append-only log; immutable once written (no DELETE/UPDATE).
+-- Unique constraint on (stream_id, version) enforces aggregate
+-- version ordering; partial unique index on tx_hash ensures
+-- idempotent donation replay without double-counting.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS event_stream (
+  event_id           UUID            PRIMARY KEY,
+  stream_id          TEXT            NOT NULL,
+  aggregate_type     TEXT            NOT NULL,
+  aggregate_id       TEXT            NOT NULL,
+  event_type         TEXT            NOT NULL,
+  version            INTEGER         NOT NULL,
+  aggregate_version  INTEGER         NOT NULL,
+  payload            JSONB           NOT NULL,
+  actor              TEXT            NOT NULL DEFAULT 'system',
+  occurred_at        TIMESTAMPTZ     NOT NULL,
+  created_at         TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+  processed          BOOLEAN         NOT NULL DEFAULT false,
+  processed_at       TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_event_stream_stream_version
+  ON event_stream (stream_id, version);
+
+CREATE INDEX IF NOT EXISTS idx_event_stream_aggregate
+  ON event_stream (aggregate_type, aggregate_id);
+
+CREATE INDEX IF NOT EXISTS idx_event_stream_occurred
+  ON event_stream (occurred_at);
+
+CREATE INDEX IF NOT EXISTS idx_event_stream_processed
+  ON event_stream (processed, occurred_at);
+
+-- Idempotency guard: at most one DonationRecorded per transaction hash
+CREATE UNIQUE INDEX IF NOT EXISTS ux_donation_tx_hash
+  ON event_stream ((payload->'data'->>'transactionHash'))
+  WHERE event_type = 'DonationRecorded';
+
+-- CQRS Read-Model Cursor Columns
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS projection_cursor BIGINT DEFAULT 0;
+ALTER TABLE donor_stats ADD COLUMN IF NOT EXISTS projection_cursor BIGINT DEFAULT 0;
+ALTER TABLE match_state ADD COLUMN IF NOT EXISTS projection_cursor BIGINT DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS projection_cursor BIGINT DEFAULT 0;
+ALTER TABLE project_milestones ADD COLUMN IF NOT EXISTS projection_cursor BIGINT DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS event_store_migration_state (
+  id          TEXT       PRIMARY KEY DEFAULT 'legacy',
+  migrated_at TIMESTAMPTZ,
+  event_count BIGINT     NOT NULL DEFAULT 0
+);
