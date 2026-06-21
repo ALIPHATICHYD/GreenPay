@@ -25,34 +25,30 @@ async function recordDonation(req, res, next) {
 
   try {
     const { projectId, donorAddress, amountXLM, amount, currency = "XLM", message, transactionHash } = req.body;
+    const idempotencyKey = (req.body.idempotencyKey || transactionHash).trim();
+    if (!idempotencyKey || idempotencyKey.length > 128) { const e = new Error("Invalid idempotency key"); e.status = 400; throw e; }
     validateKey(donorAddress);
     validateTxHash(transactionHash);
 
     client = await pool.connect();
 
-    const projectResult = await client.query("SELECT id FROM projects WHERE id = $1", [projectId]);
-    if (!projectResult.rows[0]) { const e = new Error("Project not found"); e.status = 404; throw e; }
-
     // Determine numeric amount depending on currency
     const parsedAmount = parseFloat(currency === "XLM" ? amountXLM ?? amount : amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) { const e = new Error("Invalid amount"); e.status = 400; throw e; }
 
-    // Deduplicate by tx hash
-    const existingResult = await client.query(
-      "SELECT * FROM donations WHERE transaction_hash = $1",
-      [transactionHash],
-    );
-    if (existingResult.rows[0]) return res.json({ success: true, data: mapDonationRow(existingResult.rows[0]) });
-
-    await client.query("BEGIN");
+    await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
     inTransaction = true;
+
+    const projectResult = await client.query("SELECT id FROM projects WHERE id = $1 FOR UPDATE", [projectId]);
+    if (!projectResult.rows[0]) { const e = new Error("Project not found"); e.status = 404; throw e; }
 
     const donationResult = await client.query(
       `INSERT INTO donations (
-        id, project_id, donor_address, amount_xlm, amount, currency, message, transaction_hash, created_at
+        id, project_id, donor_address, amount_xlm, amount, currency, message, transaction_hash, idempotency_key, status, saga_step, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-      RETURNING *`,
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'prepared', 'donation_recorded', NOW(), NOW())
+      ON CONFLICT (idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+      RETURNING *, (xmax = 0) AS inserted`,
       [
         uuid(),
         projectId,
@@ -62,8 +58,16 @@ async function recordDonation(req, res, next) {
         currency,
         message?.trim().slice(0, 100) || null,
         transactionHash,
+        idempotencyKey,
       ],
     );
+
+    const donation = donationResult.rows[0];
+    if (!donation.inserted) {
+      await client.query("COMMIT");
+      inTransaction = false;
+      return res.json({ success: true, data: mapDonationRow(donation) });
+    }
 
     // Check for active matching offers
     if (currency === "XLM") {
@@ -84,9 +88,10 @@ async function recordDonation(req, res, next) {
 
           await client.query(
             `INSERT INTO donations (
-              id, project_id, donor_address, amount_xlm, amount, currency, message, transaction_hash, created_at
+              id, project_id, donor_address, amount_xlm, amount, currency, message, transaction_hash, idempotency_key, status, saga_step, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'committed', 'matching_recorded', NOW(), NOW())
+            ON CONFLICT (idempotency_key) DO NOTHING`,
             [
               uuid(),
               projectId,
@@ -96,6 +101,7 @@ async function recordDonation(req, res, next) {
               "XLM",
               `Matching donation for donation from ${donorAddress}`,
               `match-${transactionHash}-${match.id}`,
+              `match-${idempotencyKey}-${match.id}`,
             ],
           );
 
@@ -123,7 +129,7 @@ async function recordDonation(req, res, next) {
 
     // Update donor profile
     const existingProfileResult = await client.query(
-      "SELECT * FROM profiles WHERE public_key = $1",
+      "SELECT * FROM profiles WHERE public_key = $1 FOR UPDATE",
       [donorAddress],
     );
     const existingProfile = existingProfileResult.rows[0];
@@ -160,6 +166,11 @@ async function recordDonation(req, res, next) {
       ],
     );
 
+    await client.query(
+      "UPDATE donations SET status = $1, saga_step = $2, updated_at = NOW() WHERE id = $3",
+      ["committed", "profile_updated", donation.id],
+    );
+
     await client.query("COMMIT");
     inTransaction = false;
 
@@ -168,13 +179,13 @@ async function recordDonation(req, res, next) {
       io.emit("donation_event", {
         projectId,
         donorAddress,
-        amountXLM: donationResult.rows[0].amount_xlm,
+        amountXLM: donation.amount_xlm,
         transactionHash,
         timestamp: new Date().toISOString(),
       });
     }
 
-    res.status(201).json({ success: true, data: mapDonationRow(donationResult.rows[0]) });
+    res.status(201).json({ success: true, data: mapDonationRow({ ...donation, status: "committed", saga_step: "profile_updated" }) });
   } catch (e) {
     if (inTransaction && client) await client.query("ROLLBACK");
     next(e);

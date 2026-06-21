@@ -36,8 +36,21 @@ CREATE TABLE IF NOT EXISTS donations (
   currency TEXT NOT NULL DEFAULT 'XLM',
   message TEXT,
   transaction_hash TEXT NOT NULL UNIQUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  idempotency_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'committed' CHECK (status IN ('prepared', 'committed', 'compensated', 'failed')),
+  saga_step TEXT NOT NULL DEFAULT 'donation_recorded',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (idempotency_key)
 );
+
+ALTER TABLE donations ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+UPDATE donations SET idempotency_key = transaction_hash WHERE idempotency_key IS NULL;
+ALTER TABLE donations ALTER COLUMN idempotency_key SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS donations_idempotency_key_unique ON donations(idempotency_key);
+ALTER TABLE donations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'committed';
+ALTER TABLE donations ADD COLUMN IF NOT EXISTS saga_step TEXT NOT NULL DEFAULT 'donation_recorded';
+ALTER TABLE donations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE TABLE IF NOT EXISTS profiles (
   public_key TEXT PRIMARY KEY,
