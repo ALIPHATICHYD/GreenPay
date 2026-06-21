@@ -131,6 +131,93 @@ describe("donations route badge calculation", () => {
   test("awards Earth Guardian at 2000 XLM", () => {
     expectBadge(2000, "earth");
   });
+
+  test("uses a database-level idempotency key conflict to make concurrent retries a no-op", async () => {
+    const donorAddress = makePublicKey("H");
+    const transactionHash = makeTxHash("8");
+    const existingDonation = {
+      id: "donation-idempotent",
+      project_id: "project-5",
+      donor_address: donorAddress,
+      amount_xlm: "7",
+      amount: "7",
+      currency: "XLM",
+      message: null,
+      transaction_hash: transactionHash,
+      idempotency_key: "payment:user-1:checkout-1",
+      status: "committed",
+      saga_step: "profile_updated",
+      created_at: "2026-03-29T10:00:00.000Z",
+      inserted: false,
+    };
+    const client = createMockClient(
+      queryResult(),
+      queryResult([{ id: "project-5" }]),
+      queryResult([existingDonation]),
+      queryResult(),
+    );
+
+    const { res, next } = await invokeRecordDonation({
+      projectId: "project-5",
+      donorAddress,
+      amountXLM: "7",
+      transactionHash,
+      idempotencyKey: "payment:user-1:checkout-1",
+    });
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data.id).toBe("donation-idempotent");
+    expect(findQueryCall(client, "ON CONFLICT (idempotency_key) DO UPDATE")).toBeTruthy();
+    expect(findQueryCall(client, "UPDATE projects")).toBeUndefined();
+  });
+
+  test("does not depend on Redis when a high-latency lock expires before commit", async () => {
+    jest.useFakeTimers();
+    const donorAddress = makePublicKey("I");
+    const transactionHash = makeTxHash("9");
+    const donationRow = {
+      id: "donation-chaos",
+      project_id: "project-6",
+      donor_address: donorAddress,
+      amount_xlm: "13",
+      amount: "13",
+      currency: "XLM",
+      message: null,
+      transaction_hash: transactionHash,
+      created_at: "2026-03-29T10:00:00.000Z",
+      inserted: true,
+    };
+    const client = createMockClient(
+      queryResult(),
+      queryResult([{ id: "project-6" }]),
+      new Promise((resolve) => setTimeout(() => resolve(queryResult([donationRow])), 250)),
+      queryResult([]),
+      queryResult(),
+      queryResult([]),
+      queryResult([{ count: "1" }]),
+      queryResult(),
+      queryResult(),
+      queryResult(),
+    );
+
+    const promise = invokeRecordDonation({
+      projectId: "project-6",
+      donorAddress,
+      amountXLM: "13",
+      transactionHash,
+    });
+
+    await jest.advanceTimersByTimeAsync(300);
+    const { res, next } = await promise;
+    jest.useRealTimers();
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(201);
+    expect(client.query.mock.calls[0][0]).toBe("BEGIN ISOLATION LEVEL SERIALIZABLE");
+    expect(findQueryCall(client, "FOR UPDATE")).toBeTruthy();
+  });
+
 });
 
 describe("POST /api/donations", () => {
@@ -151,12 +238,12 @@ describe("POST /api/donations", () => {
       message: null,
       transaction_hash: transactionHash,
       created_at: "2026-03-29T10:00:00.000Z",
+      inserted: true,
     };
 
     const client = createMockClient(
-      queryResult([{ id: "project-1" }]),   // SELECT project
-      queryResult([]),                         // dedup check
       queryResult(),                           // BEGIN
+      queryResult([{ id: "project-1" }]),   // SELECT project FOR UPDATE
       queryResult([donationRow]),              // INSERT donation
       queryResult([]),                         // SELECT donation_matches (empty)
       queryResult(),                           // UPDATE projects
@@ -198,7 +285,7 @@ describe("POST /api/donations", () => {
   });
 
   test("returns 404 for an unknown project id", async () => {
-    const client = createMockClient(queryResult([]));
+    const client = createMockClient(queryResult(), queryResult([]));
 
     const { res, next } = await invokeRecordDonation({
       projectId: "missing-project",
@@ -254,10 +341,13 @@ describe("POST /api/donations", () => {
       message: null,
       transaction_hash: transactionHash,
       created_at: "2026-03-29T10:00:00.000Z",
+      inserted: false,
     };
     const client = createMockClient(
+      queryResult(),
       queryResult([{ id: "project-1" }]),
       queryResult([existingDonation]),
+      queryResult(),
     );
 
     const { res, next } = await invokeRecordDonation({
@@ -276,15 +366,14 @@ describe("POST /api/donations", () => {
         amountXLM: "25.0000000",
       }),
     );
-    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query).toHaveBeenCalledTimes(4);
     expect(client.release).toHaveBeenCalledTimes(1);
   });
 
   test("updates project totals after a donation", async () => {
     const client = createMockClient(
-      queryResult([{ id: "project-2" }]),    // SELECT project
-      queryResult([]),                          // dedup check
       queryResult(),                            // BEGIN
+      queryResult([{ id: "project-2" }]),    // SELECT project FOR UPDATE
       queryResult([{
         id: "donation-2",
         project_id: "project-2",
@@ -295,6 +384,7 @@ describe("POST /api/donations", () => {
         message: null,
         transaction_hash: makeTxHash("e"),
         created_at: "2026-03-29T10:00:00.000Z",
+      inserted: true,
       }]),                                      // INSERT donation
       queryResult([]),                          // SELECT donation_matches (empty)
       queryResult(),                            // UPDATE projects
@@ -320,9 +410,8 @@ describe("POST /api/donations", () => {
   test("calculates badges from cumulative donations across multiple requests", async () => {
     const donorAddress = makePublicKey("F");
     const client = createMockClient(
-      queryResult([{ id: "project-3" }]),    // SELECT project
-      queryResult([]),                          // dedup check
       queryResult(),                            // BEGIN
+      queryResult([{ id: "project-3" }]),    // SELECT project FOR UPDATE
       queryResult([{
         id: "donation-3",
         project_id: "project-3",
@@ -333,6 +422,7 @@ describe("POST /api/donations", () => {
         message: null,
         transaction_hash: makeTxHash("f"),
         created_at: "2026-03-29T10:00:00.000Z",
+      inserted: true,
       }]),                                      // INSERT donation
       queryResult([]),                          // SELECT donation_matches (empty)
       queryResult(),                            // UPDATE projects
@@ -366,9 +456,8 @@ describe("POST /api/donations", () => {
 
   test("rolls back the transaction if profile persistence fails after BEGIN", async () => {
     const client = createMockClient(
-      queryResult([{ id: "project-4" }]),
-      queryResult([]),
       queryResult(),
+      queryResult([{ id: "project-4" }]),
       queryResult([{
         id: "donation-4",
         project_id: "project-4",
@@ -379,6 +468,7 @@ describe("POST /api/donations", () => {
         message: null,
         transaction_hash: makeTxHash("a"),
         created_at: "2026-03-29T10:00:00.000Z",
+      inserted: true,
       }]),
       queryResult(),
       queryResult([]),
