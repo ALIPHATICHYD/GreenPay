@@ -6,6 +6,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { fetchProjectDonations } from "@/lib/api";
 import { formatXLM, timeAgo, shortenAddress } from "@/utils/format";
 import { explorerUrl, streamProjectPayments } from "@/lib/stellar";
+import { useDonationSocket } from "@/hooks/useDonationSocket";
 import type { Donation } from "@/utils/types";
 
 interface DonationFeedProps {
@@ -22,6 +23,7 @@ export default function DonationFeed({ projectId, walletAddress, refreshKey = 0,
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const latestIdRef = useRef<string | null>(null);
+  const seenTxHashesRef = useRef<Set<string>>(new Set());
 
   // Load initial donation data from the backend API
   useEffect(() => {
@@ -30,6 +32,7 @@ export default function DonationFeed({ projectId, walletAddress, refreshKey = 0,
       .then(({ donations: data, nextCursor: cursor }) => {
         setDonations(data);
         setNextCursor(cursor);
+        data.forEach((d) => seenTxHashesRef.current.add(d.transactionHash));
         if (data.length > 0) {
           latestIdRef.current = data[0].id;
         }
@@ -47,6 +50,9 @@ export default function DonationFeed({ projectId, walletAddress, refreshKey = 0,
     createdAt: string;
     transactionHash: string;
   }) => {
+    if (seenTxHashesRef.current.has(payment.transactionHash)) return;
+    seenTxHashesRef.current.add(payment.transactionHash);
+
     const newDonation: Donation = {
       id: payment.id,
       projectId,
@@ -76,6 +82,42 @@ export default function DonationFeed({ projectId, walletAddress, refreshKey = 0,
 
     latestIdRef.current = payment.id;
   }, [projectId, onNewDonation]);
+
+  // Handle incoming donation pushed over the Socket.io "donation_event" channel
+  const handleSocketDonation = useCallback((payload: {
+    donorAddress: string;
+    amountXLM: number;
+    transactionHash: string;
+    timestamp: string;
+  }) => {
+    if (seenTxHashesRef.current.has(payload.transactionHash)) return;
+    seenTxHashesRef.current.add(payload.transactionHash);
+
+    const newDonation: Donation = {
+      id: payload.transactionHash,
+      projectId,
+      donorAddress: payload.donorAddress,
+      amountXLM: String(payload.amountXLM),
+      amount: String(payload.amountXLM),
+      currency: "XLM",
+      transactionHash: payload.transactionHash,
+      createdAt: payload.timestamp,
+    };
+
+    setDonations((prev) => [newDonation, ...prev]);
+    setNewIds((prev) => new Set(prev).add(newDonation.id));
+    setTimeout(() => {
+      setNewIds((prev) => {
+        const next = new Set(prev);
+        next.delete(newDonation.id);
+        return next;
+      });
+    }, 2000);
+
+    onNewDonation?.(newDonation);
+  }, [projectId, onNewDonation]);
+
+  useDonationSocket(projectId, handleSocketDonation);
 
   // Start SSE stream once initial data is loaded
   useEffect(() => {
