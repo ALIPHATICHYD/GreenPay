@@ -1,0 +1,99 @@
+{
+  "contracts": [
+    {
+      "name": "greenpay-contract",
+      "binary_name": "greenpay_contract",
+      "description": "Main donation tracking contract with project and donor stats",
+      "upgradeable": true,
+      "networks": {
+        "testnet": {
+          "enabled": true,
+          "contract_id": "TODO",
+          "admin": "TODO"
+        },
+        "mainnet": {
+          "enabled": false,
+          "contract_id": null,
+          "admin": null
+        }
+      },
+      "storage_version": 2,
+      "migration_required": false,
+      "security_level": "high"
+    },
+    {
+      "name": "dao-governance-contract",
+      "binary_name": "dao_governance_contract",
+      "description": "DAO voting mechanism for contract upgrades",
+      "upgradeable": true,
+      "networks": {
+        "testnet": {
+          "enabled": true,
+          "contract_id": "TODO",
+          "admin": "TODO"
+        },
+        "mainnet": {
+          "enabled": false,
+          "contract_id": null,
+          "admin": null
+        }
+      },
+      "storage_version": 1,
+      "migration_required": false,
+      "security_level": "critical"
+    },
+    {
+      "name": "escrow-contract",
+      "binary_name": "escrow_contract",
+      "description": "Escrow and dispute resolution with time-locked releases",
+      "upgradeable": true,
+      "networks": {
+        "testnet": {
+          "enabled": true,
+          "contract_id": "TODO",
+          "admin": "TODO"
+        },
+        "mainnet": {
+          "enabled": false,
+          "contract_id": null,
+          "admin": null
+        }
+      },
+      "storage_version": 1,
+      "migration_required": false,
+      "security_level": "high"
+    }
+  ],
+  "deployment_settings": {
+    "testnet": {
+      "network_id": "https://horizon-testnet.stellar.org",
+      "soroban_rpc": "https://soroban-testnet.stellar.org",
+      "min_balance_xlm": 10,
+      "max_gas_limit": 30000,
+      "require_audit": false,
+      "require_dao_vote": false,
+      "voting_period_ledgers": 100
+    },
+    "mainnet": {
+      "network_id": "https://horizon.stellar.org",
+      "soroban_rpc": "https://soroban.stellar.org",
+      "min_balance_xlm": 100,
+      "max_gas_limit": 20000,
+      "require_audit": true,
+      "require_dao_vote": true,
+      "voting_period_ledgers": 50000
+    }
+  },
+  "governance": {
+    "multisig_threshold": 2,
+    "voting_majority_percent": 67,
+    "execute_delay_ledgers": 1000,
+    "dao_contract_id": "TODO"
+  },
+  "versioning": {
+    "current_version": "2.0.0",
+    "release_branch": "main",
+    "development_branch": "develop",
+    "version_scheme": "semver"
+  }
+}

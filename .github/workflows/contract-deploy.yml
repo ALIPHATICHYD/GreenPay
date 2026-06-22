@@ -1,0 +1,274 @@
+name: Contract Deploy & Verify
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/contract-deploy.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-and-verify:
+    name: Test & Verify Contracts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint with Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run unit tests
+        run: cargo test --workspace --lib
+
+      - name: Run integration tests
+        run: cargo test --workspace --test '*'
+
+      - name: Build WASM release
+        run: cargo build --workspace --target wasm32-unknown-unknown --release
+
+      - name: Generate WASM checksums
+        run: |
+          cd target/wasm32-unknown-unknown/release
+          for file in *.wasm; do
+            sha256sum "$file" > "$file.sha256"
+          done
+          ls -la *.sha256
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-builds
+          path: contracts/target/wasm32-unknown-unknown/release/*.wasm
+          retention-days: 30
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-checksums
+          path: contracts/target/wasm32-unknown-unknown/release/*.sha256
+          retention-days: 30
+
+  build-contract-metadata:
+    name: Build Contract Metadata
+    needs: test-and-verify
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build contracts
+        run: cargo build --workspace --target wasm32-unknown-unknown --release
+
+      - name: Generate deployment manifest
+        run: |
+          mkdir -p build-output
+          cat > build-output/deployment-manifest.json << 'EOF'
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "git_sha": "${{ github.sha }}",
+            "git_branch": "${{ github.ref_name }}",
+            "contracts": [
+              {
+                "name": "greenpay-contract",
+                "wasm_path": "target/wasm32-unknown-unknown/release/greenpay_contract.wasm",
+                "upgradeable": true,
+                "network": "testnet",
+                "requires_migration": false
+              },
+              {
+                "name": "dao-governance-contract",
+                "wasm_path": "target/wasm32-unknown-unknown/release/dao_governance_contract.wasm",
+                "upgradeable": true,
+                "network": "testnet",
+                "requires_migration": false
+              },
+              {
+                "name": "escrow-contract",
+                "wasm_path": "target/wasm32-unknown-unknown/release/escrow_contract.wasm",
+                "upgradeable": true,
+                "network": "testnet",
+                "requires_migration": false
+              }
+            ]
+          }
+          EOF
+
+      - name: Upload deployment manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-manifest
+          path: contracts/build-output/deployment-manifest.json
+          retention-days: 30
+
+  generate-proposal:
+    name: Generate Multi-Sig Proposal
+    needs: [test-and-verify, build-contract-metadata]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-builds
+          path: ./wasm-builds
+
+      - name: Download checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-checksums
+          path: ./wasm-checksums
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-manifest
+          path: ./deployment-manifest
+
+      - name: Generate proposal JSON
+        run: |
+          mkdir -p proposals
+          cat > proposals/upgrade-proposal-${{ github.sha }}.json << 'EOF'
+          {
+            "proposal": {
+              "title": "Contract Upgrade: ${{ github.sha }}",
+              "description": "Automated contract upgrade from commit ${{ github.sha }}",
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "contracts": [
+                {
+                  "name": "greenpay-contract",
+                  "wasm_hash": "$(sha256sum ./wasm-builds/greenpay_contract.wasm | cut -d' ' -f1)",
+                  "wasm_size": "$(stat -f%z ./wasm-builds/greenpay_contract.wasm 2>/dev/null || stat -c%s ./wasm-builds/greenpay_contract.wasm)",
+                  "network": "testnet"
+                },
+                {
+                  "name": "dao-governance-contract",
+                  "wasm_hash": "$(sha256sum ./wasm-builds/dao_governance_contract.wasm | cut -d' ' -f1)",
+                  "wasm_size": "$(stat -f%z ./wasm-builds/dao_governance_contract.wasm 2>/dev/null || stat -c%s ./wasm-builds/dao_governance_contract.wasm)",
+                  "network": "testnet"
+                },
+                {
+                  "name": "escrow-contract",
+                  "wasm_hash": "$(sha256sum ./wasm-builds/escrow_contract.wasm | cut -d' ' -f1)",
+                  "wasm_size": "$(stat -f%z ./wasm-builds/escrow_contract.wasm 2>/dev/null || stat -c%s ./wasm-builds/escrow_contract.wasm)",
+                  "network": "testnet"
+                }
+              ]
+            }
+          }
+          EOF
+
+      - name: Upload proposal
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-proposal
+          path: proposals/upgrade-proposal-${{ github.sha }}.json
+          retention-days: 90
+
+      - name: Comment on PR with proposal
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('./deployment-manifest/deployment-manifest.json', 'utf8'));
+
+            const comment = `## 🚀 Contract Deployment Ready
+
+            This PR contains contract changes. When merged, a multi-sig proposal will be generated.
+
+            **Contracts Changed:**
+            - greenpay-contract (upgradeable)
+            - dao-governance-contract (upgradeable)
+            - escrow-contract (upgradeable)
+
+            **Deployment Steps:**
+            1. All tests pass ✓
+            2. WASM builds generated ✓
+            3. DAO proposal will be created on merge
+            4. DAO members vote to approve
+            5. Automated execution after approval
+
+            See the [DEPLOYMENT_GUIDE.md](https://github.com/${{ github.repository }}/blob/main/DEPLOYMENT_GUIDE.md) for details.
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run security audit
+        run: cargo audit
+
+      - name: Generate audit report
+        run: cargo audit --json > audit-report.json || true
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-audit-report
+          path: contracts/audit-report.json
+          retention-days: 30
