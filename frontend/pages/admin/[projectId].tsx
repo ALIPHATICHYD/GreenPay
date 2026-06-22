@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import WalletConnect from "@/components/WalletConnect";
 import { createProjectUpdate, fetchProject, fetchProjectDonations, updateProjectStatus, registerProjectOnChain, confirmProjectRegistration, fetchProjectMatches, csrfFetch } from "@/lib/api";
 import { buildMilestoneTransaction, submitTransaction } from "@/lib/stellar";
+import { useDonationSocket } from "@/hooks/useDonationSocket";
 import { formatCO2, formatXLM, shortenAddress, timeAgo } from "@/utils/format";
 import type { ClimateProject, Donation } from "@/utils/types";
 
@@ -78,6 +79,31 @@ export default function ProjectAdmin({ publicKey, onConnect }: AdminProps) {
       .catch((e: unknown) => setError((e as Error).message || "Failed to load project"))
       .finally(() => setLoading(false));
   }, [projectId]);
+
+  // Live-update the donor breakdown and growth chart as new donations arrive over Socket.io
+  const handleLiveDonation = useCallback((payload: {
+    donorAddress: string;
+    amountXLM: number;
+    transactionHash: string;
+    timestamp: string;
+  }) => {
+    setDonations((prev) => {
+      if (prev.some((d) => d.transactionHash === payload.transactionHash)) return prev;
+      const newDonation: Donation = {
+        id: payload.transactionHash,
+        projectId: typeof projectId === "string" ? projectId : "",
+        donorAddress: payload.donorAddress,
+        amountXLM: String(payload.amountXLM),
+        amount: String(payload.amountXLM),
+        currency: "XLM",
+        transactionHash: payload.transactionHash,
+        createdAt: payload.timestamp,
+      };
+      return [newDonation, ...prev];
+    });
+  }, [projectId]);
+
+  useDonationSocket(typeof projectId === "string" ? projectId : undefined, handleLiveDonation);
 
   const isOwner = !!publicKey && !!project && publicKey === project.walletAddress;
 
