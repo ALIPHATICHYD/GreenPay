@@ -71,6 +71,7 @@ app.use("/api/stats",          require("./routes/stats"));
 app.use("/api/impact",         require("./routes/impact"));
 app.use("/api/ratings",        require("./routes/ratings"));
 app.use("/api/admin",          require("./routes/admin"));
+app.use("/api/network",        require("./routes/network"));
 
 app.use((req, res) => res.status(404).json({ error: `${req.method} ${req.path} not found` }));
 app.use((err, req, res, next) => {

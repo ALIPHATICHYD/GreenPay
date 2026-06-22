@@ -509,3 +509,32 @@ export async function submitProject(payload: SubmitProjectPayload): Promise<Subm
   );
   return data.data;
 }
+
+// ── Network Graph (on-chain transaction visualizer) ─────────────────────────
+export interface NetworkNode {
+  id: string;
+  totalIn: number;
+  totalOut: number;
+  degree: number;
+}
+
+export interface NetworkEdge {
+  source: string;
+  target: string;
+  amount: number;
+  type: "donation" | "escrow";
+  txHash: string;
+}
+
+export interface TransactionGraph {
+  nodes: NetworkNode[];
+  edges: NetworkEdge[];
+}
+
+export async function fetchTransactionGraph(limit?: number): Promise<TransactionGraph> {
+  const { data } = await api.get<{ success: boolean; data: TransactionGraph }>(
+    "/api/network/graph",
+    { params: limit ? { limit } : undefined },
+  );
+  return data.data;
+}
