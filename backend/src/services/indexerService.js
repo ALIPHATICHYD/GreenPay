@@ -161,11 +161,11 @@ async function handleDonation(projectId, op) {
     console.log(`[Indexer] New donation: ${amountXLM} XLM from ${donorAddress} to project ${projectId}`);
 
     if (io) {
-      io.emit("newDonation", {
+      io.emit("donation_event", {
         projectId,
         donorAddress,
         amountXLM,
-        txHash,
+        transactionHash: txHash,
         timestamp: new Date().toISOString()
       });
     }
