@@ -1,0 +1,172 @@
+.PHONY: help build test lint deploy-testnet deploy-mainnet verify-contract clean audit
+
+help:
+	@echo "╔════════════════════════════════════════════════════════════════╗"
+	@echo "║           GreenPay Smart Contract Deployment Tools            ║"
+	@echo "╚════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "Build & Testing:"
+	@echo "  make build              Build all contracts (release mode)"
+	@echo "  make build-DEV          Build with development flags"
+	@echo "  make test               Run all contract tests"
+	@echo "  make test-verbose       Run tests with output"
+	@echo "  make test-upgrade       Run upgrade regression tests"
+	@echo "  make lint               Check formatting and clippy"
+	@echo "  make fmt-check          Check code formatting"
+	@echo "  make fmt-fix            Fix code formatting"
+	@echo "  make audit              Run security audit"
+	@echo ""
+	@echo "Deployment:"
+	@echo "  make deploy-testnet     Deploy all contracts to testnet"
+	@echo "  make deploy-mainnet     Deploy to mainnet (DAO governed)"
+	@echo "  make deploy-testnet-CONTRACT=<name>"
+	@echo "                          Deploy specific contract to testnet"
+	@echo ""
+	@echo "Verification:"
+	@echo "  make verify-testnet     Verify contracts on testnet"
+	@echo "  make verify-mainnet     Verify contracts on mainnet"
+	@echo ""
+	@echo "Governance:"
+	@echo "  make propose-upgrade    Generate DAO proposal for upgrade"
+	@echo ""
+	@echo "Maintenance:"
+	@echo "  make clean              Remove build artifacts"
+	@echo "  make clean-deployments  Remove deployment metadata"
+	@echo ""
+
+# Build targets
+build:
+	@echo "🔨 Building contracts in release mode..."
+	cd contracts && cargo build --workspace --target wasm32-unknown-unknown --release
+	@echo "✅ Build complete"
+
+build-dev:
+	@echo "🔨 Building contracts in dev mode..."
+	cd contracts && cargo build --workspace
+
+test:
+	@echo "🧪 Running contract tests..."
+	cd contracts && cargo test --workspace
+
+test-verbose:
+	@echo "🧪 Running tests with output..."
+	cd contracts && cargo test --workspace -- --nocapture
+
+test-upgrade:
+	@echo "🔄 Running upgrade regression tests..."
+	cd contracts && cargo test -p greenpay-contract test_upgrade_preserves_donation_state_and_storage_keys
+
+lint:
+	@echo "🔍 Checking code quality..."
+	cd contracts && cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings
+	@echo "✅ All checks passed"
+
+fmt-check:
+	@echo "📋 Checking code formatting..."
+	cd contracts && cargo fmt --all -- --check
+
+fmt-fix:
+	@echo "🎨 Fixing code formatting..."
+	cd contracts && cargo fmt --all
+
+audit:
+	@echo "🔐 Running security audit..."
+	cd contracts && cargo audit
+	@echo "✅ Security audit passed"
+
+# Deployment targets
+deploy-testnet: build test
+	@echo "🚀 Deploying to testnet..."
+	@./scripts/deploy-contracts-automated.sh testnet deploy
+	@echo "✅ Deployment complete"
+
+deploy-mainnet: build test audit
+	@echo "🚀 Deploying to mainnet (requires DAO governance)..."
+	@./scripts/deploy-contracts-automated.sh mainnet deploy
+	@echo "✅ Mainnet deployment complete"
+
+# Verification targets
+verify-testnet:
+	@echo "✔️  Verifying testnet contracts..."
+	@if [ -z "$(CONTRACT_ID)" ]; then \
+		echo "Error: CONTRACT_ID not set"; \
+		echo "Usage: make verify-testnet CONTRACT_ID=CAB... CONTRACT_NAME=greenpay-contract"; \
+		exit 1; \
+	fi
+	@./scripts/verify-contract.sh testnet $(CONTRACT_ID) $(CONTRACT_NAME)
+
+verify-mainnet:
+	@echo "✔️  Verifying mainnet contracts..."
+	@if [ -z "$(CONTRACT_ID)" ]; then \
+		echo "Error: CONTRACT_ID not set"; \
+		echo "Usage: make verify-mainnet CONTRACT_ID=CAB... CONTRACT_NAME=greenpay-contract"; \
+		exit 1; \
+	fi
+	@./scripts/verify-contract.sh mainnet $(CONTRACT_ID) $(CONTRACT_NAME)
+
+# Governance targets
+propose-upgrade:
+	@echo "📝 Generating DAO upgrade proposal..."
+	@if [ -z "$(CONTRACT_ID)" ] || [ -z "$(CONTRACT_NAME)" ]; then \
+		echo "Error: CONTRACT_ID and CONTRACT_NAME required"; \
+		echo "Usage: make propose-upgrade CONTRACT_ID=CAB... CONTRACT_NAME=greenpay-contract"; \
+		exit 1; \
+	fi
+	@STELLAR_CONTRACT_ID=$(CONTRACT_ID) ./scripts/deploy-contracts-automated.sh testnet propose $(CONTRACT_NAME)
+
+# Maintenance targets
+clean:
+	@echo "🧹 Cleaning build artifacts..."
+	cd contracts && cargo clean
+	@echo "✅ Clean complete"
+
+clean-deployments:
+	@echo "🧹 Removing deployment metadata..."
+	rm -rf .deployments/
+	@echo "✅ Deployments cleared"
+
+# Utility targets
+setup-testnet:
+	@echo "⚙️  Setting up testnet environment..."
+	@if ! command -v stellar &> /dev/null; then \
+		echo "Installing Stellar CLI..."; \
+		cargo install --locked stellar-cli; \
+	fi
+	@if ! command -v cargo &> /dev/null; then \
+		echo "Installing Rust..."; \
+		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh; \
+	fi
+	@rustup target add wasm32-unknown-unknown
+	@echo "✅ Testnet setup complete"
+	@echo "Next: stellar keys generate alice --network testnet"
+
+check-env:
+	@echo "🔍 Checking environment..."
+	@command -v stellar >/dev/null 2>&1 && echo "✓ stellar CLI" || echo "✗ stellar CLI not found"
+	@command -v cargo >/dev/null 2>&1 && echo "✓ Cargo" || echo "✗ Cargo not found"
+	@command -v jq >/dev/null 2>&1 && echo "✓ jq" || echo "✗ jq not found"
+	@rustup target list 2>/dev/null | grep -q "wasm32-unknown-unknown (installed)" && echo "✓ wasm32 target" || echo "✗ wasm32 target not installed"
+	@echo ""
+	@[ -f ".env.local" ] && echo "✓ .env.local exists" || echo "⚠ .env.local not found (optional)"
+
+# Quick reference
+quick-start:
+	@echo "╔════════════════════════════════════════════════════════════════╗"
+	@echo "║                    Quick Start Guide                           ║"
+	@echo "╚════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "1. Setup environment:"
+	@echo "   make setup-testnet"
+	@echo ""
+	@echo "2. Create Stellar identity:"
+	@echo "   stellar keys generate alice --network testnet"
+	@echo ""
+	@echo "3. Deploy to testnet:"
+	@echo "   make deploy-testnet"
+	@echo ""
+	@echo "4. Verify deployment:"
+	@echo "   make verify-testnet CONTRACT_ID=<CAB...> CONTRACT_NAME=greenpay-contract"
+	@echo ""
+	@echo "5. Generate upgrade proposal:"
+	@echo "   make propose-upgrade CONTRACT_ID=<CAB...> CONTRACT_NAME=greenpay-contract"
+	@echo ""
