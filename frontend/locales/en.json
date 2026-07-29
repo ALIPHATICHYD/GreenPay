@@ -73,7 +73,7 @@
     "generateSummary": "Generate summary",
     "generating": "Generating…",
     "refreshSummary": "Refresh summary",
-    "aiSummaryPlaceholder": "No AI summary yet. Click "Generate summary" to create one for donors.",
+    "aiSummaryPlaceholder": "No AI summary yet. Click \"Generate summary\" to create one for donors.",
     "aiDisclaimer": "AI-generated from this project's description. May contain inaccuracies — read the full description below before donating.",
     "generated": "Generated",
     "milestones": "Project Milestones",

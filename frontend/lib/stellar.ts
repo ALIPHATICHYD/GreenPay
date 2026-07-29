@@ -1,7 +1,7 @@
 /**
  * lib/stellar.ts — Stellar SDK helpers for GreenPay
  */
-import { Horizon, Networks, Asset, Operation, TransactionBuilder, Transaction, Memo, rpc, Contract, scValToNative, Address, nativeToScVal, Account } from "@stellar/stellar-sdk";
+import { Horizon, Networks, Asset, Operation, TransactionBuilder, Transaction, Memo, rpc, Contract, scValToNative, Address, nativeToScVal, Account, xdr } from "@stellar/stellar-sdk";
 
 export const NETWORK = (process.env.NEXT_PUBLIC_STELLAR_NETWORK || "testnet") as "testnet" | "mainnet";
 const HORIZON_URL = process.env.NEXT_PUBLIC_HORIZON_URL || "https://horizon-testnet.stellar.org";
@@ -268,6 +268,147 @@ export async function submitTransaction(signedXDR: string) {
   } catch (err: unknown) {
     throw new Error(formatTransactionError(err));
   }
+}
+
+/**
+ * Why this exists: Horizon's submitTransaction only tells us whether a transaction
+ * *landed* in a ledger. For a Soroban `donate()` call, a successful simulation does
+ * NOT guarantee successful execution — the contract can still panic on submission
+ * (e.g. a checked-arithmetic overflow), and Horizon will happily report
+ * `successful: false` while the caller has already moved on assuming success.
+ *
+ * The kind of failure a donation can hit, used to pick the right user-facing copy:
+ *  - "submission_failed": the network refused the tx before it ever reached a
+ *    ledger (bad sequence, insufficient fee, bad auth, etc.) — nothing happened
+ *    on-chain, safe to treat like any other rejected submission.
+ *  - "execution_failed": the tx landed on-chain but execution failed/panicked.
+ *    Network fees may still have been charged, but the donate() call itself did
+ *    not apply — any optimistic UI (badge, totals, leaderboard) must be reverted.
+ *  - "unknown": we could not determine the final outcome (RPC/Horizon unreachable,
+ *    or the transaction was still NOT_FOUND after the poll timeout). Must not be
+ *    presented as either success or failure.
+ */
+export type DonationOutcome = "submission_failed" | "execution_failed" | "unknown";
+
+export class DonationSubmissionError extends Error {
+  outcome: DonationOutcome;
+  hash?: string;
+  panicReason?: string;
+
+  constructor(message: string, outcome: DonationOutcome, hash?: string, panicReason?: string) {
+    super(message);
+    this.name = "DonationSubmissionError";
+    this.outcome = outcome;
+    this.hash = hash;
+    this.panicReason = panicReason;
+  }
+}
+
+/**
+ * Polls Soroban RPC's getTransaction until it stops reporting NOT_FOUND (the tx
+ * needs a moment to be ingested after Horizon reports it landed) or the timeout
+ * elapses, in which case the caller should treat the outcome as unknown.
+ */
+export async function waitForTransactionOutcome(
+  hash: string,
+  { timeoutMs = 20_000, intervalMs = 1500 }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<rpc.Api.GetTransactionResponse | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let res: rpc.Api.GetTransactionResponse;
+    try {
+      res = await rpcServer.getTransaction(hash);
+    } catch {
+      return null; // RPC unreachable — caller treats as unknown outcome.
+    }
+    if (res.status !== rpc.Api.GetTransactionStatus.NOT_FOUND) return res;
+    if (Date.now() >= deadline) return res; // still NOT_FOUND — caller treats as unknown.
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+/**
+ * Best-effort extraction of a human-readable panic/error reason from a failed
+ * Soroban RPC getTransaction result's diagnostic events. Falls back to `undefined`
+ * (never throws) so it can be safely used just to enrich an already-failed state.
+ * Mirrors formatSimulationFailure's convention of matching on stringified content
+ * rather than requiring a fully-typed contract error registry.
+ */
+export function extractPanicReason(result: rpc.Api.GetTransactionResponse | null | undefined): string | undefined {
+  if (!result) return undefined;
+  try {
+    const events = (result as { diagnosticEventsXdr?: xdr.DiagnosticEvent[] }).diagnosticEventsXdr;
+    if (events && events.length) {
+      for (const evt of events) {
+        try {
+          const body = evt.event().body().v0();
+          const data = scValToNative(body.data());
+          const flat = typeof data === "string" ? data : JSON.stringify(data);
+          if (/overflow/i.test(flat)) return "arithmetic overflow while recording the donation";
+          if (/underflow/i.test(flat)) return "arithmetic underflow while recording the donation";
+          if (typeof data === "string" && /error|panic|host/i.test(flat)) return data;
+        } catch {
+          // Malformed/undecodable event — skip it and keep looking.
+        }
+      }
+    }
+  } catch {
+    // Fall through to the generic message below.
+  }
+  return undefined;
+}
+
+/**
+ * Submits a signed donation transaction and confirms its *final* on-chain outcome
+ * before returning — callers should only commit optimistic UI (badge, totals,
+ * leaderboard, backend recordDonation) once this resolves successfully.
+ *
+ * On any failure it throws a DonationSubmissionError carrying `.outcome` so the UI
+ * can distinguish an on-chain contract panic from an ambiguous network failure.
+ */
+export async function submitAndConfirmDonation(signedXDR: string): Promise<{ hash: string }> {
+  const tx = new Transaction(signedXDR, NETWORK_PASSPHRASE);
+
+  let submitResult: Horizon.HorizonApi.SubmitTransactionResponse;
+  try {
+    submitResult = await server.submitTransaction(tx);
+  } catch (err: unknown) {
+    const e = err as { response?: { data?: { extras?: { result_codes?: unknown } } } };
+    if (e?.response?.data?.extras?.result_codes) {
+      // Horizon rejected the tx before it ever reached a ledger — nothing happened on-chain.
+      throw new DonationSubmissionError(formatTransactionError(err), "submission_failed");
+    }
+    throw new DonationSubmissionError(
+      "We couldn't confirm this donation — the network didn't respond. Please check your transaction history before retrying.",
+      "unknown",
+    );
+  }
+
+  if (submitResult.successful) {
+    return { hash: submitResult.hash };
+  }
+
+  // Horizon confirmed the tx landed on-chain but failed — consult Soroban RPC to
+  // try to surface the contract panic reason from diagnostic events.
+  const rpcResult = await waitForTransactionOutcome(submitResult.hash);
+
+  if (!rpcResult || rpcResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND) {
+    throw new DonationSubmissionError(
+      "We couldn't confirm this donation's final status. Please check your transaction history.",
+      "unknown",
+      submitResult.hash,
+    );
+  }
+
+  const panicReason = extractPanicReason(rpcResult);
+  throw new DonationSubmissionError(
+    panicReason
+      ? `Your donation didn't go through — the contract rejected it (${panicReason}).`
+      : "Your donation didn't go through — the transaction was submitted but failed during on-chain execution.",
+    "execution_failed",
+    submitResult.hash,
+    panicReason,
+  );
 }
 
 export function isValidStellarAddress(a: string): boolean { return /^G[A-Z0-9]{55}$/.test(a); }
