@@ -57,7 +57,7 @@ export default function DonationTicker() {
   if (items.length === 0) return null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-forest-900/90 backdrop-blur-md text-white py-2 overflow-hidden border-t border-forest-700 z-40">
+    <div className="fixed bottom-0 start-0 end-0 bg-forest-900/90 backdrop-blur-md text-white py-2 overflow-hidden border-t border-forest-700 z-40">
       <div className="flex items-center gap-8 animate-marquee whitespace-nowrap px-4">
         <span className="text-forest-400 font-bold uppercase tracking-widest text-xs flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />

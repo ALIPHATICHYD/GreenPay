@@ -48,7 +48,7 @@ export default function ToastNotification({ toasts, onDismiss }: {
   if (sorted.length === 0) return null;
 
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] w-[min(92vw,420px)] space-y-2 pointer-events-none">
+    <div className="fixed bottom-4 start-1/2 -translate-x-1/2 z-[60] w-[min(92vw,420px)] space-y-2 pointer-events-none">
       {sorted.map((t) => {
         const isExiting = exiting.has(t.id);
         return (

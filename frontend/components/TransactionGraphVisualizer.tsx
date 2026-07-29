@@ -22,7 +22,8 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { NetworkNode, NetworkEdge } from "@/lib/api";
-import { shortenAddress } from "@/utils/format";
+import { shortenAddress, formatXLM } from "@/utils/format";
+import { useI18n } from "@/lib/i18n";
 
 interface TransactionGraphVisualizerProps {
   nodes: NetworkNode[];
@@ -66,6 +67,7 @@ function layoutNode(id: string): THREE.Vector3 {
 }
 
 export default function TransactionGraphVisualizer({ nodes, edges }: TransactionGraphVisualizerProps) {
+  const { localeTag } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState<HoveredNode | null>(null);
   const [selected, setSelected] = useState<NetworkNode | null>(null);
@@ -275,15 +277,15 @@ export default function TransactionGraphVisualizer({ nodes, edges }: Transaction
           style={{ left: hovered.screenX + 12, top: hovered.screenY + 12 }}
         >
           <div>{shortenAddress(hovered.node.id, 6)}</div>
-          <div>In: {hovered.node.totalIn.toFixed(2)} XLM · Out: {hovered.node.totalOut.toFixed(2)} XLM</div>
+          <div>In: {formatXLM(hovered.node.totalIn, 2, localeTag)} · Out: {formatXLM(hovered.node.totalOut, 2, localeTag)}</div>
           <div>Connections: {hovered.node.degree}</div>
         </div>
       )}
       {selected && (
-        <div className="absolute z-10 top-4 right-4 px-4 py-3 rounded-xl bg-white/95 shadow-lg text-sm">
+        <div className="absolute z-10 top-4 end-4 px-4 py-3 rounded-xl bg-white/95 shadow-lg text-sm">
           <p className="font-mono font-semibold text-forest-900">{shortenAddress(selected.id, 8)}</p>
-          <p className="text-forest-600 mt-1">Total in: {selected.totalIn.toFixed(2)} XLM</p>
-          <p className="text-forest-600">Total out: {selected.totalOut.toFixed(2)} XLM</p>
+          <p className="text-forest-600 mt-1">Total in: {formatXLM(selected.totalIn, 2, localeTag)}</p>
+          <p className="text-forest-600">Total out: {formatXLM(selected.totalOut, 2, localeTag)}</p>
           <p className="text-forest-600">Connections: {selected.degree}</p>
         </div>
       )}

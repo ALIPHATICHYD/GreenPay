@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import ImpactCertificate from "../ImpactCertificate";
+import { renderWithLocale } from "./renderWithLocale";
 
 const baseProps = {
   donorAddress: "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRST",
@@ -23,13 +24,13 @@ describe("ImpactCertificate", () => {
   });
 
   it("renders the CO₂ offset value", () => {
-    render(<ImpactCertificate {...baseProps} />);
+    renderWithLocale(<ImpactCertificate {...baseProps} />);
     // formatCO2(2400) => "2.4k kg CO₂"
     expect(screen.getByText("2.4k kg CO₂")).toBeInTheDocument();
   });
 
   it("renders the donor name and key impact stats", () => {
-    render(<ImpactCertificate {...baseProps} />);
+    renderWithLocale(<ImpactCertificate {...baseProps} />);
     expect(screen.getByText("Jane Doe")).toBeInTheDocument();
     expect(screen.getByText("1,500 XLM")).toBeInTheDocument();
     expect(screen.getByText("Forest")).toBeInTheDocument();
@@ -37,7 +38,24 @@ describe("ImpactCertificate", () => {
   });
 
   it("matches snapshot", () => {
-    const { container } = render(<ImpactCertificate {...baseProps} />);
+    const { container } = renderWithLocale(<ImpactCertificate {...baseProps} />);
     expect(container).toMatchSnapshot();
+  });
+
+  describe("RTL (Arabic locale)", () => {
+    it("formats the XLM amount and CO₂ offset with Arabic-Indic numerals via Intl.NumberFormat", () => {
+      renderWithLocale(<ImpactCertificate {...baseProps} />, "ar");
+      expect(document.documentElement.dir).toBe("rtl");
+      // formatXLM("1500", 2, "ar-EG") groups digits using Arabic-Indic
+      // numerals rather than the "1,500" Western-Arabic default.
+      expect(screen.getByText("١٬٥٠٠ XLM")).toBeInTheDocument();
+      // formatCO2(2400, "ar-EG") => "٢٫٤k kg CO₂"
+      expect(screen.getByText("٢٫٤k kg CO₂")).toBeInTheDocument();
+    });
+
+    it("matches snapshot under RTL", () => {
+      const { container } = renderWithLocale(<ImpactCertificate {...baseProps} />, "ar");
+      expect(container).toMatchSnapshot();
+    });
   });
 });

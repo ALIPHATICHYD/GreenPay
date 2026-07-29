@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { streamGlobalProjectDonations } from "@/lib/stellar";
 import { formatCO2, formatXLM, progressPercent } from "@/utils/format";
+import { useI18n } from "@/lib/i18n";
 import type { GlobalStats, CategoryStats } from "@/lib/api";
 import type { ClimateProject } from "@/utils/types";
 
@@ -368,18 +369,19 @@ function LiveDonationTicker({
   donations: LiveDonationTickerItem[];
   activeIndex: number;
 }) {
+  const { localeTag } = useI18n();
   if (donations.length === 0) return null;
   const item = donations[activeIndex];
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-forest-800 bg-forest-900/95 backdrop-blur px-4 py-2">
+    <div className="fixed bottom-0 start-0 end-0 z-40 border-t border-forest-800 bg-forest-900/95 backdrop-blur px-4 py-2">
       <div className="max-w-6xl mx-auto flex items-center gap-3 text-sm text-white font-body">
         <span className="inline-flex items-center gap-2 text-[11px] uppercase tracking-widest text-forest-300 font-bold">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           Live donations
         </span>
         <p key={item.id} className="animate-slide-up">
-          just donated <strong>{formatXLM(item.amountXLM)}</strong> to{" "}
+          just donated <strong>{formatXLM(item.amountXLM, 2, localeTag)}</strong> to{" "}
           <Link
             href={`/projects/${item.projectId}`}
             className="text-emerald-300 hover:text-emerald-200"
@@ -438,6 +440,7 @@ function CategoryStatsChart({ stats }: { stats: CategoryStats[] }) {
 }
 
 function FeaturedProjectCard({ project }: { project: ClimateProject }) {
+  const { t, localeTag } = useI18n();
   const pct = progressPercent(project.raisedXLM, project.goalXLM);
   return (
     <div className="mb-20">
@@ -468,10 +471,10 @@ function FeaturedProjectCard({ project }: { project: ClimateProject }) {
             </p>
             <div className="flex flex-wrap gap-4 text-sm mb-5">
               <span className="flex items-center gap-1 text-forest-700 font-body">
-                👥 <strong>{project.donorCount.toLocaleString()}</strong> donors
+                👥 <strong>{t("project.donorsCount", { count: project.donorCount })}</strong>
               </span>
               <span className="flex items-center gap-1 text-forest-700 font-body">
-                ♻️ <strong>{formatCO2(project.co2OffsetKg)}</strong> offset
+                ♻️ <strong>{formatCO2(project.co2OffsetKg, localeTag)}</strong> offset
               </span>
               <span className="flex items-center gap-1 text-[#5a7a5a] font-body">
                 📍 {project.location}
@@ -481,10 +484,10 @@ function FeaturedProjectCard({ project }: { project: ClimateProject }) {
             <div className="mb-2">
               <div className="flex justify-between text-xs mb-1 font-body">
                 <span className="font-semibold text-forest-700">
-                  {formatXLM(project.raisedXLM)} raised
+                  {formatXLM(project.raisedXLM, 2, localeTag)} raised
                 </span>
                 <span className="text-[#5a7a5a]">
-                  {pct}% of {formatXLM(project.goalXLM)}
+                  {pct}% of {formatXLM(project.goalXLM, 2, localeTag)}
                 </span>
               </div>
               <div className="progress-bar h-2.5">
@@ -520,6 +523,7 @@ function FeaturedProjectCard({ project }: { project: ClimateProject }) {
 }
 
 function CO2OffsetTicker({ stats }: { stats: GlobalStats }) {
+  const { t, localeTag } = useI18n();
   const { count, elementRef } = useCountUp(stats.totalCO2OffsetKg, 2500);
   return (
     <div
@@ -528,26 +532,27 @@ function CO2OffsetTicker({ stats }: { stats: GlobalStats }) {
     >
       <p className="text-3xl mb-2">🍃</p>
       <div className="font-display text-5xl sm:text-6xl font-bold text-white mb-2">
-        {formatCO2(count)}
+        {formatCO2(count, localeTag)}
       </div>
       <p className="text-forest-200 text-sm font-body uppercase tracking-widest font-bold opacity-80">
         Total CO₂ Offset Across All Donations
       </p>
       <p className="text-forest-300 text-xs font-body mt-2">
-        {stats.totalDonations.toLocaleString()} donations ·{" "}
-        {parseFloat(stats.totalXLMRaised).toLocaleString()} XLM raised
+        {t("project.donationsCount", { count: stats.totalDonations })} ·{" "}
+        {new Intl.NumberFormat(localeTag).format(parseFloat(stats.totalXLMRaised))} XLM raised
       </p>
     </div>
   );
 }
 
 function StatItem({ stat }: { stat: any }) {
+  const { localeTag } = useI18n();
   const { count, elementRef } = useCountUp(stat.value, stat.duration);
   return (
     <div ref={elementRef} className="bg-white text-center py-10 px-4">
       <div className="font-display text-4xl font-bold text-gradient-green mb-1">
         {stat.prefix}
-        {count.toLocaleString()}
+        {new Intl.NumberFormat(localeTag).format(count)}
         {stat.suffix}
       </div>
       <div className="text-[#4a6a4a] text-sm font-body uppercase tracking-widest font-bold">

@@ -9,10 +9,12 @@ import { fetchProjects } from "@/lib/api";
 import { PROJECT_CATEGORIES, CATEGORY_ICONS } from "@/utils/format";
 import type { ClimateProject } from "@/utils/types";
 import { useAutocomplete } from "@/hooks/useAutocomplete";
+import { useI18n } from "@/lib/i18n";
 import clsx from "clsx";
 
 export default function ProjectsPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const [projects, setProjects] = useState<ClimateProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
@@ -156,14 +158,14 @@ export default function ProjectsPage() {
           <p className="text-[#5a7a5a] text-sm font-body">
             {loading
               ? "Loading..."
-              : `${projects.length} verified project${projects.length !== 1 ? "s" : ""}`}
+              : t("project.verifiedProjectsCount", { count: projects.length })}
           </p>
         </div>
       </div>
 
       {/* Search */}
       <div className="relative mb-6" ref={searchRef}>
-        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#8aaa8a] z-10">
+        <span className="absolute start-4 top-1/2 -translate-y-1/2 text-[#8aaa8a] z-10">
           🔍
         </span>
         <input
@@ -178,12 +180,12 @@ export default function ProjectsPage() {
           }}
           onFocus={() => search.length >= 2 && setIsAutocompleteOpen(true)}
           placeholder="Search projects by name, location, or keyword..."
-          className="input-field pl-10 relative z-10"
+          className="input-field ps-10 relative z-10"
         />
 
         {/* Autocomplete Dropdown */}
         {isAutocompleteOpen && (
-          <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-forest-200 rounded-xl shadow-xl z-50 overflow-hidden animate-fade-in">
+          <div className="absolute top-full start-0 end-0 mt-2 bg-white border border-forest-200 rounded-xl shadow-xl z-50 overflow-hidden animate-fade-in">
             {autocompleteResults.map((p, i) => (
               <div
                 key={p.id}
@@ -222,7 +224,7 @@ export default function ProjectsPage() {
                   key={val}
                   onClick={() => setFilter("status", val)}
                   className={clsx(
-                    "w-full text-left px-3 py-2 rounded-lg text-sm transition-colors font-body",
+                    "w-full text-start px-3 py-2 rounded-lg text-sm transition-colors font-body",
                     status === val
                       ? "bg-forest-100 text-forest-700 font-semibold"
                       : "text-[#5a7a5a] hover:bg-forest-50 hover:text-forest-700",
@@ -255,11 +257,11 @@ export default function ProjectsPage() {
                 <div
                   className={clsx(
                     "absolute top-1 w-4 h-4 rounded-full bg-white transition-all",
-                    verified ? "right-1" : "left-1",
+                    verified ? "end-1" : "start-1",
                   )}
                 />
               </div>
-              <span className="flex-1 text-left">
+              <span className="flex-1 text-start">
                 ✓ Verified only{" "}
                 <span className="text-xs text-[#8aaa8a]">
                   ({projects.filter((p) => p.verified).length})
@@ -274,7 +276,7 @@ export default function ProjectsPage() {
               <button
                 onClick={() => setFilter("category", "")}
                 className={clsx(
-                  "w-full text-left px-3 py-2 rounded-lg text-sm transition-colors font-body",
+                  "w-full text-start px-3 py-2 rounded-lg text-sm transition-colors font-body",
                   !category
                     ? "bg-forest-100 text-forest-700 font-semibold"
                     : "text-[#5a7a5a] hover:bg-forest-50 hover:text-forest-700",
@@ -287,7 +289,7 @@ export default function ProjectsPage() {
                   key={cat}
                   onClick={() => setFilter("category", cat)}
                   className={clsx(
-                    "w-full text-left px-3 py-2 rounded-lg text-sm transition-colors font-body flex items-center gap-2",
+                    "w-full text-start px-3 py-2 rounded-lg text-sm transition-colors font-body flex items-center gap-2",
                     category === cat
                       ? "bg-forest-100 text-forest-700 font-semibold"
                       : "text-[#5a7a5a] hover:bg-forest-50 hover:text-forest-700",
@@ -341,7 +343,7 @@ export default function ProjectsPage() {
               {projects.map((p) => (
                 <div key={p.id} className="relative">
                   <label
-                    className={`absolute left-3 top-3 z-30 flex items-center gap-2 rounded-md border px-2 py-1 text-xs font-body shadow-sm ${
+                    className={`absolute start-3 top-3 z-30 flex items-center gap-2 rounded-md border px-2 py-1 text-xs font-body shadow-sm ${
                       selectedProjectIds.includes(p.id)
                         ? "bg-forest-700 text-white border-forest-700"
                         : "bg-white text-forest-700 border-forest-200"

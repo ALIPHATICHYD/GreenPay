@@ -3,6 +3,7 @@
  * Expandable accordion for long project descriptions.
  */
 import { useMemo, useRef, useState, useLayoutEffect } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type SectionKey = "Overview" | "Goals" | "How funds are used" | "Team";
 
@@ -66,6 +67,7 @@ function AccordionItem({
 }) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [maxHeight, setMaxHeight] = useState<number>(0);
+  const { t } = useI18n();
 
   useLayoutEffect(() => {
     if (!contentRef.current) return;
@@ -77,13 +79,13 @@ function AccordionItem({
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-forest-50/60 transition-colors"
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
         aria-expanded={isOpen}
       >
         <div className="min-w-0">
           <p className="font-semibold text-forest-900 font-body">{title}</p>
           {!isOpen && (
-            <p className="text-xs text-forest-500 font-body mt-0.5">{lines.length} line{lines.length !== 1 ? "s" : ""}</p>
+            <p className="text-xs text-forest-500 font-body mt-0.5">{t("project.lineCount", { count: lines.length })}</p>
           )}
         </div>
         <span className="text-forest-500 flex-shrink-0">

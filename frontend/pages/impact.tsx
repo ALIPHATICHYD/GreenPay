@@ -10,10 +10,12 @@ import WorldMap from "@/components/WorldMap";
 import { fetchImpactGlobal, fetchLeaderboard, fetchProjects } from "@/lib/api";
 import { getGlobalImpactStats } from "@/lib/stellar";
 import { formatCO2, formatXLM, shortenAddress } from "@/utils/format";
+import { useI18n } from "@/lib/i18n";
 import type { LeaderboardEntry } from "@/utils/types";
 import type { ImpactGlobalStats } from "@/lib/api";
 
 export default function ImpactPage() {
+  const { t, localeTag } = useI18n();
   const [stats, setStats] = useState<ImpactGlobalStats | null>(null);
   const [sorobanStats, setSorobanStats] = useState<{ totalRaisedXLM: string; totalCO2OffsetGrams: string; donationCount: number } | null>(null);
   const [projectCount, setProjectCount] = useState(0);
@@ -77,7 +79,7 @@ export default function ImpactPage() {
             value={sorobanStats ? Number(sorobanStats.totalCO2OffsetGrams) / 1000 : 0}
             unit="Kg"
             isLoading={isLoading}
-            formatter={(val) => formatCO2(Math.floor(val))}
+            formatter={(val) => formatCO2(Math.floor(val), localeTag)}
           />
           <StatCard
             label="Unique Donors"
@@ -122,11 +124,11 @@ export default function ImpactPage() {
                   <div className="min-w-0">
                     <p className="font-semibold text-forest-900 truncate">{row.category}</p>
                     <p className="text-xs text-forest-600 mt-1">
-                      {row.donorCount} donor{row.donorCount !== 1 ? "s" : ""} • {formatCO2(row.co2OffsetKg)}
+                      {t("project.donorsCount", { count: row.donorCount })} • {formatCO2(row.co2OffsetKg, localeTag)}
                     </p>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="font-mono font-semibold text-forest-700">{formatXLM(row.totalDonationsXLM)}</p>
+                  <div className="text-end flex-shrink-0">
+                    <p className="font-mono font-semibold text-forest-700">{formatXLM(row.totalDonationsXLM, 2, localeTag)}</p>
                     <p className="text-[11px] text-forest-500">donated</p>
                   </div>
                 </div>
@@ -139,7 +141,7 @@ export default function ImpactPage() {
 
         {/* Leaderboard Section */}
         <div className="bg-white rounded-3xl border border-forest-100 shadow-xl shadow-forest-100/30 p-8 mb-16 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-forest-50 rounded-bl-full -z-0 opacity-50 group-hover:scale-110 transition-transform duration-500" />
+          <div className="absolute top-0 end-0 w-32 h-32 bg-forest-50 rounded-es-full -z-0 opacity-50 group-hover:scale-110 transition-transform duration-500" />
           <h2 className="text-2xl font-display font-bold text-forest-900 mb-8 relative z-10 flex items-center gap-2">
             🏆 Top Impact Leaders
           </h2>
