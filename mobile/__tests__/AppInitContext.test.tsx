@@ -7,7 +7,9 @@
 import React from 'react';
 import { renderHook, act } from '@testing-library/react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { AppInitProvider, useAppInit } from '../src/context/AppInitContext';
+import { WALLET_KEY } from '../utils/walletKeyStorage';
 
 const wrapper = ({ children }: { children: React.ReactNode }) =>
   React.createElement(AppInitProvider, null, children);
@@ -16,6 +18,12 @@ beforeEach(() => {
   (AsyncStorage.clear as jest.Mock)();
   (AsyncStorage.getItem as jest.Mock).mockClear();
   (AsyncStorage.setItem as jest.Mock).mockClear();
+  (AsyncStorage.removeItem as jest.Mock).mockClear();
+  (SecureStore.getItemAsync as jest.Mock).mockClear();
+  (SecureStore.setItemAsync as jest.Mock).mockClear();
+  Object.keys((SecureStore as any).__store).forEach(
+    (key) => delete (SecureStore as any).__store[key],
+  );
 });
 
 // ── Hydration ────────────────────────────────────────────────────────────────
@@ -30,8 +38,8 @@ test('isHydrated starts false and becomes true after AsyncStorage read', async (
   expect(result.current.isHydrated).toBe(true);
 });
 
-test('restores walletPublicKey from AsyncStorage on hydration', async () => {
-  await AsyncStorage.setItem('greenpay_stellar_public_key', 'GTEST123');
+test('restores walletPublicKey from SecureStore on hydration', async () => {
+  await SecureStore.setItemAsync(WALLET_KEY, 'GTEST123');
 
   const { result } = renderHook(() => useAppInit(), { wrapper });
   await act(async () => {});
@@ -44,6 +52,26 @@ test('walletPublicKey is null when nothing stored', async () => {
   await act(async () => {});
 
   expect(result.current.walletPublicKey).toBeNull();
+});
+
+test('migrates a legacy AsyncStorage value into SecureStore during hydration', async () => {
+  // Simulate a device that hit the old, inconsistent storage code and has a
+  // wallet key stranded in AsyncStorage instead of SecureStore.
+  await AsyncStorage.setItem(WALLET_KEY, 'GLEGACY456');
+
+  const { result } = renderHook(() => useAppInit(), { wrapper });
+  await act(async () => {});
+
+  // Hydration still recovers the value...
+  expect(result.current.walletPublicKey).toBe('GLEGACY456');
+  // ...and the migration path has moved it into SecureStore...
+  expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
+    WALLET_KEY,
+    'GLEGACY456',
+    { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY },
+  );
+  // ...and cleaned it up from AsyncStorage.
+  expect(await AsyncStorage.getItem(WALLET_KEY)).toBeNull();
 });
 
 // ── Deep-link queue ──────────────────────────────────────────────────────────

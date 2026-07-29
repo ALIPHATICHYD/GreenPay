@@ -13,6 +13,9 @@ import { useColorScheme } from 'react-native';
 import { ThemeProvider, themes } from './theme';
 import { useDeepLink } from '../hooks/useDeepLink';
 import { AppInitProvider } from '../src/context/AppInitContext';
+import { useWallet } from '../src/hooks/useWallet';
+import { useDeviceIntegrity } from '../utils/useDeviceIntegrity';
+import { SecurityWarningBanner } from '../components/SecurityWarningBanner';
 
 function DeepLinkHandler() {
   useDeepLink();
@@ -23,12 +26,20 @@ function AppShell() {
   const colorScheme = useColorScheme();
   const themeMode = colorScheme === 'dark' ? 'dark' : 'light';
   const theme = themes[themeMode];
+  const { publicKey } = useWallet();
+  const { isCompromised } = useDeviceIntegrity();
 
   return (
     <ThemeProvider>
       {/* DeepLinkHandler is inside AppInitProvider so useAppInit() resolves */}
       <DeepLinkHandler />
       <StatusBar style={theme.statusBarStyle} />
+      {/*
+        Advisory-only warning, shown app-wide once a wallet is connected on a
+        device that looks jailbroken/rooted. Never blocks interaction — see
+        components/SecurityWarningBanner for rationale.
+      */}
+      {isCompromised && publicKey && <SecurityWarningBanner />}
       <Stack screenOptions={{
         headerStyle: { backgroundColor: theme.header },
         headerTintColor: theme.headerText,
