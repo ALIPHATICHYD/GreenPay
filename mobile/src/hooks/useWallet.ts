@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import * as SecureStore from 'expo-secure-store';
 import { StrKey } from '@stellar/stellar-sdk';
-
-const WALLET_KEY = 'greenpay_stellar_public_key';
+import {
+  getWalletPublicKey,
+  setWalletPublicKey,
+  clearWalletPublicKey,
+} from '../../utils/walletKeyStorage';
 
 export function useWallet() {
   const [publicKey, setPublicKey] = useState<string | null>(null);
@@ -10,7 +12,7 @@ export function useWallet() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    SecureStore.getItemAsync(WALLET_KEY)
+    getWalletPublicKey()
       .then((stored) => setPublicKey(stored))
       .finally(() => setLoading(false));
   }, []);
@@ -24,13 +26,13 @@ export function useWallet() {
       return false;
     }
 
-    await SecureStore.setItemAsync(WALLET_KEY, trimmed);
+    await setWalletPublicKey(trimmed);
     setPublicKey(trimmed);
     return true;
   }, []);
 
   const disconnect = useCallback(async () => {
-    await SecureStore.deleteItemAsync(WALLET_KEY);
+    await clearWalletPublicKey();
     setPublicKey(null);
   }, []);
 

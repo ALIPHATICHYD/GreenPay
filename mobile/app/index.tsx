@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { useTheme } from './theme';
 import { getCachedData, setCachedData } from '../utils/cache';
+import { useDonationSync } from '../hooks/useDonationSync';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const CACHE_KEY_PROJECTS = 'home:projects_list';
@@ -101,6 +102,7 @@ function ProjectCard({
 export default function HomeScreen() {
   const router = useRouter();
   const { colors } = useTheme();
+  const { queue: syncQueue } = useDonationSync();
   const [projects, setProjects] = useState<ClimateProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
