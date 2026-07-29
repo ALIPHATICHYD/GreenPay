@@ -1,4 +1,18 @@
 const STELLAR_ADDRESS_REGEX = /\bG[A-Z2-7]{55}\b/g;
+const EXACT_STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
+const GENERATED_NODES = new WeakSet<Node>();
+
+/**
+ * Host-page values are untrusted. Only a value matching the complete, expected
+ * Stellar public-key shape may cross the extension messaging boundary.
+ */
+export function sanitizeStellarAddress(value: unknown): string | null {
+  if (typeof value !== 'string' || !EXACT_STELLAR_ADDRESS_REGEX.test(value)) {
+    return null;
+  }
+
+  return value;
+}
 
 function createTooltip(): HTMLDivElement {
   const tooltip = document.createElement('div');
@@ -24,17 +38,27 @@ function createTooltip(): HTMLDivElement {
   return tooltip;
 }
 
-function highlightAddresses(node: Node) {
+export function highlightAddresses(node: Node): void {
+  // Do not process UI that this content script inserted. In addition to avoiding
+  // duplicate highlights, the WeakSet cannot be spoofed with host-controlled
+  // classes or data attributes.
+  if (GENERATED_NODES.has(node)) return;
+
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent;
-    if (!text || !STELLAR_ADDRESS_REGEX.test(text)) return;
+    if (!text) return;
 
     const fragment = document.createDocumentFragment();
     let lastIndex = 0;
-    let match;
+    let match: RegExpExecArray | null;
+    let foundAddress = false;
 
     STELLAR_ADDRESS_REGEX.lastIndex = 0;
     while ((match = STELLAR_ADDRESS_REGEX.exec(text)) !== null) {
+      const address = sanitizeStellarAddress(match[0]);
+      if (!address) continue;
+      foundAddress = true;
+
       if (match.index > lastIndex) {
         fragment.appendChild(
           document.createTextNode(text.substring(lastIndex, match.index))
@@ -42,8 +66,11 @@ function highlightAddresses(node: Node) {
       }
 
       const span = document.createElement('span');
+      GENERATED_NODES.add(span);
       span.className = 'greenpay-address';
-      span.textContent = match[0];
+      // textContent is deliberate: host-controlled text must never be parsed as
+      // HTML, even if it contains markup immediately beside an address.
+      span.textContent = address;
       span.style.cssText = `
         background: linear-gradient(135deg, #4CAF50, #2E7D32);
         color: white;
@@ -75,15 +102,19 @@ function highlightAddresses(node: Node) {
       });
 
       span.addEventListener('click', () => {
+        // Use the validated immutable capture, never mutable DOM state. A hostile
+        // page can rewrite the shared span after it has been inserted.
         chrome.runtime.sendMessage({
           action: 'openDonatePopup',
-          address: match![0]
+          address
         });
       });
 
       fragment.appendChild(span);
       lastIndex = STELLAR_ADDRESS_REGEX.lastIndex;
     }
+
+    if (!foundAddress) return;
 
     if (lastIndex < text.length) {
       fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
@@ -102,21 +133,42 @@ function highlightAddresses(node: Node) {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  highlightAddresses(document.body);
-});
+let observer: MutationObserver | null = null;
+let initialized = false;
 
-const observer = new MutationObserver((mutations) => {
-  mutations.forEach((mutation) => {
-    mutation.addedNodes.forEach((node) => {
-      if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-        highlightAddresses(node);
-      }
+export function initContentScript(): void {
+  if (initialized || !document.body) return;
+  initialized = true;
+
+  highlightAddresses(document.body);
+
+  observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
+          highlightAddresses(node);
+        }
+      });
     });
   });
-});
 
-observer.observe(document.body, {
-  childList: true,
-  subtree: true
-});
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+}
+
+/**
+ * Test hook for cleaning up the observer between isolated DOM fixtures.
+ */
+export function resetContentScriptForTest(): void {
+  observer?.disconnect();
+  observer = null;
+  initialized = false;
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initContentScript, { once: true });
+} else {
+  initContentScript();
+}
