@@ -38,6 +38,7 @@ function AppShell() {
         <Stack.Screen name="projects" options={{ title: 'Projects' }} />
         <Stack.Screen name="projects/[id]" options={{ title: 'Project Details' }} />
         <Stack.Screen name="donate/[id]" options={{ title: 'Donate' }} />
+        <Stack.Screen name="scan" options={{ title: 'Scan QR Code', headerShown: false }} />
         <Stack.Screen name="impact" options={{ title: 'My Impact' }} />
         <Stack.Screen name="profile/[address]" options={{ title: 'Donor Profile' }} />
         <Stack.Screen name="leaderboard" options={{ title: 'Leaderboard' }} />

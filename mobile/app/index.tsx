@@ -139,7 +139,7 @@ export default function HomeScreen() {
       renderItem={() => <SkeletonCard colors={colors} />}
       contentContainerStyle={styles.listContent}
       scrollEnabled={false}
-      ListHeaderComponent={<Header colors={colors} />}
+      ListHeaderComponent={<Header colors={colors} onScanPress={() => router.push('/scan')} />}
     />
   );
 
@@ -164,7 +164,7 @@ export default function HomeScreen() {
           />
         )}
         contentContainerStyle={styles.listContent}
-        ListHeaderComponent={<Header colors={colors} />}
+        ListHeaderComponent={<Header colors={colors} onScanPress={() => router.push('/scan')} />}
         ListEmptyComponent={
           networkError ? (
             <View style={styles.errorContainer}>
@@ -196,11 +196,30 @@ export default function HomeScreen() {
   );
 }
 
-function Header({ colors }: { colors: ReturnType<typeof useTheme>['colors'] }) {
+function Header({
+  colors,
+  onScanPress,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  onScanPress?: () => void;
+}) {
   return (
     <View style={[styles.header, { backgroundColor: colors.primary }]}>
-      <Text style={[styles.title, { color: colors.headerText }]}>Stellar GreenPay</Text>
-      <Text style={[styles.subtitle, { color: colors.headerText }]}>Climate donations on Stellar</Text>
+      <View style={styles.headerTopRow}>
+        <View>
+          <Text style={[styles.title, { color: colors.headerText }]}>Stellar GreenPay</Text>
+          <Text style={[styles.subtitle, { color: colors.headerText }]}>Climate donations on Stellar</Text>
+        </View>
+        {onScanPress ? (
+          <TouchableOpacity
+            style={[styles.scanButton, { borderColor: colors.headerText }]}
+            onPress={onScanPress}
+            accessibilityLabel="Scan QR code"
+          >
+            <Text style={[styles.scanButtonText, { color: colors.headerText }]}>Scan QR</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -215,6 +234,21 @@ const styles = StyleSheet.create({
   header: {
     padding: 24,
     marginBottom: 8,
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  scanButton: {
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  scanButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   title: {
     fontSize: 28,
