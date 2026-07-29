@@ -1,0 +1,357 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`DescriptionAccordion RTL (Arabic locale) matches snapshot with RTL text-start alignment 1`] = `
+<div>
+  <div
+    class="space-y-3"
+  >
+    <div
+      class="rounded-2xl border border-forest-100 bg-white overflow-hidden"
+    >
+      <button
+        aria-expanded="true"
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
+        type="button"
+      >
+        <div
+          class="min-w-0"
+        >
+          <p
+            class="font-semibold text-forest-900 font-body"
+          >
+            Overview
+          </p>
+        </div>
+        <span
+          class="text-forest-500 flex-shrink-0"
+        >
+          −
+        </span>
+      </button>
+      <div
+        class="px-4 overflow-hidden"
+        style="max-height: 0; transition: max-height 320ms ease;"
+      >
+        <div
+          class="pb-4"
+        >
+          <p
+            class="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body"
+          >
+            Overview line
+          </p>
+        </div>
+      </div>
+    </div>
+    <div
+      class="rounded-2xl border border-forest-100 bg-white overflow-hidden"
+    >
+      <button
+        aria-expanded="false"
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
+        type="button"
+      >
+        <div
+          class="min-w-0"
+        >
+          <p
+            class="font-semibold text-forest-900 font-body"
+          >
+            Goals
+          </p>
+          <p
+            class="text-xs text-forest-500 font-body mt-0.5"
+          >
+            سطر واحد
+          </p>
+        </div>
+        <span
+          class="text-forest-500 flex-shrink-0"
+        >
+          +
+        </span>
+      </button>
+      <div
+        class="px-4 overflow-hidden"
+        style="max-height: 0; transition: max-height 320ms ease;"
+      >
+        <div
+          class="pb-4"
+        >
+          <p
+            class="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body"
+          >
+            Goal only line
+          </p>
+        </div>
+      </div>
+    </div>
+    <div
+      class="rounded-2xl border border-forest-100 bg-white overflow-hidden"
+    >
+      <button
+        aria-expanded="false"
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
+        type="button"
+      >
+        <div
+          class="min-w-0"
+        >
+          <p
+            class="font-semibold text-forest-900 font-body"
+          >
+            How funds are used
+          </p>
+          <p
+            class="text-xs text-forest-500 font-body mt-0.5"
+          >
+            ٣ أسطر
+          </p>
+        </div>
+        <span
+          class="text-forest-500 flex-shrink-0"
+        >
+          +
+        </span>
+      </button>
+      <div
+        class="px-4 overflow-hidden"
+        style="max-height: 0; transition: max-height 320ms ease;"
+      >
+        <div
+          class="pb-4"
+        >
+          <p
+            class="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body"
+          >
+            Fund line 1
+Fund line 2
+Fund line 3
+          </p>
+        </div>
+      </div>
+    </div>
+    <div
+      class="rounded-2xl border border-forest-100 bg-white overflow-hidden"
+    >
+      <button
+        aria-expanded="false"
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
+        type="button"
+      >
+        <div
+          class="min-w-0"
+        >
+          <p
+            class="font-semibold text-forest-900 font-body"
+          >
+            Team
+          </p>
+          <p
+            class="text-xs text-forest-500 font-body mt-0.5"
+          >
+            سطر واحد
+          </p>
+        </div>
+        <span
+          class="text-forest-500 flex-shrink-0"
+        >
+          +
+        </span>
+      </button>
+      <div
+        class="px-4 overflow-hidden"
+        style="max-height: 0; transition: max-height 320ms ease;"
+      >
+        <div
+          class="pb-4"
+        >
+          <p
+            class="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body"
+          >
+            Team line
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`DescriptionAccordion matches snapshot for a multi-section description 1`] = `
+<div>
+  <div
+    class="space-y-3"
+  >
+    <div
+      class="rounded-2xl border border-forest-100 bg-white overflow-hidden"
+    >
+      <button
+        aria-expanded="true"
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
+        type="button"
+      >
+        <div
+          class="min-w-0"
+        >
+          <p
+            class="font-semibold text-forest-900 font-body"
+          >
+            Overview
+          </p>
+        </div>
+        <span
+          class="text-forest-500 flex-shrink-0"
+        >
+          −
+        </span>
+      </button>
+      <div
+        class="px-4 overflow-hidden"
+        style="max-height: 0; transition: max-height 320ms ease;"
+      >
+        <div
+          class="pb-4"
+        >
+          <p
+            class="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body"
+          >
+            Overview line
+          </p>
+        </div>
+      </div>
+    </div>
+    <div
+      class="rounded-2xl border border-forest-100 bg-white overflow-hidden"
+    >
+      <button
+        aria-expanded="false"
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
+        type="button"
+      >
+        <div
+          class="min-w-0"
+        >
+          <p
+            class="font-semibold text-forest-900 font-body"
+          >
+            Goals
+          </p>
+          <p
+            class="text-xs text-forest-500 font-body mt-0.5"
+          >
+            1 line
+          </p>
+        </div>
+        <span
+          class="text-forest-500 flex-shrink-0"
+        >
+          +
+        </span>
+      </button>
+      <div
+        class="px-4 overflow-hidden"
+        style="max-height: 0; transition: max-height 320ms ease;"
+      >
+        <div
+          class="pb-4"
+        >
+          <p
+            class="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body"
+          >
+            Goal only line
+          </p>
+        </div>
+      </div>
+    </div>
+    <div
+      class="rounded-2xl border border-forest-100 bg-white overflow-hidden"
+    >
+      <button
+        aria-expanded="false"
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
+        type="button"
+      >
+        <div
+          class="min-w-0"
+        >
+          <p
+            class="font-semibold text-forest-900 font-body"
+          >
+            How funds are used
+          </p>
+          <p
+            class="text-xs text-forest-500 font-body mt-0.5"
+          >
+            3 lines
+          </p>
+        </div>
+        <span
+          class="text-forest-500 flex-shrink-0"
+        >
+          +
+        </span>
+      </button>
+      <div
+        class="px-4 overflow-hidden"
+        style="max-height: 0; transition: max-height 320ms ease;"
+      >
+        <div
+          class="pb-4"
+        >
+          <p
+            class="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body"
+          >
+            Fund line 1
+Fund line 2
+Fund line 3
+          </p>
+        </div>
+      </div>
+    </div>
+    <div
+      class="rounded-2xl border border-forest-100 bg-white overflow-hidden"
+    >
+      <button
+        aria-expanded="false"
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-start hover:bg-forest-50/60 transition-colors"
+        type="button"
+      >
+        <div
+          class="min-w-0"
+        >
+          <p
+            class="font-semibold text-forest-900 font-body"
+          >
+            Team
+          </p>
+          <p
+            class="text-xs text-forest-500 font-body mt-0.5"
+          >
+            1 line
+          </p>
+        </div>
+        <span
+          class="text-forest-500 flex-shrink-0"
+        >
+          +
+        </span>
+      </button>
+      <div
+        class="px-4 overflow-hidden"
+        style="max-height: 0; transition: max-height 320ms ease;"
+      >
+        <div
+          class="pb-4"
+        >
+          <p
+            class="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body"
+          >
+            Team line
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;

@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState, useCallback } from "react";
 import { fetchProfile, fetchDonorHistory } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { DonorProfile, Donation, BadgeTier } from "@/utils/types";
 
 // ── Badge helpers ─────────────────────────────────────────────────────────────
@@ -52,12 +53,10 @@ function shortenKey(pk: string): string {
   return `${pk.slice(0, 6)}…${pk.slice(-6)}`;
 }
 
-function formatXLM(raw: string): string {
+function formatXLM(raw: string, locale = "en-US"): string {
   const n = parseFloat(raw);
   if (isNaN(n)) return "0";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(2)}K`;
-  return n.toFixed(2);
+  return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 2 }).format(n);
 }
 
 function formatDate(iso: string): string {
@@ -106,6 +105,7 @@ function StatCard({
 }
 
 function DonationRow({ donation }: { donation: Donation }) {
+  const { localeTag } = useI18n();
   const amount =
     donation.amount ?? donation.amountXLM ?? "0";
   const currency = donation.currency ?? "XLM";
@@ -124,7 +124,7 @@ function DonationRow({ donation }: { donation: Donation }) {
       </div>
       <div className="flex flex-col items-end gap-0.5 shrink-0">
         <span className="font-semibold text-[#227239] font-body text-sm">
-          {formatXLM(amount)}{" "}
+          {formatXLM(amount, localeTag)}{" "}
           <span className="text-xs font-normal text-[#5a7a5a]">{currency}</span>
         </span>
         <span className="text-[10px] text-[#5a7a5a]">
@@ -229,6 +229,7 @@ function ShareButton({ url }: { url: string }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function DonorProfilePage() {
+  const { t, localeTag } = useI18n();
   const router = useRouter();
   const { publicKey } = router.query as { publicKey?: string };
 
@@ -285,7 +286,7 @@ export default function DonorProfilePage() {
 
   const ogTitle = `${displayName} — Stellar GreenPay Donor`;
   const ogDescription = profile
-    ? `${displayName} has donated ${formatXLM(profile.totalDonatedXLM)} XLM to ${profile.projectsSupported} climate project${profile.projectsSupported !== 1 ? "s" : ""} on Stellar GreenPay.`
+    ? `${displayName} has donated ${formatXLM(profile.totalDonatedXLM, localeTag)} XLM to ${t("donorProfile.projectsSupportedCount", { count: profile.projectsSupported })} on Stellar GreenPay.`
     : "View this donor's climate impact on Stellar GreenPay.";
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -344,7 +345,7 @@ export default function DonorProfilePage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <StatCard
               label="Total Donated"
-              value={`${formatXLM(profile.totalDonatedXLM)} XLM`}
+              value={`${formatXLM(profile.totalDonatedXLM, localeTag)} XLM`}
             />
             <StatCard
               label="Projects Supported"

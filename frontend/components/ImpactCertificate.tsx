@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { badgeEmoji, badgeLabel, formatCO2, formatDate, formatXLM, shortenAddress } from "@/utils/format";
+import { useI18n } from "@/lib/i18n";
 import type { BadgeTier } from "@/utils/types";
 
 export default function ImpactCertificate(props: {
@@ -19,6 +20,7 @@ export default function ImpactCertificate(props: {
     projectsSupported,
   } = props;
 
+  const { localeTag } = useI18n();
   const issuedDate = useMemo(() => formatDate(new Date().toISOString()), []);
 
   return (
@@ -58,7 +60,7 @@ export default function ImpactCertificate(props: {
           <div className="card text-center border-forest-100/50">
             <p className="text-2xl mb-2">💚</p>
             <p className="font-display font-bold text-forest-900 text-lg">
-              {formatXLM(totalDonatedXLM)}
+              {formatXLM(totalDonatedXLM, 2, localeTag)}
             </p>
             <p className="text-xs text-[#8aaa8a] mt-1 font-body uppercase tracking-wider font-bold opacity-60">
               Total Donated
@@ -67,7 +69,7 @@ export default function ImpactCertificate(props: {
           <div className="card text-center border-forest-100/50">
             <p className="text-2xl mb-2">♻️</p>
             <p className="font-display font-bold text-forest-900 text-lg">
-              {formatCO2(totalCO2OffsetKg)}
+              {formatCO2(totalCO2OffsetKg, localeTag)}
             </p>
             <p className="text-xs text-[#8aaa8a] mt-1 font-body uppercase tracking-wider font-bold opacity-60">
               CO₂ Offset

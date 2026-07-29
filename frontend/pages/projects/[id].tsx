@@ -35,7 +35,7 @@ export default function ProjectDetail({
 }: ProjectDetailProps) {
   const router = useRouter();
   const { id } = router.query;
-  const { t } = useI18n();
+  const { t, localeTag } = useI18n();
 
   const [project, setProject] = useState<ClimateProject | null>(null);
   const [updates, setUpdates] = useState<ProjectUpdate[]>([]);
@@ -714,14 +714,14 @@ export default function ProjectDetail({
             </h2>
             <p className="text-lg sm:text-xl text-white/90 max-w-2xl mx-auto font-body">
               This project has reached its funding goal! Thank you to all{" "}
-              {project.donorCount.toLocaleString()} donors who made this
+              {t("project.donorsCount", { count: project.donorCount })} who made this
               possible.
             </p>
             <div className="mt-6 inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm px-6 py-3 rounded-full border border-white/30">
               <span className="text-2xl">✅</span>
               <span className="font-semibold text-lg">
-                {formatXLM(project.raisedXLM)} raised of{" "}
-                {formatXLM(project.goalXLM)} goal
+                {formatXLM(project.raisedXLM, 2, localeTag)} raised of{" "}
+                {formatXLM(project.goalXLM, 2, localeTag)} goal
               </span>
             </div>
           </div>
@@ -750,10 +750,10 @@ export default function ProjectDetail({
           </div>
           <div className="mt-4">
             <div className="flex justify-between text-xs mb-1 font-body text-amber-800">
-              <span>{formatXLM(activeCampaign.raisedXLM)} raised</span>
+              <span>{formatXLM(activeCampaign.raisedXLM, 2, localeTag)} raised</span>
               <span>
                 {activeCampaign.progressPercent}% of{" "}
-                {formatXLM(activeCampaign.goalXLM)}
+                {formatXLM(activeCampaign.goalXLM, 2, localeTag)}
               </span>
             </div>
             <div className="progress-bar h-2.5">
@@ -779,7 +779,7 @@ export default function ProjectDetail({
                 Your donation will be matched up to {matches[0].multiplier}x!
               </h2>
               <p className="text-sm text-green-800 font-body mt-2">
-                Remaining capacity: {formatXLM(matches[0].remainingXLM)}
+                Remaining capacity: {formatXLM(matches[0].remainingXLM, 2, localeTag)}
               </p>
             </div>
             <p className="text-xs px-3 py-1 rounded-full bg-green-100 border border-green-200 text-green-800 font-body">
@@ -823,7 +823,7 @@ export default function ProjectDetail({
                   </span>
                   <button
                     onClick={handleCopyLink}
-                    className="btn-secondary text-xs py-1 px-3 ml-auto"
+                    className="btn-secondary text-xs py-1 px-3 ms-auto"
                     title="Share this project"
                   >
                     {shareState === "copied" ? "✓ Link copied!" : "Share 🌍"}
@@ -884,8 +884,8 @@ export default function ProjectDetail({
                 <div className="flex items-center gap-5">
                   <CircularProgress percentage={pct} size={64} strokeWidth={6} />
                   <div className="flex-1">
-                    <p className="font-semibold text-forest-800 text-lg">{formatXLM(project.raisedXLM)} raised</p>
-                    <p className="text-[#5a7a5a] text-sm font-body mt-0.5">towards {formatXLM(project.goalXLM)} goal</p>
+                    <p className="font-semibold text-forest-800 text-lg">{formatXLM(project.raisedXLM, 2, localeTag)} raised</p>
+                    <p className="text-[#5a7a5a] text-sm font-body mt-0.5">towards {formatXLM(project.goalXLM, 2, localeTag)} goal</p>
                   </div>
                 </div>
               )}
@@ -902,12 +902,12 @@ export default function ProjectDetail({
                 {
                   icon: "♻️",
                   label: "CO₂ Offset",
-                  value: formatCO2(project.co2OffsetKg),
+                  value: formatCO2(project.co2OffsetKg, localeTag),
                 },
                 {
                   icon: "🎯",
                   label: "Goal",
-                  value: formatXLM(project.goalXLM),
+                  value: formatXLM(project.goalXLM, 2, localeTag),
                 },
               ].map((s) => (
                 <div key={s.label} className="stat-card text-center">
@@ -957,7 +957,7 @@ export default function ProjectDetail({
               </a>
               <button
                 onClick={handleCopyWallet}
-                className="ml-1 p-1.5 rounded hover:bg-forest-100 transition-colors focus:outline-none focus:ring-2 focus:ring-forest-300"
+                className="ms-1 p-1.5 rounded hover:bg-forest-100 transition-colors focus:outline-none focus:ring-2 focus:ring-forest-300"
                 title="Copy wallet address"
                 aria-label="Copy wallet address to clipboard"
               >
@@ -1165,10 +1165,10 @@ export default function ProjectDetail({
                       Ended {new Date(campaign.deadline).toLocaleDateString()}
                     </p>
                     <div className="flex justify-between text-xs mb-1 font-body">
-                      <span>{formatXLM(campaign.raisedXLM)} raised</span>
+                      <span>{formatXLM(campaign.raisedXLM, 2, localeTag)} raised</span>
                       <span>
                         {campaign.progressPercent}% of{" "}
-                        {formatXLM(campaign.goalXLM)}
+                        {formatXLM(campaign.goalXLM, 2, localeTag)}
                       </span>
                     </div>
                     <div className="progress-bar h-2">
@@ -1331,7 +1331,7 @@ export default function ProjectDetail({
                   {
                     id: `${d.id}`,
                     title: "New donation received",
-                    description: `${shortenAddress(d.donorAddress)} just donated ${formatXLM(d.amountXLM || d.amount || "0")}`,
+                    description: `${shortenAddress(d.donorAddress)} just donated ${formatXLM(d.amountXLM || d.amount || "0", 2, localeTag)}`,
                     createdAt: Date.now(),
                   },
                 ]);
@@ -1375,7 +1375,7 @@ export default function ProjectDetail({
                             {m.from.slice(0, 6)}…{m.from.slice(-6)}
                           </a>
                           <span className="mx-2">•</span>
-                          <span className="font-semibold text-forest-900">{formatXLM(m.amount, 2)}</span>
+                          <span className="font-semibold text-forest-900">{formatXLM(m.amount, 2, localeTag)}</span>
                           <span className="mx-2">•</span>
                           <span>{timeAgo(m.createdAt)}</span>
                         </div>
@@ -1402,7 +1402,7 @@ export default function ProjectDetail({
         <div className="space-y-4">
 
           {/* Sticky mobile donate button */}
-          <div className="fixed bottom-0 left-0 right-0 z-40 p-3 bg-white/95 backdrop-blur-sm border-t border-forest-200 sm:hidden">
+          <div className="fixed bottom-0 start-0 end-0 z-40 p-3 bg-white/95 backdrop-blur-sm border-t border-forest-200 sm:hidden">
             {publicKey ? (
               <a
                 href="#donate-form"
@@ -1449,7 +1449,7 @@ export default function ProjectDetail({
               <div className="p-3 bg-white rounded-lg border border-forest-100 shadow-sm animate-fade-in">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-lg">♻️</span>
-                  <span className="font-semibold text-forest-800 text-sm font-body">{formatCO2(estimatedCO2)} offset</span>
+                  <span className="font-semibold text-forest-800 text-sm font-body">{formatCO2(estimatedCO2, localeTag)} offset</span>
                 </div>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-lg">🌳</span>
@@ -1569,8 +1569,7 @@ export default function ProjectDetail({
             </p>
             {subscriberCount !== null && (
               <p className="text-xs text-[#8aaa8a] font-body mb-3">
-                📬 {subscriberCount.toLocaleString()}{" "}
-                {subscriberCount === 1 ? "subscriber" : "subscribers"}
+                📬 {t("project.subscribersCount", { count: subscriberCount })}
               </p>
             )}
             {subState === "success" ? (

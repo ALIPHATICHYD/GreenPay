@@ -15,6 +15,11 @@
   "project": {
     "about": "Sobre este Proyecto",
     "donors": "Donantes",
+    "donorsCount": "{count, plural, one {# donante} other {# donantes}}",
+    "verifiedProjectsCount": "{count, plural, one {# proyecto verificado} other {# proyectos verificados}}",
+    "lineCount": "{count, plural, one {# línea} other {# líneas}}",
+    "projectsSupportedCount": "{count, plural, one {# proyecto apoyado} other {# proyectos apoyados}}",
+    "donationsCount": "{count, plural, one {# donación} other {# donaciones}}",
     "co2Offset": "CO₂ Compensado",
     "goal": "Meta",
     "raised": "recaudado",
@@ -36,8 +41,7 @@
     "downloadReport": "📄 Descargar Informe",
     "getUpdates": "Recibir actualizaciones 🔔",
     "getUpdatesDesc": "Recibe un correo electrónico cuando este proyecto publique nuevas actualizaciones.",
-    "subscribers": "suscriptores",
-    "subscriber": "suscriptor",
+    "subscribersCount": "{count, plural, one {# suscriptor} other {# suscriptores}}",
     "yourEmail": "tu@email.com",
     "subscribing": "Suscribiendo…",
     "subscribe": "Suscribirse",
@@ -73,7 +77,7 @@
     "generateSummary": "Generar resumen",
     "generating": "Generando…",
     "refreshSummary": "Actualizar resumen",
-    "aiSummaryPlaceholder": "Aún no hay resumen de IA. Haz clic en "Generar resumen" para crear uno para los donantes.",
+    "aiSummaryPlaceholder": "Aún no hay resumen de IA. Haz clic en \"Generar resumen\" para crear uno para los donantes.",
     "aiDisclaimer": "Generado por IA a partir de la descripción de este proyecto. Puede contener inexactitudes — lee la descripción completa antes de donar.",
     "generated": "Generado",
     "milestones": "Hitos del Proyecto",
@@ -137,5 +141,11 @@
     "back": "Atrás",
     "next": "Siguiente",
     "close": "Cerrar"
+  },
+  "donate": {
+    "treeEquivalent": "Esto equivale a plantar aproximadamente {count, plural, one {# árbol} other {# árboles}}."
+  },
+  "donorProfile": {
+    "projectsSupportedCount": "{count, plural, one {# proyecto climático} other {# proyectos climáticos}}"
   }
 }

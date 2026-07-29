@@ -15,10 +15,12 @@ import { formatXLM, formatCO2, timeAgo, shortenAddress, badgeEmoji, badgeLabel, 
 import { explorerUrl } from "@/lib/stellar";
 import type { DonorProfile, Donation, ClimateProject, MonthlySubscription } from "@/utils/types";
 import { useWishlist } from "@/hooks/useWishlist";
+import { useI18n } from "@/lib/i18n";
 
 interface DashboardProps { publicKey: string | null; onConnect: (pk: string) => void; }
 
 export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
+  const { localeTag } = useI18n();
   const [profile,   setProfile]   = useState<DonorProfile | null>(null);
   const [donations, setDonations] = useState<Donation[]>([]);
   const [balance,   setBalance]   = useState<string | null>(null);
@@ -159,7 +161,7 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
   };
 
   const handleShareCertificate = () => {
-    const text = `I just got my Stellar GreenPay impact certificate: ${formatCO2(co2Estimate)} offset from ${formatXLM(totalDonated)} donated.`;
+    const text = `I just got my Stellar GreenPay impact certificate: ${formatCO2(co2Estimate, localeTag)} offset from ${formatXLM(totalDonated, 2, localeTag)} donated.`;
     const url = typeof window !== "undefined" ? window.location.href : "https://stellar-greenpay.app";
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`,
@@ -198,7 +200,7 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
             {dueSubscriptions.map((subscription) => (
               <div key={subscription.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2">
                 <p className="text-sm text-amber-900 font-body">
-                  {subscription.projectName}: {formatXLM(subscription.amountXLM)}
+                  {subscription.projectName}: {formatXLM(subscription.amountXLM, 2, localeTag)}
                 </p>
                 <Link
                   href={`/projects/${subscription.projectId}?amount=${encodeURIComponent(subscription.amountXLM)}&monthlySubId=${encodeURIComponent(subscription.id)}`}
@@ -247,10 +249,10 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
       {/* Stats grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {[
-          { icon: "💚", label: "Total Donated",     value: formatXLM(totalDonated) },
-          { icon: "♻️", label: "Est. CO₂ Offset",   value: formatCO2(co2Estimate) },
+          { icon: "💚", label: "Total Donated",     value: formatXLM(totalDonated, 2, localeTag) },
+          { icon: "♻️", label: "Est. CO₂ Offset",   value: formatCO2(co2Estimate, localeTag) },
           { icon: "🌍", label: "Projects Supported", value: projectsCount.toString() },
-          { icon: "💰", label: "XLM Balance",        value: balance ? formatXLM(balance) : "—" },
+          { icon: "💰", label: "XLM Balance",        value: balance ? formatXLM(balance, 2, localeTag) : "—" },
         ].map(stat => (
           <div key={stat.label} className="card text-center shadow-sm border border-forest-100/50">
             <p className="text-2xl mb-2">{stat.icon}</p>
@@ -418,9 +420,9 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
                       {d.message && <p className="text-xs text-[#5a7a5a] italic font-body truncate">&quot;{d.message}&quot;</p>}
                       <p className="text-[10px] text-[#8aaa8a] font-body uppercase tracking-wider font-bold opacity-70">{timeAgo(d.createdAt)}</p>
                     </div>
-                    <div className="text-right flex-shrink-0">
+                    <div className="text-end flex-shrink-0">
                       <p className="font-mono font-semibold text-forest-700 text-sm">
-                        {d.currency === "USDC" ? `$${parseFloat(d.amount || "0").toFixed(2)} USDC` : formatXLM(d.amountXLM || "0")}
+                        {d.currency === "USDC" ? `$${parseFloat(d.amount || "0").toFixed(2)} USDC` : formatXLM(d.amountXLM || "0", 2, localeTag)}
                       </p>
                       <a href={explorerUrl(d.transactionHash)} target="_blank" rel="noopener noreferrer"
                         className="text-[10px] text-forest-500 hover:text-forest-700 font-bold uppercase tracking-widest transition-colors">View tx ↗</a>

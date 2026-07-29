@@ -48,6 +48,16 @@ function buildStaticCsp(allowFraming = false) {
 
 const nextConfig = {
   reactStrictMode: true,
+  // `intl-messageformat` (ICU plural/number formatting used by lib/i18n.tsx)
+  // and its `@formatjs/*` dependencies ship ESM-only packages with no CJS
+  // entry point. Next.js needs to know to run these through its own
+  // compiler rather than requiring them as-is.
+  transpilePackages: [
+    'intl-messageformat',
+    '@formatjs/fast-memoize',
+    '@formatjs/icu-messageformat-parser',
+    '@formatjs/icu-skeleton-parser',
+  ],
   webpack: (config) => {
     config.resolve.fallback = { ...config.resolve.fallback, fs: false, net: false, tls: false }
     return config

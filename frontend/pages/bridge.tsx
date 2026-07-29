@@ -312,7 +312,7 @@ export default function BridgePage() {
                         {new Date(entry.timestamp).toLocaleString()}
                       </p>
                     </div>
-                    <div className="text-right">
+                    <div className="text-end">
                       <p className="text-sm font-bold text-forest-700">
                         ${entry.amount} USDC
                       </p>

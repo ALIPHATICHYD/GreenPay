@@ -7,6 +7,7 @@ import { createProjectUpdate, fetchProject, fetchProjectDonations, updateProject
 import { buildMilestoneTransaction, submitTransaction } from "@/lib/stellar";
 import { useDonationSocket } from "@/hooks/useDonationSocket";
 import { formatCO2, formatXLM, shortenAddress, timeAgo } from "@/utils/format";
+import { useI18n } from "@/lib/i18n";
 import type { ClimateProject, Donation } from "@/utils/types";
 
 const DonationGrowthChartNoSSR = dynamic(
@@ -32,6 +33,7 @@ function weekKey(dateStr: string): string {
 }
 
 export default function ProjectAdmin({ publicKey, onConnect }: AdminProps) {
+  const { localeTag } = useI18n();
   const router = useRouter();
   const { projectId } = router.query;
 
@@ -362,7 +364,7 @@ export default function ProjectAdmin({ publicKey, onConnect }: AdminProps) {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {[
-          { icon: "💚", label: "Total Raised", value: formatXLM(project.raisedXLM) },
+          { icon: "💚", label: "Total Raised", value: formatXLM(project.raisedXLM, 2, localeTag) },
           { icon: "👥", label: "Donors", value: String(project.donorCount) },
           { icon: "♻️", label: "CO₂ Offset", value: formatCO2(project.co2OffsetKg) },
           { icon: "🧾", label: "Recent Donations", value: String(donations.length) },
@@ -455,7 +457,7 @@ export default function ProjectAdmin({ publicKey, onConnect }: AdminProps) {
                 className="input-field bg-white"
               />
               <div>
-                <label className="block text-[10px] font-bold text-forest-800 uppercase tracking-widest mb-1 ml-1 opacity-50">Percentage of goal</label>
+                <label className="block text-[10px] font-bold text-forest-800 uppercase tracking-widest mb-1 ms-1 opacity-50">Percentage of goal</label>
                 <div className="flex items-center gap-3">
                   <input
                     type="range"
@@ -491,12 +493,12 @@ export default function ProjectAdmin({ publicKey, onConnect }: AdminProps) {
                 <div key={d.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-forest-100">
                   <div>
                     <p className="text-sm font-semibold text-forest-900 font-body">
-                      {shortenAddress(d.donorAddress)} • {formatXLM(d.amountXLM || d.amount || "0", 2)}
+                      {shortenAddress(d.donorAddress)} • {formatXLM(d.amountXLM || d.amount || "0", 2, localeTag)}
                     </p>
                     <p className="text-xs text-[#8aaa8a] font-body">{timeAgo(d.createdAt)}</p>
                   </div>
                   {d.message && (
-                    <p className="text-xs text-[#5a7a5a] font-body max-w-[220px] text-right">
+                    <p className="text-xs text-[#5a7a5a] font-body max-w-[220px] text-end">
                       “{d.message.slice(0, 60)}{d.message.length > 60 ? "…" : ""}”
                     </p>
                   )}
@@ -571,7 +573,7 @@ export default function ProjectAdmin({ publicKey, onConnect }: AdminProps) {
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-bold text-forest-800 uppercase tracking-widest mb-1 ml-1 opacity-50">
+            <label className="block text-xs font-bold text-forest-800 uppercase tracking-widest mb-1 ms-1 opacity-50">
               Reason for rejection (required)
             </label>
             <textarea
@@ -658,15 +660,15 @@ export default function ProjectAdmin({ publicKey, onConnect }: AdminProps) {
                 <div className="grid grid-cols-3 gap-3 mt-3">
                   <div>
                     <p className="text-[10px] uppercase tracking-widest font-bold text-forest-800 opacity-50">Cap (XLM)</p>
-                    <p className="text-sm font-semibold text-forest-900 font-body">{formatXLM(m.capXLM)}</p>
+                    <p className="text-sm font-semibold text-forest-900 font-body">{formatXLM(m.capXLM, 2, localeTag)}</p>
                   </div>
                   <div>
                     <p className="text-[10px] uppercase tracking-widest font-bold text-forest-800 opacity-50">Matched</p>
-                    <p className="text-sm font-semibold text-forest-900 font-body">{formatXLM(m.matchedXLM)}</p>
+                    <p className="text-sm font-semibold text-forest-900 font-body">{formatXLM(m.matchedXLM, 2, localeTag)}</p>
                   </div>
                   <div>
                     <p className="text-[10px] uppercase tracking-widest font-bold text-forest-800 opacity-50">Remaining</p>
-                    <p className="text-sm font-semibold text-forest-900 font-body">{formatXLM(m.remainingXLM)}</p>
+                    <p className="text-sm font-semibold text-forest-900 font-body">{formatXLM(m.remainingXLM, 2, localeTag)}</p>
                   </div>
                 </div>
                 <p className="text-xs text-[#8aaa8a] font-body mt-2">

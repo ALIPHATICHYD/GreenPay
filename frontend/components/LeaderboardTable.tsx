@@ -6,6 +6,7 @@ import { fetchLeaderboard } from "@/lib/api";
 import { formatXLM, formatUSDEquivalent, shortenAddress, badgeEmoji } from "@/utils/format";
 import { accountUrl } from "@/lib/stellar";
 import { useXlmPrice } from "@/lib/priceContext";
+import { useI18n } from "@/lib/i18n";
 import type { LeaderboardEntry } from "@/utils/types";
 
 const AVATAR_COLORS = [
@@ -53,6 +54,7 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
   const xlmUsd = useXlmPrice();
+  const { t, localeTag } = useI18n();
 
   useEffect(() => {
     setLoading(true);
@@ -123,19 +125,19 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
                 {entry.displayName || shortenAddress(entry.publicKey)}
               </a>
               <p className="text-xs text-[#8aaa8a] font-body mt-0.5">
-                {entry.projectsSupported} project{entry.projectsSupported !== 1 ? "s" : ""} supported
+                {t("project.projectsSupportedCount", { count: entry.projectsSupported })}
               </p>
             </div>
           </div>
 
           {/* Total donated */}
-          <div className="text-right flex-shrink-0">
+          <div className="text-end flex-shrink-0">
             <p className="font-mono font-semibold text-forest-600 text-sm">
-              {formatXLM(entry.totalDonatedXLM)}
+              {formatXLM(entry.totalDonatedXLM, 2, localeTag)}
             </p>
-            {formatUSDEquivalent(entry.totalDonatedXLM, xlmUsd) && (
+            {formatUSDEquivalent(entry.totalDonatedXLM, xlmUsd, localeTag) && (
               <p className="text-[11px] text-[#8aaa8a] font-body">
-                {formatUSDEquivalent(entry.totalDonatedXLM, xlmUsd)}
+                {formatUSDEquivalent(entry.totalDonatedXLM, xlmUsd, localeTag)}
               </p>
             )}
             <p className="text-xs text-[#8aaa8a] font-body">donated</p>

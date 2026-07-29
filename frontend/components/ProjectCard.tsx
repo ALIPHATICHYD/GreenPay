@@ -7,12 +7,14 @@ import { formatXLM, formatUSDEquivalent, formatCO2, progressPercent, statusClass
 import CircularProgress from "./CircularProgress";
 import { useXlmPrice } from "@/lib/priceContext";
 import { useWishlist } from "@/hooks/useWishlist";
+import { useI18n } from "@/lib/i18n";
 
 export default function ProjectCard({ project }: { project: ClimateProject }) {
   const pct = progressPercent(project.raisedXLM, project.goalXLM);
   const isComplete = pct >= 100;
   const xlmUsd = useXlmPrice();
   const { toggleWishlist, isInWishlist } = useWishlist();
+  const { t, localeTag } = useI18n();
   const isWishlisted = isInWishlist(project.id);
 
   return (
@@ -77,16 +79,16 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
               <CircularProgress percentage={pct} size={48} strokeWidth={4} />
               <div className="flex-1 flex justify-between text-xs text-[#8aaa8a] font-body">
                 <div>
-                  <span className="font-semibold text-forest-700 block mb-0.5">{formatXLM(project.raisedXLM)}</span>
-                  {formatUSDEquivalent(project.raisedXLM, xlmUsd) && (
-                    <span className="block text-[10px] text-[#aac0aa]">raised ({formatUSDEquivalent(project.raisedXLM, xlmUsd)})</span>
+                  <span className="font-semibold text-forest-700 block mb-0.5">{formatXLM(project.raisedXLM, 2, localeTag)}</span>
+                  {formatUSDEquivalent(project.raisedXLM, xlmUsd, localeTag) && (
+                    <span className="block text-[10px] text-[#aac0aa]">raised ({formatUSDEquivalent(project.raisedXLM, xlmUsd, localeTag)})</span>
                   )}
-                  {!formatUSDEquivalent(project.raisedXLM, xlmUsd) && <span>raised</span>}
+                  {!formatUSDEquivalent(project.raisedXLM, xlmUsd, localeTag) && <span>raised</span>}
                 </div>
-                <div className="text-right">
-                  <span className="block mb-0.5">Goal: {formatXLM(project.goalXLM)}</span>
-                  {formatUSDEquivalent(project.goalXLM, xlmUsd) && (
-                    <span className="block text-[10px] text-[#aac0aa]">{formatUSDEquivalent(project.goalXLM, xlmUsd)}</span>
+                <div className="text-end">
+                  <span className="block mb-0.5">Goal: {formatXLM(project.goalXLM, 2, localeTag)}</span>
+                  {formatUSDEquivalent(project.goalXLM, xlmUsd, localeTag) && (
+                    <span className="block text-[10px] text-[#aac0aa]">{formatUSDEquivalent(project.goalXLM, xlmUsd, localeTag)}</span>
                   )}
                 </div>
               </div>
@@ -97,9 +99,9 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
           {/* Stats row */}
           <div className="flex items-center justify-between pt-3 border-t border-[rgba(34,114,57,0.07)]">
             <div className="flex items-center gap-3 text-xs text-[#5a7a5a] font-body">
-              <span>👥 {project.donorCount} donors</span>
+              <span>👥 {t("project.donorsCount", { count: project.donorCount })}</span>
               <span className="flex items-center gap-1">
-                ♻️ {formatCO2(project.co2OffsetKg)}
+                ♻️ {formatCO2(project.co2OffsetKg, localeTag)}
                 <span
                   className="tooltip"
                   onClick={(e) => {
@@ -135,7 +137,7 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
           e.stopPropagation();
           toggleWishlist(project.id);
         }}
-        className={`absolute top-4 right-4 p-2.5 rounded-xl border transition-all duration-300 transform hover:scale-110 active:scale-95 z-20 shadow-sm
+        className={`absolute top-4 end-4 p-2.5 rounded-xl border transition-all duration-300 transform hover:scale-110 active:scale-95 z-20 shadow-sm
           ${
             isWishlisted
               ? "bg-red-50 text-red-500 border-red-200 opacity-100"

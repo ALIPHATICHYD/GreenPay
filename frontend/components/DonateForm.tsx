@@ -7,6 +7,7 @@ import { buildDonationTransaction, buildContractDonationTransaction, submitTrans
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { recordDonation } from "@/lib/api";
 import { formatXLM, formatCO2 } from "@/utils/format";
+import { useI18n } from "@/lib/i18n";
 import type { ClimateProject } from "@/utils/types";
 
 interface DonateFormProps {
@@ -23,6 +24,7 @@ const PRESETS_XLM = ["10", "25", "50", "100", "250"];
 const PRESETS_USDC = ["5", "10", "25", "50", "100"];
 
 export default function DonateForm({ project, publicKey, initialAmount, initialMessage, onSuccess }: DonateFormProps) {
+  const { t, localeTag } = useI18n();
   const [amount, setAmount]   = useState("");
   const [message, setMessage] = useState("");
   const [currency, setCurrency] = useState<"XLM" | "USDC">("XLM");
@@ -205,7 +207,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
         <div className="text-4xl mb-3">🌱</div>
         <h3 className="font-display text-xl font-semibold text-forest-900 mb-2">Thank you!</h3>
         <p className="text-[#5a7a5a] text-sm mb-4 font-body">
-          Your donation of <span className="font-semibold text-forest-700">{currency === "XLM" ? formatXLM(amountNum) : `${amountNum.toFixed(2)} ${currency}`}</span> has been sent to <span className="font-semibold">{project.name}</span>.
+          Your donation of <span className="font-semibold text-forest-700">{currency === "XLM" ? formatXLM(amountNum, 2, localeTag) : `${amountNum.toFixed(2)} ${currency}`}</span> has been sent to <span className="font-semibold">{project.name}</span>.
         </p>
         {donorBadge && (
           <div className="mb-4 p-3 bg-forest-50 border border-forest-200 rounded-xl">
@@ -264,11 +266,11 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           {currency === "XLM" && amount && !isNaN(amountNum) && co2Impact > 0 && (
             <div className="mt-3 p-3 bg-forest-50 border border-forest-200 rounded-xl">
               <p className="text-sm font-medium text-forest-900 mb-1">
-                🌱 Your donation will offset approximately <span className="font-bold text-forest-700">{formatCO2(co2Impact)}</span>
+                🌱 Your donation will offset approximately <span className="font-bold text-forest-700">{formatCO2(co2Impact, localeTag)}</span>
               </p>
               {treeEquivalent > 0 && (
-                <p className="text-xs text-forest-600 mt-1">
-                  That is equivalent to planting about <span className="font-semibold">{treeEquivalent} {treeEquivalent === 1 ? 'tree' : 'trees'}</span>
+                <p className="text-xs text-forest-600 mt-1 font-semibold">
+                  {t("donate.treeEquivalent", { count: treeEquivalent })}
                 </p>
               )}
             </div>
@@ -317,7 +319,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           {step === "signing"    && <><Spinner />Sign in Freighter...</>}
           {step === "submitting" && <><Spinner />Submitting...</>}
           {step === "recording"  && <>Done</>}
-          {step === "idle"       && <>🌱 Donate {amount ? (currency === "XLM" ? formatXLM(amountNum) : `$${amountNum.toFixed(2)} ${currency}`) : currency}</>}
+          {step === "idle"       && <>🌱 Donate {amount ? (currency === "XLM" ? formatXLM(amountNum, 2, localeTag) : `$${amountNum.toFixed(2)} ${currency}`) : currency}</>}
           {step === "error"      && "Retry"}
         </button>
 

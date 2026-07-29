@@ -6,10 +6,16 @@ import { formatDistanceToNow, format } from "date-fns";
 import type { ProjectStatus, BadgeTier } from "./types";
 
 /**
- * Format an amount as XLM with locale separators.
+ * Format an amount as XLM with locale-aware separators.
+ *
+ * Uses `Intl.NumberFormat` under the active locale (grouping separators,
+ * decimal separators, and native digit shapes all follow the given BCP-47
+ * tag) rather than a hardcoded `en-US` format or naive `toFixed()`.
  *
  * @param amount - Amount in XLM (string or number).
  * @param decimals - Maximum fractional digits to show.
+ * @param locale - BCP-47 locale tag (defaults to `"en-US"` for callers that
+ *   haven't threaded the active locale through yet).
  * @returns Formatted string like `"1,234.56 XLM"`.
  * @throws {Error} Never throws; returns `"0 XLM"` for invalid input.
  *
@@ -17,11 +23,13 @@ import type { ProjectStatus, BadgeTier } from "./types";
  * formatXLM(12.3456) // "12.35 XLM"
  * @example
  * formatXLM("1000", 0) // "1,000 XLM"
+ * @example
+ * formatXLM("1000", 0, "ar-EG") // "١٬٠٠٠ XLM"
  */
-export function formatXLM(amount: string | number, decimals = 2): string {
+export function formatXLM(amount: string | number, decimals = 2, locale = "en-US"): string {
   const n = typeof amount === "string" ? parseFloat(amount) : amount;
   if (isNaN(n)) return "0 XLM";
-  return `${n.toLocaleString("en-US", { maximumFractionDigits: decimals })} XLM`;
+  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: decimals }).format(n)} XLM`;
 }
 
 /**
@@ -29,21 +37,23 @@ export function formatXLM(amount: string | number, decimals = 2): string {
  *
  * @param xlmAmount - Amount in XLM.
  * @param price - Current XLM→USD price; when `null`, no estimate is returned.
+ * @param locale - BCP-47 locale tag (defaults to `"en-US"`).
  * @returns A string like `"≈ $12.34 USD"` or `null` if not available.
  * @throws {Error} Never throws; returns `null` for invalid inputs.
  */
-export function formatUSDEquivalent(xlmAmount: string | number, price: number | null): string | null {
+export function formatUSDEquivalent(xlmAmount: string | number, price: number | null, locale = "en-US"): string | null {
   if (price === null) return null;
   const n = typeof xlmAmount === "string" ? parseFloat(xlmAmount) : xlmAmount;
   if (isNaN(n)) return null;
   const usd = n * price;
-  return `≈ $${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
+  return `≈ $${new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(usd)} USD`;
 }
 
 /**
  * Format a CO₂ amount (in kilograms) into a compact human-readable string.
  *
  * @param kg - CO₂ offset in kilograms.
+ * @param locale - BCP-47 locale tag (defaults to `"en-US"`).
  * @returns A string like `"850 kg CO₂"`, `"1.2k kg CO₂"`, or `"3.4M kg CO₂"`.
  * @throws {Error} Never throws.
  *
@@ -52,10 +62,11 @@ export function formatUSDEquivalent(xlmAmount: string | number, price: number | 
  * @example
  * formatCO2(1200) // "1.2k kg CO₂"
  */
-export function formatCO2(kg: number): string {
-  if (kg >= 1_000_000) return `${(kg / 1_000_000).toFixed(1)}M kg CO₂`;
-  if (kg >= 1_000) return `${(kg / 1_000).toFixed(1)}k kg CO₂`;
-  return `${kg.toLocaleString()} kg CO₂`;
+export function formatCO2(kg: number, locale = "en-US"): string {
+  const nf1 = new Intl.NumberFormat(locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+  if (kg >= 1_000_000) return `${nf1.format(kg / 1_000_000)}M kg CO₂`;
+  if (kg >= 1_000) return `${nf1.format(kg / 1_000)}k kg CO₂`;
+  return `${new Intl.NumberFormat(locale).format(kg)} kg CO₂`;
 }
 
 /**
