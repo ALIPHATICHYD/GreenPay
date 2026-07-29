@@ -3,6 +3,7 @@ node_modules/
 out/
 target/
 dist/
+dist-firefox/
 build/
 *.log
 

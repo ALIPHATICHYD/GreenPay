@@ -80,7 +80,7 @@ function debounce(fn: () => void, ms: number) {
 }
 
 function renderDropdown(projects: ProjectResult[], dropdown: HTMLUListElement) {
-  dropdown.innerHTML = '';
+  dropdown.replaceChildren();
   dropdownItems = [];
   activeDropdownIndex = -1;
 
@@ -95,12 +95,17 @@ function renderDropdown(projects: ProjectResult[], dropdown: HTMLUListElement) {
 
   projects.forEach((p) => {
     const li = document.createElement('li');
-    li.innerHTML = `
-      <div>
-        <div class="search-result-name">${escapeHtml(p.name)}</div>
-        <div class="search-result-cat">${escapeHtml(p.category)}</div>
-      </div>
-    `;
+    const details = document.createElement('div');
+    const name = document.createElement('div');
+    const category = document.createElement('div');
+    name.className = 'search-result-name';
+    category.className = 'search-result-cat';
+    // API responses are another untrusted boundary. DOM text sinks ensure names
+    // and categories can never be interpreted as extension-page markup.
+    name.textContent = typeof p.name === 'string' ? p.name : '';
+    category.textContent = typeof p.category === 'string' ? p.category : '';
+    details.append(name, category);
+    li.appendChild(details);
     li.addEventListener('mousedown', (e) => {
       e.preventDefault();
       const destInput = document.getElementById('destination') as HTMLInputElement | null;
@@ -125,10 +130,6 @@ function highlightDropdownItem(index: number) {
   dropdownItems.forEach((el, i) => {
     el.classList.toggle('active', i === index);
   });
-}
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 async function fetchProjectSearch(query: string): Promise<ProjectResult[]> {
