@@ -231,6 +231,12 @@ export interface MonthlyDonationHistoryItem {
 
 /**
  * Recurring monthly donation subscription state.
+ *
+ * `anchorDay` and `timeZone` define the donor-local billing schedule (see
+ * frontend/lib/monthlyGiving.ts and docs/monthly-giving-scheduling.md).
+ * They are optional in the type because subscriptions created before this
+ * fields existed may still be sitting in a donor's localStorage; loader code
+ * backfills sensible defaults for those records.
  */
 export interface MonthlySubscription {
   id: string;
@@ -244,4 +250,8 @@ export interface MonthlySubscription {
   status: "active" | "completed";
   createdAt: string;
   history: MonthlyDonationHistoryItem[];
+  /** Immutable calendar day-of-month (1-31) the donor picked as their billing anchor. */
+  anchorDay?: number;
+  /** IANA timezone (e.g. "America/New_York") the donor's schedule is anchored to. */
+  timeZone?: string;
 }
