@@ -1,7 +1,16 @@
 name: Build and Release Extension
 
 on:
+  pull_request:
+    paths:
+      - 'extension/**'
+      - '.github/workflows/extension.yml'
   push:
+    branches:
+      - main
+    paths:
+      - 'extension/**'
+      - '.github/workflows/extension.yml'
     tags:
       - 'v*'
 
@@ -15,17 +24,23 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
 
       - name: Install dependencies
-        run: |
-          cd extension
-          npm install
+        working-directory: extension
+        run: npm ci
+
+      - name: Simulate service-worker termination and test recovery
+        working-directory: extension
+        run: npm test
 
       - name: Build extension
-        run: |
-          cd extension
-          npm run build
+        working-directory: extension
+        run: npm run build
+
+      - name: Build Firefox version
+        working-directory: extension
+        run: npm run build:firefox
 
       - name: Create distribution package
         run: |
@@ -36,6 +51,7 @@ jobs:
           zip -r greenpay-extension.zip greenpay-extension/
 
       - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
           files: extension/greenpay-extension.zip
@@ -44,22 +60,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Firefox version
-        run: |
-          cd extension
-          npm run build:firefox
-
       - name: Create Firefox distribution
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           cd extension
           mkdir -p greenpay-extension-firefox
           cp manifest.firefox.json greenpay-extension-firefox/manifest.json
           cp popup.html popup.css greenpay-extension-firefox/
-          cp -r dist-firefox greenpay-extension-firefox/dist
+          cp -r dist-firefox greenpay-extension-firefox/
           zip -r greenpay-extension-firefox.zip greenpay-extension-firefox/
 
       - name: Upload Firefox artifact
-        uses: actions/upload-artifact@v3
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
         with:
           name: greenpay-extension-firefox
           path: extension/greenpay-extension-firefox.zip

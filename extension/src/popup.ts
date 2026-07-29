@@ -1,311 +1,345 @@
 import {
+  getUserInfo,
+  isAllowed,
+  setAllowed,
+  signTransaction,
+} from '@stellar/freighter-api';
+import {
   Asset,
   Horizon,
-  Keypair,
   Networks,
   Operation,
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
+import type { BackgroundRequest, BackgroundResponse } from './messages';
+import { recoverPopupSession, type PopupRecoveryClient } from './popup-session';
+import {
+  STORAGE_KEYS,
+  type ProjectSummary,
+  type RecoverySnapshot,
+  type WalletSession,
+} from './session-state';
 
-const HORIZON_URL = 'https://horizon-testnet.stellar.org';
-const server = new Horizon.Server(HORIZON_URL);
+const server = new Horizon.Server('https://horizon-testnet.stellar.org');
+const sessionArea = chrome.storage.session ?? chrome.storage.local;
 
-interface DonationParams {
-  destinationAddress: string;
-  amountXlm: string;
-  memo?: string;
+const connectBtn = document.getElementById('connect-btn') as HTMLButtonElement;
+const walletInfo = document.getElementById('wallet-info') as HTMLDivElement;
+const walletAddress = document.getElementById('wallet-address') as HTMLSpanElement;
+const walletBalance = document.getElementById('wallet-balance') as HTMLHeadingElement;
+const projectList = document.getElementById('project-list') as HTMLUListElement;
+const projectCount = document.querySelector('.section-header .badge') as HTMLSpanElement;
+const presetBtns = document.querySelectorAll<HTMLButtonElement>('.preset-btn');
+const customInput = document.getElementById('custom-amount-input') as HTMLInputElement;
+const donateBtn = document.getElementById('donate-submit') as HTMLButtonElement;
+const statusMsg = document.getElementById('status-message') as HTMLDivElement;
+const searchInput = document.getElementById('project-search') as HTMLInputElement;
+const searchDropdown = document.getElementById('search-dropdown') as HTMLUListElement;
+
+let currentWallet: WalletSession | null = null;
+let currentProjects: ProjectSummary[] = [];
+let activeProject: ProjectSummary | null = null;
+let currentDonationAmount = 0;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function setInteractive(enabled: boolean) {
+  connectBtn.disabled = !enabled;
+  searchInput.disabled = !enabled;
+  customInput.disabled = !enabled;
+  presetBtns.forEach((button) => {
+    button.disabled = !enabled;
+  });
+  updateDonateButton();
 }
 
-async function buildDonationTransaction(
-  sourceAddress: string,
-  params: DonationParams
-): Promise<string> {
-  const account = await server.loadAccount(sourceAddress);
+function showStatus(message: string, kind?: 'error' | 'success') {
+  statusMsg.textContent = message;
+  statusMsg.className = `status-message${kind ? ` ${kind}` : ''}`;
+}
 
-  const builder = new TransactionBuilder(account, {
+function updateDonateButton() {
+  donateBtn.disabled =
+    connectBtn.disabled ||
+    !currentWallet ||
+    !activeProject?.walletAddress ||
+    currentDonationAmount <= 0;
+}
+
+async function send(request: BackgroundRequest): Promise<BackgroundResponse> {
+  const response = (await chrome.runtime.sendMessage(request)) as BackgroundResponse;
+  if (!response?.ok) {
+    throw new Error(response?.error ?? 'The GreenPay service worker did not respond');
+  }
+  return response;
+}
+
+async function probeWallet(): Promise<string | null> {
+  try {
+    if (!(await isAllowed())) return null;
+    const info = await getUserInfo();
+    return info.publicKey || null;
+  } catch {
+    return null;
+  }
+}
+
+const recoveryClient: PopupRecoveryClient = {
+  async getPreviousWorkerInstanceId() {
+    const stored = await sessionArea.get(STORAGE_KEYS.lastPopupWorker);
+    const value = stored[STORAGE_KEYS.lastPopupWorker];
+    return typeof value === 'string' ? value : null;
+  },
+  async getRecoveryState(previousWorkerInstanceId) {
+    const response = await send({
+      type: 'GET_RECOVERY_STATE',
+      previousWorkerInstanceId,
+    });
+    if ('snapshot' in response) return response.snapshot;
+    throw new Error('Invalid recovery response');
+  },
+  probeWallet,
+  async setWallet(publicKey) {
+    const response = await send({ type: 'SET_WALLET_SESSION', publicKey });
+    if ('wallet' in response) return response.wallet;
+    throw new Error('Invalid wallet response');
+  },
+  async clearWallet() {
+    await send({ type: 'CLEAR_WALLET_SESSION' });
+  },
+  async refreshProjects() {
+    const response = await send({ type: 'REFRESH_PROJECTS' });
+    if ('projects' in response) return response.projects;
+    throw new Error('Invalid project response');
+  },
+  async rememberWorkerInstanceId(workerInstanceId) {
+    await sessionArea.set({ [STORAGE_KEYS.lastPopupWorker]: workerInstanceId });
+  },
+};
+
+function renderWallet(wallet: WalletSession | null) {
+  currentWallet = wallet;
+  connectBtn.classList.toggle('hidden', wallet !== null);
+  walletInfo.classList.toggle('hidden', wallet === null);
+  walletAddress.textContent = wallet
+    ? `${wallet.publicKey.slice(0, 5)}...${wallet.publicKey.slice(-4)}`
+    : '--';
+  walletBalance.textContent = '0.00 XLM';
+  updateDonateButton();
+  if (wallet) void fetchBalance(wallet.publicKey);
+}
+
+async function fetchBalance(publicKey: string) {
+  try {
+    const account = await server.loadAccount(publicKey);
+    const balance = account.balances.find((item) => item.asset_type === 'native');
+    if (currentWallet?.publicKey === publicKey && balance) {
+      walletBalance.textContent = `${Number.parseFloat(balance.balance).toFixed(2)} XLM`;
+    }
+  } catch {
+    if (currentWallet?.publicKey === publicKey) walletBalance.textContent = '0.00 XLM';
+  }
+}
+
+function selectProject(project: ProjectSummary) {
+  activeProject = project;
+  projectList.querySelectorAll<HTMLElement>('.project-item').forEach((item) => {
+    item.classList.toggle('active', item.dataset.projectId === project.id);
+  });
+  updateDonateButton();
+}
+
+function renderProjects(projects: ProjectSummary[]) {
+  currentProjects = projects;
+  activeProject = null;
+  projectList.innerHTML = '';
+  projectCount.textContent = String(projects.length);
+
+  if (projects.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'glass-panel project-item';
+    empty.textContent = 'Projects are temporarily unavailable.';
+    projectList.appendChild(empty);
+    return;
+  }
+
+  projects.forEach((project, index) => {
+    const item = document.createElement('li');
+    item.className = `glass-panel project-item${index === 0 ? ' active' : ''}`;
+    item.dataset.projectId = project.id;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'project-avatar';
+    const info = document.createElement('div');
+    info.className = 'project-info';
+    const name = document.createElement('div');
+    name.className = 'project-name';
+    name.textContent = project.name;
+    const description = document.createElement('div');
+    description.className = 'project-desc';
+    description.textContent = project.description || project.category;
+    info.append(name, description);
+    item.append(avatar, info);
+    item.addEventListener('click', () => selectProject(project));
+    projectList.appendChild(item);
+
+    if (index === 0) activeProject = project;
+  });
+  updateDonateButton();
+}
+
+function renderSearchResults(projects: ProjectSummary[]) {
+  searchDropdown.innerHTML = '';
+  if (projects.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'search-no-results';
+    empty.textContent = 'No projects found';
+    searchDropdown.appendChild(empty);
+  } else {
+    projects.forEach((project) => {
+      const item = document.createElement('li');
+      const info = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'search-result-name';
+      name.textContent = project.name;
+      const category = document.createElement('div');
+      category.className = 'search-result-cat';
+      category.textContent = project.category;
+      info.append(name, category);
+      item.appendChild(info);
+      item.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        if (!currentProjects.some(({ id }) => id === project.id)) {
+          renderProjects([project, ...currentProjects].slice(0, 3));
+        }
+        selectProject(project);
+        searchInput.value = project.name;
+        searchDropdown.classList.add('hidden');
+      });
+      searchDropdown.appendChild(item);
+    });
+  }
+  searchDropdown.classList.remove('hidden');
+}
+
+async function connectWallet() {
+  setInteractive(false);
+  showStatus('Connecting…');
+  try {
+    if (!(await isAllowed())) await setAllowed();
+    const publicKey = await probeWallet();
+    if (!publicKey) throw new Error('Freighter is locked or access was not granted.');
+
+    const response = await send({ type: 'SET_WALLET_SESSION', publicKey });
+    if (!('wallet' in response)) throw new Error('Invalid wallet response');
+    renderWallet(response.wallet);
+    showStatus('');
+  } catch (error) {
+    renderWallet(null);
+    showStatus(error instanceof Error ? error.message : 'Failed to connect wallet.', 'error');
+  } finally {
+    setInteractive(true);
+  }
+}
+
+async function buildDonationTransaction(project: ProjectSummary, amount: number) {
+  if (!currentWallet) throw new Error('Connect your wallet first.');
+  const account = await server.loadAccount(currentWallet.publicKey);
+  const transaction = new TransactionBuilder(account, {
     fee: (await server.fetchBaseFee()).toString(),
     networkPassphrase: Networks.TESTNET,
   })
     .addOperation(
       Operation.payment({
-        destination: params.destinationAddress,
+        destination: project.walletAddress,
         asset: Asset.native(),
-        amount: params.amountXlm,
+        amount: amount.toFixed(7),
       })
     )
-    .setTimeout(30);
+    .setTimeout(30)
+    .build();
+  return transaction.toXDR();
+}
 
-  if (params.memo) {
-    builder.addMemo({ value: params.memo, type: 'text' } as any);
+async function donate() {
+  if (!currentWallet || !activeProject || currentDonationAmount <= 0) return;
+  setInteractive(false);
+  showStatus('Confirm the donation in Freighter…');
+  try {
+    const currentPublicKey = await probeWallet();
+    if (currentPublicKey !== currentWallet.publicKey) {
+      await recoveryClient.clearWallet();
+      renderWallet(null);
+      throw new Error('Wallet account changed or was locked. Reconnect to continue.');
+    }
+
+    const xdr = await buildDonationTransaction(activeProject, currentDonationAmount);
+    const signedXdr = await signTransaction(xdr, {
+      networkPassphrase: Networks.TESTNET,
+    });
+    const transaction = TransactionBuilder.fromXDR(signedXdr, Networks.TESTNET);
+    const result = await server.submitTransaction(transaction);
+    showStatus(`Donation sent! ${result.hash.slice(0, 12)}…`, 'success');
+  } catch (error) {
+    showStatus(error instanceof Error ? error.message : 'Donation failed.', 'error');
+  } finally {
+    setInteractive(true);
   }
-
-  return builder.build().toXDR();
 }
 
-async function signWithFreighter(xdr: string): Promise<string> {
-  const freighter = (window as any).freighter;
-  if (!freighter) throw new Error('Freighter extension not found');
+async function bootstrap() {
+  setInteractive(false);
+  showStatus('Restoring session…');
+  try {
+    const snapshot: RecoverySnapshot = await recoverPopupSession(recoveryClient);
+    renderWallet(snapshot.wallet);
+    renderProjects(snapshot.projects ?? []);
+    showStatus('');
+  } catch (error) {
+    renderWallet(null);
+    renderProjects([]);
+    showStatus(
+      error instanceof Error ? `Session recovery failed: ${error.message}` : 'Session recovery failed.',
+      'error'
+    );
+  } finally {
+    setInteractive(true);
+  }
+}
 
-  const signedXdr: string = await freighter.signTransaction(xdr, {
-    networkPassphrase: Networks.TESTNET,
+connectBtn.addEventListener('click', () => void connectWallet());
+donateBtn.addEventListener('click', () => void donate());
+customInput.addEventListener('input', () => {
+  presetBtns.forEach((button) => button.classList.remove('active'));
+  currentDonationAmount = Number.parseFloat(customInput.value) || 0;
+  updateDonateButton();
+});
+for (const button of presetBtns) {
+  button.addEventListener('click', () => {
+    presetBtns.forEach((item) => item.classList.remove('active'));
+    button.classList.add('active');
+    customInput.value = '';
+    currentDonationAmount = Number.parseFloat(button.dataset.amount ?? '0');
+    updateDonateButton();
   });
-  return signedXdr;
 }
-
-async function submitTransaction(signedXdr: string): Promise<string> {
-  const tx = TransactionBuilder.fromXDR(signedXdr, Networks.TESTNET);
-  const result = await server.submitTransaction(tx as any);
-  return (result as any).hash;
-}
-
-// --- Project search autocomplete ---
-
-const API_BASE = 'https://api.stellar-greenpay.app';
-
-interface ProjectResult {
-  id: string;
-  name: string;
-  category: string;
-  walletAddress?: string;
-}
-
-let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-let activeDropdownIndex = -1;
-let dropdownItems: HTMLLIElement[] = [];
-let selectedProjectId: string | null = null;
-
-function debounce(fn: () => void, ms: number) {
-  if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
-  searchDebounceTimer = setTimeout(fn, ms);
-}
-
-function renderDropdown(projects: ProjectResult[], dropdown: HTMLUListElement) {
-  dropdown.replaceChildren();
-  dropdownItems = [];
-  activeDropdownIndex = -1;
-
-  if (projects.length === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'search-no-results';
-    empty.textContent = 'No projects found';
-    dropdown.appendChild(empty);
-    dropdown.classList.remove('hidden');
+searchInput.addEventListener('input', () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  const query = searchInput.value.trim();
+  if (query.length < 2) {
+    searchDropdown.classList.add('hidden');
     return;
   }
-
-  projects.forEach((p) => {
-    const li = document.createElement('li');
-    const details = document.createElement('div');
-    const name = document.createElement('div');
-    const category = document.createElement('div');
-    name.className = 'search-result-name';
-    category.className = 'search-result-cat';
-    // API responses are another untrusted boundary. DOM text sinks ensure names
-    // and categories can never be interpreted as extension-page markup.
-    name.textContent = typeof p.name === 'string' ? p.name : '';
-    category.textContent = typeof p.category === 'string' ? p.category : '';
-    details.append(name, category);
-    li.appendChild(details);
-    li.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      const destInput = document.getElementById('destination') as HTMLInputElement | null;
-      const searchInput = document.getElementById('project-search') as HTMLInputElement | null;
-      if (p.walletAddress && destInput) {
-        destInput.value = p.walletAddress;
-        selectedProjectId = p.id;
-      }
-      if (searchInput) {
-        searchInput.value = p.name;
-      }
-      dropdown.classList.add('hidden');
-    });
-    dropdown.appendChild(li);
-    dropdownItems.push(li);
-  });
-
-  dropdown.classList.remove('hidden');
-}
-
-function highlightDropdownItem(index: number) {
-  dropdownItems.forEach((el, i) => {
-    el.classList.toggle('active', i === index);
-  });
-}
-
-async function fetchProjectSearch(query: string): Promise<ProjectResult[]> {
-  const res = await fetch(`${API_BASE}/api/projects?search=${encodeURIComponent(query)}&limit=5`);
-  if (!res.ok) throw new Error('Search failed');
-  const json = await res.json();
-  return (json.data ?? json) as ProjectResult[];
-}
-
-function initProjectSearch() {
-  const input = document.getElementById('project-search') as HTMLInputElement | null;
-  const dropdown = document.getElementById('search-dropdown') as HTMLUListElement | null;
-  const wrapper = document.getElementById('search-wrapper');
-
-  if (!input || !dropdown || !wrapper) return;
-
-  input.addEventListener('input', () => {
-    const q = input.value.trim();
-    selectedProjectId = null; // user is typing a new search, clear prior selection
-    if (q.length < 2) {
-      dropdown.classList.add('hidden');
-      return;
-    }
-    debounce(async () => {
-      try {
-        const results = await fetchProjectSearch(q);
-        renderDropdown(results, dropdown);
-      } catch {
-        dropdown.classList.add('hidden');
-      }
-    }, 300);
-  });
-
-  input.addEventListener('keydown', (e) => {
-    if (dropdown.classList.contains('hidden')) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      activeDropdownIndex = Math.min(activeDropdownIndex + 1, dropdownItems.length - 1);
-      highlightDropdownItem(activeDropdownIndex);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      activeDropdownIndex = Math.max(activeDropdownIndex - 1, 0);
-      highlightDropdownItem(activeDropdownIndex);
-    } else if (e.key === 'Enter' && activeDropdownIndex >= 0) {
-      dropdownItems[activeDropdownIndex]?.dispatchEvent(new MouseEvent('mousedown'));
-    } else if (e.key === 'Escape') {
-      dropdown.classList.add('hidden');
-    }
-  });
-
-  input.addEventListener('blur', () => {
-    setTimeout(() => dropdown.classList.add('hidden'), 150);
-  });
-}
-
-// --- Record donation on backend with exponential-backoff retry ---
-
-async function recordDonation(params: {
-  projectId: string;
-  donorAddress: string;
-  amountXLM: string;
-  currency: string;
-  transactionHash: string;
-  message?: string;
-}): Promise<void> {
-  // 4 attempts with increasing delays: immediate, 500 ms, 1 000 ms, 2 000 ms
-  const delays = [0, 500, 1000, 2000];
-  let lastError: Error | null = null;
-
-  for (let i = 0; i < delays.length; i++) {
-    if (i > 0) await new Promise<void>((r) => setTimeout(r, delays[i]));
+  searchTimer = setTimeout(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/donations`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-      if (res.ok) return;
-      // 4xx = client error (bad data); retrying won't help
-      if (res.status >= 400 && res.status < 500) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      lastError = new Error(`HTTP ${res.status}`);
-    } catch (err: any) {
-      // Re-throw immediately on client errors
-      if (err.message?.startsWith('HTTP 4')) throw err;
-      lastError = err;
+      const response = await send({ type: 'REFRESH_PROJECTS', query });
+      if ('projects' in response) renderSearchResults(response.projects);
+    } catch {
+      searchDropdown.classList.add('hidden');
     }
-  }
-
-  throw lastError ?? new Error('Failed to record donation after retries');
-}
-
-// --- UI wiring ---
-
-function setStatus(message: string, isError = false) {
-  const el = document.getElementById('status');
-  if (!el) return;
-  el.textContent = message;
-  el.className = isError ? 'status error' : 'status success';
-  el.style.display = 'block';
-}
-
-function setLoading(loading: boolean) {
-  const btn = document.getElementById('donate-btn') as HTMLButtonElement | null;
-  if (!btn) return;
-  btn.disabled = loading;
-  btn.textContent = loading ? 'Processing…' : 'Donate';
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  initProjectSearch();
-
-  const form = document.getElementById('donation-form');
-  if (!form) return;
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const sourceAddress = ((document.getElementById('source-address') as HTMLInputElement)?.value ?? '').trim();
-    const destination = ((document.getElementById('destination') as HTMLInputElement)?.value ?? '').trim();
-    const amount = ((document.getElementById('amount') as HTMLInputElement)?.value ?? '').trim();
-    const memo = ((document.getElementById('memo') as HTMLInputElement)?.value ?? '').trim();
-
-    if (!sourceAddress || !destination || !amount) {
-      setStatus('Please fill in all required fields.', true);
-      return;
-    }
-
-    setLoading(true);
-    setStatus('');
-
-    try {
-      setStatus('Building transaction…');
-      const xdr = await buildDonationTransaction(sourceAddress, {
-        destinationAddress: destination,
-        amountXlm: amount,
-        memo: memo || undefined,
-      });
-
-      setStatus('Waiting for Freighter signature…');
-      const signedXdr = await signWithFreighter(xdr);
-
-      setStatus('Submitting to Horizon testnet…');
-      const txHash = await submitTransaction(signedXdr);
-
-      // Capture and reset before the async recording call to prevent double-submit
-      const capturedProjectId = selectedProjectId;
-      selectedProjectId = null;
-
-      if (capturedProjectId) {
-        setStatus('Recording donation…');
-        try {
-          await recordDonation({
-            projectId: capturedProjectId,
-            donorAddress: sourceAddress,
-            amountXLM: amount,
-            currency: 'XLM',
-            transactionHash: txHash,
-            message: memo || undefined,
-          });
-          setStatus(`Donation successful! TX: ${txHash.slice(0, 12)}… (recorded)`);
-        } catch {
-          // The Stellar tx succeeded — don't fail the UX because recording failed
-          setStatus(`Donation successful! TX: ${txHash.slice(0, 12)}… (record failed, tx succeeded)`);
-        }
-      } else {
-        setStatus(`Donation successful! TX: ${txHash.slice(0, 12)}…`);
-      }
-    } catch (err: any) {
-      const detail =
-        err?.response?.data?.extras?.result_codes?.transaction ??
-        err?.message ??
-        'Unknown error';
-      setStatus(`Transaction failed: ${detail}`, true);
-    } finally {
-      setLoading(false);
-    }
-  });
+  }, 300);
 });
+searchInput.addEventListener('blur', () => {
+  setTimeout(() => searchDropdown.classList.add('hidden'), 150);
+});
+
+void bootstrap();
