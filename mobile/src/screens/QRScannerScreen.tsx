@@ -1,28 +1,59 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { BarCodeScanner, BarCodeScannerResult } from 'expo-barcode-scanner';
-import { useNavigation } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
+import axios from 'axios';
+import { parseSep7PayUri } from '../../utils/sep7';
+import { parseGreenPayDonationLink } from '../../utils/qrPayload';
 
-// Expected QR URL format: https://greenpay.app/donate?projectId=<id>
-// or the short form:      greenpay://donate/<id>
-function extractProjectId(raw: string): string | null {
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
+
+interface ClimateProject {
+  id: string;
+  walletAddress: string;
+  status: string;
+}
+
+/**
+ * Looks up an *active* GreenPay project whose wallet address matches the
+ * destination resolved from a scanned SEP-7 payment URI. A checksum-valid
+ * Stellar address is not necessarily a *trusted* one — this cross-check is
+ * what prevents a scanned QR code from silently routing a donation to an
+ * arbitrary (if well-formed) address that has no relationship to GreenPay.
+ */
+async function findActiveProjectByWalletAddress(destination: string): Promise<ClimateProject | null> {
   try {
-    const url = new URL(raw);
-    if (url.searchParams.has('projectId')) {
-      return url.searchParams.get('projectId');
-    }
-    // greenpay://donate/<id>
-    if (url.protocol === 'greenpay:' && url.pathname.startsWith('//donate/')) {
-      return url.pathname.replace('//donate/', '');
-    }
+    const res = await axios.get(`${API_URL}/api/projects`);
+    const list: ClimateProject[] = Array.isArray(res.data?.data) ? res.data.data : [];
+    const match = list.find(
+      (project) => project.status === 'active' && project.walletAddress === destination
+    );
+    return match || null;
   } catch {
-    // not a valid URL
+    return null;
   }
-  return null;
+}
+
+/** Human-readable messages for each SEP-7 parse failure reason. */
+function sep7RejectionMessage(reason: string): string {
+  switch (reason) {
+    case 'network-mismatch':
+      return 'This payment request targets a different Stellar network than this app is configured for.';
+    case 'invalid-destination':
+      return 'This payment request does not contain a valid Stellar destination address.';
+    case 'invalid-amount':
+      return 'This payment request contains an invalid amount.';
+    default:
+      return 'This payment request is not a valid GreenPay payment link.';
+  }
+}
+
+function looksLikeSep7Uri(data: string): boolean {
+  return data.trim().toLowerCase().startsWith('web+stellar:');
 }
 
 export function QRScannerScreen() {
-  const navigation = useNavigation<any>();
+  const router = useRouter();
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
 
@@ -32,20 +63,55 @@ export function QRScannerScreen() {
     });
   }, []);
 
-  const handleBarCodeScanned = ({ data }: BarCodeScannerResult) => {
+  const rejectScan = (message: string) => {
+    Alert.alert('Unrecognized QR code', message, [
+      { text: 'Scan again', onPress: () => setScanned(false) },
+      { text: 'Cancel', onPress: () => router.back() },
+    ]);
+  };
+
+  const navigateToProject = (projectId: string) => {
+    router.replace(`/donate/${projectId}`);
+  };
+
+  const handleBarCodeScanned = async ({ data }: BarCodeScannerResult) => {
     if (scanned) return;
     setScanned(true);
 
-    const projectId = extractProjectId(data);
-    if (!projectId) {
-      Alert.alert('Unrecognized QR code', 'This QR code is not a GreenPay donation link.', [
-        { text: 'Scan again', onPress: () => setScanned(false) },
-        { text: 'Cancel', onPress: () => navigation.goBack() },
-      ]);
+    if (typeof data !== 'string' || data.length === 0) {
+      rejectScan('This QR code is not a GreenPay donation link.');
       return;
     }
 
-    navigation.replace('Donation', { projectId });
+    // 1. SEP-7 payment URI (web+stellar:pay?...) — only trusted once the
+    // resolved destination matches a known, active GreenPay project.
+    const sep7 = parseSep7PayUri(data);
+    if (sep7.ok) {
+      const project = await findActiveProjectByWalletAddress(sep7.destination);
+      if (project) {
+        navigateToProject(project.id);
+        return;
+      }
+      rejectScan("This payment destination doesn't match a known GreenPay project.");
+      return;
+    }
+    if (looksLikeSep7Uri(data)) {
+      // It was clearly an attempt at a SEP-7 URI — give a specific reason
+      // rather than falling through to the GreenPay-link parser (which
+      // can't possibly match a web+stellar: URI anyway).
+      rejectScan(sep7RejectionMessage(sep7.reason));
+      return;
+    }
+
+    // 2. GreenPay's own donation link / custom scheme.
+    const link = parseGreenPayDonationLink(data);
+    if (link.ok) {
+      navigateToProject(link.projectId);
+      return;
+    }
+
+    // 3. Neither format recognized — fail closed.
+    rejectScan('This QR code is not a GreenPay donation link.');
   };
 
   if (hasPermission === null) {
@@ -60,7 +126,7 @@ export function QRScannerScreen() {
     return (
       <View style={styles.centered}>
         <Text style={styles.message}>Camera access is required to scan QR codes.</Text>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Text style={styles.backButtonText}>Go back</Text>
         </TouchableOpacity>
       </View>
@@ -83,7 +149,7 @@ export function QRScannerScreen() {
             <Text style={styles.rescanText}>Tap to scan again</Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.cancelButton}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.cancelButton}>
           <Text style={styles.cancelText}>Cancel</Text>
         </TouchableOpacity>
       </View>

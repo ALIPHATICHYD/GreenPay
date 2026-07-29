@@ -141,7 +141,7 @@ export default function HomeScreen() {
       renderItem={() => <SkeletonCard colors={colors} />}
       contentContainerStyle={styles.listContent}
       scrollEnabled={false}
-      ListHeaderComponent={<Header colors={colors} />}
+      ListHeaderComponent={<Header colors={colors} onScanPress={() => router.push('/scan')} />}
     />
   );
 
@@ -166,23 +166,7 @@ export default function HomeScreen() {
           />
         )}
         contentContainerStyle={styles.listContent}
-        ListHeaderComponent={
-          <>
-            <Header colors={colors} />
-            {syncQueue.length > 0 && (
-              <TouchableOpacity
-                style={[styles.syncBanner, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
-                onPress={() => router.push('/sync-conflicts')}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.syncBannerText, { color: colors.primaryText }]}>
-                  {syncQueue.length} donation{syncQueue.length !== 1 ? 's' : ''} waiting to sync
-                </Text>
-                <Text style={[styles.syncBannerLink, { color: colors.primary }]}>Review →</Text>
-              </TouchableOpacity>
-            )}
-          </>
-        }
+        ListHeaderComponent={<Header colors={colors} onScanPress={() => router.push('/scan')} />}
         ListEmptyComponent={
           networkError ? (
             <View style={styles.errorContainer}>
@@ -214,11 +198,30 @@ export default function HomeScreen() {
   );
 }
 
-function Header({ colors }: { colors: ReturnType<typeof useTheme>['colors'] }) {
+function Header({
+  colors,
+  onScanPress,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  onScanPress?: () => void;
+}) {
   return (
     <View style={[styles.header, { backgroundColor: colors.primary }]}>
-      <Text style={[styles.title, { color: colors.headerText }]}>Stellar GreenPay</Text>
-      <Text style={[styles.subtitle, { color: colors.headerText }]}>Climate donations on Stellar</Text>
+      <View style={styles.headerTopRow}>
+        <View>
+          <Text style={[styles.title, { color: colors.headerText }]}>Stellar GreenPay</Text>
+          <Text style={[styles.subtitle, { color: colors.headerText }]}>Climate donations on Stellar</Text>
+        </View>
+        {onScanPress ? (
+          <TouchableOpacity
+            style={[styles.scanButton, { borderColor: colors.headerText }]}
+            onPress={onScanPress}
+            accessibilityLabel="Scan QR code"
+          >
+            <Text style={[styles.scanButtonText, { color: colors.headerText }]}>Scan QR</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -234,24 +237,19 @@ const styles = StyleSheet.create({
     padding: 24,
     marginBottom: 8,
   },
-  syncBanner: {
+  headerTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 14,
-    borderRadius: 12,
+    alignItems: 'flex-start',
+  },
+  scanButton: {
     borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
-  syncBannerText: {
-    fontSize: 14,
-    fontWeight: '600',
-    flexShrink: 1,
-    marginRight: 8,
-  },
-  syncBannerLink: {
-    fontSize: 14,
+  scanButtonText: {
+    fontSize: 13,
     fontWeight: '700',
   },
   title: {
