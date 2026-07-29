@@ -5,7 +5,7 @@
  * deep-link / state-hydration race condition described in issue #32.
  *
  * Startup dependency graph:
- *   1. AsyncStorage / SecureStore reads  (wallet public key, cached data)
+ *   1. SecureStore read (via utils/walletKeyStorage) (wallet public key)
  *   2. isHydrated = true                 (state is safe to read)
  *   3. Pending deep-link processed       (navigation is now safe)
  *
@@ -21,7 +21,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getWalletPublicKey } from '../../utils/walletKeyStorage';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,12 +60,6 @@ export function useAppInit(): AppInitState {
 }
 
 // ---------------------------------------------------------------------------
-// Keys
-// ---------------------------------------------------------------------------
-
-const WALLET_STORAGE_KEY = 'greenpay_stellar_public_key';
-
-// ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
 
@@ -82,8 +76,9 @@ export function AppInitProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     async function hydrate() {
       try {
-        // Restore wallet key from AsyncStorage (mirrors useWallet behaviour).
-        const stored = await AsyncStorage.getItem(WALLET_STORAGE_KEY);
+        // Restore wallet key via the shared helper (same source useWallet
+        // reads/writes, including its AsyncStorage->SecureStore migration).
+        const stored = await getWalletPublicKey();
         setWalletPublicKey(stored ?? null);
       } catch {
         // Non-fatal — app continues without a pre-loaded wallet.

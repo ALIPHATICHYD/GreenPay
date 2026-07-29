@@ -3,10 +3,14 @@
  * Tests the biometric auth gate in the donate screen.
  */
 import React from 'react';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
+import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import axios from 'axios';
+import NetInfo from '@react-native-community/netinfo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ThemeProvider } from '../app/theme';
+import { DONATION_QUEUE_KEY } from '../utils/donationQueue';
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
@@ -28,21 +32,32 @@ const MOCK_PROJECT = {
 
 import DonateScreen from '../app/donate/[id]';
 
+// app/donate/[id].tsx reads theme colors via useTheme(), which requires a
+// ThemeProvider ancestor.
+function renderDonateScreen() {
+  return render(
+    <ThemeProvider>
+      <DonateScreen />
+    </ThemeProvider>
+  );
+}
+
 describe('DonateScreen – biometric auth gate', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (axios.get as jest.Mock).mockResolvedValue({ data: { data: [MOCK_PROJECT] } });
     (LocalAuthentication.hasHardwareAsync as jest.Mock).mockResolvedValue(true);
     (LocalAuthentication.isEnrolledAsync as jest.Mock).mockResolvedValue(true);
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true, isInternetReachable: true });
   });
 
   it('renders loading state initially', () => {
-    const { getByText } = render(<DonateScreen />);
-    expect(getByText('Loading project...')).toBeTruthy();
+    const { getByText } = renderDonateScreen();
+    expect(getByText('Loading donation details...')).toBeTruthy();
   });
 
   it('does not call authenticateAsync when amount is invalid', async () => {
-    const { getByText } = render(<DonateScreen />);
+    const { getByText } = renderDonateScreen();
     await waitFor(() => expect(getByText('Donate to Amazon Reforestation')).toBeTruthy());
 
     fireEvent.press(getByText(/🌱 Donate/));
@@ -51,11 +66,11 @@ describe('DonateScreen – biometric auth gate', () => {
 
   it('calls authenticateAsync before building a transaction', async () => {
     (LocalAuthentication.authenticateAsync as jest.Mock).mockResolvedValue({ success: true });
-    const { getByText, getByPlaceholderText } = render(<DonateScreen />);
+    const { getByText, getByPlaceholderText } = renderDonateScreen();
     await waitFor(() => expect(getByText('Donate to Amazon Reforestation')).toBeTruthy());
 
-    // Set a valid amount via preset
-    fireEvent.press(getByText('10 XLM'));
+    // Set a valid amount
+    fireEvent.changeText(getByPlaceholderText('1.00'), '10');
     // Simulate wallet connected by setting public key via amount field
     // We can't easily set publicKey state from outside; test the alert path instead
     fireEvent.press(getByText(/🌱 Donate/));
@@ -68,7 +83,7 @@ describe('DonateScreen – biometric auth gate', () => {
     (LocalAuthentication.authenticateAsync as jest.Mock).mockResolvedValue({ success: false });
     const alertSpy = jest.spyOn(Alert, 'alert');
 
-    const { getByText } = render(<DonateScreen />);
+    const { getByText } = renderDonateScreen();
     await waitFor(() => expect(getByText('Donate to Amazon Reforestation')).toBeTruthy());
 
     // Trigger donate without wallet — wallet alert fires first, not auth
@@ -79,5 +94,93 @@ describe('DonateScreen – biometric auth gate', () => {
         expect.any(String)
       )
     );
+  });
+});
+
+// A syntactically valid-shaped Stellar public key (G + 55 base32 chars) —
+// matches the `/^G[A-Z0-9]{55}$/` check in connectWallet(), independent of
+// the real MOCK_PROJECT.walletAddress above.
+const DONOR_PUBLIC_KEY = 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW';
+
+/** Drives the "Connect Wallet" Alert.alert prompt exactly like a user would. */
+async function connectWallet(getByText: any, alertSpy: jest.SpyInstance, publicKey: string) {
+  fireEvent.press(getByText('Connect Wallet'));
+  const call = alertSpy.mock.calls.find((c) => c[0] === 'Connect Wallet');
+  const buttons = call?.[2] as Array<{ text: string; onPress?: (input: any) => void }>;
+  const okButton = buttons.find((b) => b.text === 'OK');
+  await act(async () => {
+    okButton?.onPress?.(publicKey);
+  });
+}
+
+describe('DonateScreen – offline queueing', () => {
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await AsyncStorage.clear();
+    (axios.get as jest.Mock).mockResolvedValue({ data: { data: [MOCK_PROJECT] } });
+    (LocalAuthentication.hasHardwareAsync as jest.Mock).mockResolvedValue(true);
+    (LocalAuthentication.isEnrolledAsync as jest.Mock).mockResolvedValue(true);
+  });
+
+  it('shows the wallet-required alert instead of queueing when no wallet is connected, even while offline', async () => {
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: false, isInternetReachable: false });
+    const alertSpy = jest.spyOn(Alert, 'alert');
+
+    const { getByText } = renderDonateScreen();
+    await waitFor(() => expect(getByText('Donate to Amazon Reforestation')).toBeTruthy());
+
+    fireEvent.press(getByText(/🌱 Donate/));
+
+    await waitFor(() =>
+      expect(alertSpy).toHaveBeenCalledWith('Wallet Required', expect.any(String))
+    );
+    // Nothing should have been queued since we never got past the wallet check.
+    expect(await AsyncStorage.getItem(DONATION_QUEUE_KEY)).toBeNull();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('queues the donation intent (no secret key, no network calls) when offline with a connected wallet', async () => {
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: false, isInternetReachable: false });
+    const alertSpy = jest.spyOn(Alert, 'alert');
+
+    const { getByText, getByPlaceholderText } = renderDonateScreen();
+    await waitFor(() => expect(getByText('Donate to Amazon Reforestation')).toBeTruthy());
+
+    await connectWallet(getByText, alertSpy, DONOR_PUBLIC_KEY);
+    fireEvent.changeText(getByPlaceholderText('1.00'), '7');
+    // Type a secret key too — it must never be persisted, even if present in the field.
+    fireEvent.changeText(getByPlaceholderText('S...'), 'SBOGUSSECRETKEYFORTESTPURPOSESONLYXXXXXXXXXXXXXXXXXXXX');
+
+    fireEvent.press(getByText(/🌱 Donate/));
+
+    await waitFor(() =>
+      expect(
+        getByText(
+          "You're offline — this donation has been saved and will be ready to complete once you're back online."
+        )
+      ).toBeTruthy()
+    );
+
+    // No network or signing calls were attempted while offline.
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(LocalAuthentication.authenticateAsync).not.toHaveBeenCalled();
+
+    // The intent was queued, without any secret-key material.
+    const raw = await AsyncStorage.getItem(DONATION_QUEUE_KEY);
+    expect(raw).toBeTruthy();
+    const queue = JSON.parse(raw as string);
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({
+      projectId: 'proj-1',
+      projectName: 'Amazon Reforestation',
+      donorAddress: DONOR_PUBLIC_KEY,
+      amountXLM: '7.0000000',
+      status: 'pending-sync',
+    });
+    expect(raw).not.toMatch(/SBOGUS/);
+
+    // Form is reset after queueing.
+    expect(getByPlaceholderText('1.00').props.value).toBe('1');
+    expect(getByPlaceholderText('S...').props.value).toBe('');
   });
 });

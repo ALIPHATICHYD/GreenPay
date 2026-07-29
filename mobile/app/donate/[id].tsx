@@ -3,11 +3,14 @@
  * Donate screen with project selector, amount input, and Stellar transaction submission.
  */
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Alert, ActivityIndicator } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import axios from 'axios';
+import NetInfo from '@react-native-community/netinfo';
 import { authenticate } from '../../hooks/useBiometricAuth';
 import { Keypair, Server, TransactionBuilder, Networks, Operation, Asset, Memo } from '@stellar/stellar-sdk';
+import { useTheme } from '../theme';
+import { enqueueDonation } from '../../utils/donationQueue';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const HORIZON_URL = process.env.EXPO_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';
@@ -73,6 +76,31 @@ export default function DonateScreen() {
 
     if (!publicKey) {
       Alert.alert('Wallet Required', 'Please connect your Stellar wallet first.');
+      return;
+    }
+
+    const netState = await NetInfo.fetch();
+    const isOffline = netState?.isConnected === false;
+
+    if (isOffline) {
+      // No connectivity: don't attempt any Horizon/backend calls. Queue the
+      // donation *intent* only (no secret key — never persisted) so the user
+      // can finish signing it once they're back online.
+      await enqueueDonation({
+        projectId: selectedProject.id,
+        projectName: selectedProject.name,
+        donorAddress: publicKey,
+        amountXLM: donationAmount.toFixed(7),
+        message: message.trim() || undefined,
+      });
+
+      setStatusType('info');
+      setStatusMessage(
+        "You're offline — this donation has been saved and will be ready to complete once you're back online."
+      );
+      setAmount('1');
+      setMessage('');
+      setSecretKey('');
       return;
     }
 
@@ -278,10 +306,16 @@ export default function DonateScreen() {
         </View>
       ) : null}
 
+      {/*
+        Only disable while actively submitting. Deliberately NOT disabled for
+        a missing wallet: handleDonate() already shows a "Wallet Required"
+        alert in that case, which doubles as the offline-queue entry point —
+        a disabled button would make that guidance unreachable.
+      */}
       <TouchableOpacity
-        style={[styles.donateButton, (submitting || !publicKey) && styles.donateButtonDisabled]}
+        style={[styles.donateButton, submitting && styles.donateButtonDisabled]}
         onPress={handleDonate}
-        disabled={submitting || !publicKey}
+        disabled={submitting}
       >
         <Text style={styles.donateButtonText}>
           {submitting ? 'Sending donation...' : `🌱 Donate ${amount || '1'} XLM`}
