@@ -7,6 +7,9 @@
     "default_popup": "popup.html",
     "default_title": "GreenPay Companion"
   },
+  "background": {
+    "service_worker": "dist/background.js"
+  },
   "permissions": [
     "storage",
     "activeTab",

@@ -1,18 +1,21 @@
 {
   "name": "greenpay-extension",
   "version": "0.1.0",
+  "description": "Quickly donate to GreenPay projects via Chrome Extension",
   "scripts": {
-    "build": "webpack --config webpack.config.js",
-    "dev": "webpack --watch --config webpack.config.js"
+    "build": "esbuild src/popup.ts src/background.ts src/content-script.ts --bundle --outdir=dist --platform=browser --format=iife",
+    "build:firefox": "esbuild src/popup.ts src/background.ts src/content-script.ts --bundle --outdir=dist-firefox --platform=browser --format=iife",
+    "dev": "npm run build -- --watch",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@stellar/freighter-api": "^2.0.0",
     "@stellar/stellar-sdk": "^12.0.0"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
-    "ts-loader": "^9.5.1",
+    "esbuild": "^0.25.12",
     "typescript": "^5.3.3",
-    "webpack": "^5.90.1",
-    "webpack-cli": "^5.1.4"
+    "vitest": "^3.2.7"
   }
 }
