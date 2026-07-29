@@ -42,6 +42,7 @@ function AppShell() {
         <Stack.Screen name="profile/[address]" options={{ title: 'Donor Profile' }} />
         <Stack.Screen name="leaderboard" options={{ title: 'Leaderboard' }} />
         <Stack.Screen name="recurring" options={{ title: 'Monthly Giving' }} />
+        <Stack.Screen name="sync-conflicts" options={{ title: 'Sync Donations' }} />
       </Stack>
     </ThemeProvider>
   );

@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { useTheme } from './theme';
 import { getCachedData, setCachedData } from '../utils/cache';
+import { useDonationSync } from '../hooks/useDonationSync';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const CACHE_KEY_PROJECTS = 'home:projects_list';
@@ -101,6 +102,7 @@ function ProjectCard({
 export default function HomeScreen() {
   const router = useRouter();
   const { colors } = useTheme();
+  const { queue: syncQueue } = useDonationSync();
   const [projects, setProjects] = useState<ClimateProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -164,7 +166,23 @@ export default function HomeScreen() {
           />
         )}
         contentContainerStyle={styles.listContent}
-        ListHeaderComponent={<Header colors={colors} />}
+        ListHeaderComponent={
+          <>
+            <Header colors={colors} />
+            {syncQueue.length > 0 && (
+              <TouchableOpacity
+                style={[styles.syncBanner, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+                onPress={() => router.push('/sync-conflicts')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.syncBannerText, { color: colors.primaryText }]}>
+                  {syncQueue.length} donation{syncQueue.length !== 1 ? 's' : ''} waiting to sync
+                </Text>
+                <Text style={[styles.syncBannerLink, { color: colors.primary }]}>Review →</Text>
+              </TouchableOpacity>
+            )}
+          </>
+        }
         ListEmptyComponent={
           networkError ? (
             <View style={styles.errorContainer}>
@@ -215,6 +233,26 @@ const styles = StyleSheet.create({
   header: {
     padding: 24,
     marginBottom: 8,
+  },
+  syncBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  syncBannerText: {
+    fontSize: 14,
+    fontWeight: '600',
+    flexShrink: 1,
+    marginRight: 8,
+  },
+  syncBannerLink: {
+    fontSize: 14,
+    fontWeight: '700',
   },
   title: {
     fontSize: 28,
