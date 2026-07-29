@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { createMonthlySubscription, loadMonthlySubscriptions } from "@/lib/monthlyGiving";
+import { formatInTimeZone } from "date-fns-tz";
+import {
+  createMonthlySubscription,
+  DEFAULT_TIME_ZONE,
+  loadMonthlySubscriptions,
+  resolveBrowserTimeZone,
+} from "@/lib/monthlyGiving";
 import { formatXLM, timeAgo } from "@/utils/format";
 import type { MonthlySubscription } from "@/utils/types";
 
@@ -52,8 +58,12 @@ export default function MonthlyGivingSetup({
       projectId,
       projectName,
       amountXLM: Number.parseFloat(amountXLM).toFixed(7),
-      startDate: new Date(startDate).toISOString(),
+      // Pass the plain "YYYY-MM-DD" the donor picked, not a UTC-instant
+      // conversion of it — createMonthlySubscription interprets this as a
+      // donor-local calendar date (see monthlyGiving.ts / docs).
+      startDate,
       durationMonths,
+      timeZone: resolveBrowserTimeZone(),
     });
     onCreated?.(created.id);
     onClose();
@@ -136,7 +146,12 @@ export default function MonthlyGivingSetup({
                     {formatXLM(sub.amountXLM)} monthly · {sub.status}
                   </p>
                   <p className="text-xs text-[#8aaa8a] font-body mt-1">
-                    Next due: {new Date(sub.nextDueDate).toLocaleDateString()}
+                    Next due:{" "}
+                    {formatInTimeZone(
+                      new Date(sub.nextDueDate),
+                      sub.timeZone || DEFAULT_TIME_ZONE,
+                      "PP",
+                    )}
                   </p>
                   {sub.history.length > 0 ? (
                     <div className="mt-2 space-y-1">

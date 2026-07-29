@@ -2,6 +2,15 @@
  * src/routes/subscriptions.js
  * POST /api/subscriptions        — subscribe to project updates
  * GET  /api/subscriptions/:projectId/count — subscriber count
+ *
+ * NOTE: despite the name, this file has nothing to do with recurring
+ * ("monthly giving") donations — it manages email subscriptions to project
+ * update posts (backed by the `project_subscriptions` table). Recurring
+ * donation scheduling lives entirely in frontend/lib/monthlyGiving.ts today;
+ * there is no backend job that executes monthly-giving charges yet. See
+ * docs/monthly-giving-scheduling.md for the audit that established this and
+ * backend/src/utils/recurringSchedule.js for the date math a future charge
+ * executor should reuse.
  */
 "use strict";
 const express = require("express");
