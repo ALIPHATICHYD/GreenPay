@@ -70,7 +70,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -101,7 +101,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
@@ -126,7 +126,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 100000000
+                        "lo": 10000000
                       }
                     }
                   ]
@@ -153,7 +153,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -184,7 +184,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
@@ -209,7 +209,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 100000000
+                        "lo": 10000000
                       }
                     }
                   ]
@@ -236,7 +236,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -267,7 +267,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
@@ -292,7 +292,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 100000000
+                        "lo": 10000000
                       }
                     }
                   ]
@@ -304,6 +304,7 @@
         }
       ]
     ],
+    [],
     []
   ],
   "ledger": {
@@ -444,7 +445,7 @@
                               "val": {
                                 "vec": [
                                   {
-                                    "symbol": "Seedling"
+                                    "symbol": "None"
                                   }
                                 ]
                               }
@@ -456,7 +457,7 @@
                               "val": {
                                 "i128": {
                                   "hi": 0,
-                                  "lo": 1000
+                                  "lo": 100
                                 }
                               }
                             },
@@ -475,7 +476,7 @@
                               "val": {
                                 "i128": {
                                   "hi": 0,
-                                  "lo": 100000000
+                                  "lo": 10000000
                                 }
                               }
                             }
@@ -502,7 +503,7 @@
                               "val": {
                                 "vec": [
                                   {
-                                    "symbol": "Seedling"
+                                    "symbol": "None"
                                   }
                                 ]
                               }
@@ -514,7 +515,7 @@
                               "val": {
                                 "i128": {
                                   "hi": 0,
-                                  "lo": 1000
+                                  "lo": 100
                                 }
                               }
                             },
@@ -533,7 +534,7 @@
                               "val": {
                                 "i128": {
                                   "hi": 0,
-                                  "lo": 100000000
+                                  "lo": 10000000
                                 }
                               }
                             }
@@ -560,7 +561,7 @@
                               "val": {
                                 "vec": [
                                   {
-                                    "symbol": "Seedling"
+                                    "symbol": "None"
                                   }
                                 ]
                               }
@@ -572,7 +573,7 @@
                               "val": {
                                 "i128": {
                                   "hi": 0,
-                                  "lo": 1000
+                                  "lo": 100
                                 }
                               }
                             },
@@ -591,7 +592,7 @@
                               "val": {
                                 "i128": {
                                   "hi": 0,
-                                  "lo": 100000000
+                                  "lo": 10000000
                                 }
                               }
                             }
@@ -609,7 +610,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 3000
+                            "lo": 300
                           }
                         }
                       },
@@ -624,7 +625,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 300000000
+                            "lo": 30000000
                           }
                         }
                       },
@@ -680,192 +681,6 @@
                         },
                         "val": {
                           "bool": true
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "ImpactNFT"
-                            },
-                            {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                            },
-                            {
-                              "vec": [
-                                {
-                                  "symbol": "Seedling"
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        "val": {
-                          "map": [
-                            {
-                              "key": {
-                                "symbol": "minted_at_ledger"
-                              },
-                              "val": {
-                                "u32": 0
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "owner"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "tier"
-                              },
-                              "val": {
-                                "vec": [
-                                  {
-                                    "symbol": "Seedling"
-                                  }
-                                ]
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "total_donated"
-                              },
-                              "val": {
-                                "i128": {
-                                  "hi": 0,
-                                  "lo": 100000000
-                                }
-                              }
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "ImpactNFT"
-                            },
-                            {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-                            },
-                            {
-                              "vec": [
-                                {
-                                  "symbol": "Seedling"
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        "val": {
-                          "map": [
-                            {
-                              "key": {
-                                "symbol": "minted_at_ledger"
-                              },
-                              "val": {
-                                "u32": 0
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "owner"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "tier"
-                              },
-                              "val": {
-                                "vec": [
-                                  {
-                                    "symbol": "Seedling"
-                                  }
-                                ]
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "total_donated"
-                              },
-                              "val": {
-                                "i128": {
-                                  "hi": 0,
-                                  "lo": 100000000
-                                }
-                              }
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "ImpactNFT"
-                            },
-                            {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
-                            },
-                            {
-                              "vec": [
-                                {
-                                  "symbol": "Seedling"
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        "val": {
-                          "map": [
-                            {
-                              "key": {
-                                "symbol": "minted_at_ledger"
-                              },
-                              "val": {
-                                "u32": 0
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "owner"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "tier"
-                              },
-                              "val": {
-                                "vec": [
-                                  {
-                                    "symbol": "Seedling"
-                                  }
-                                ]
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "total_donated"
-                              },
-                              "val": {
-                                "i128": {
-                                  "hi": 0,
-                                  "lo": 100000000
-                                }
-                              }
-                            }
-                          ]
                         }
                       },
                       {
@@ -936,7 +751,7 @@
                               "val": {
                                 "i128": {
                                   "hi": 0,
-                                  "lo": 300000000
+                                  "lo": 30000000
                                 }
                               }
                             },
@@ -1248,7 +1063,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 300000000
+                          "lo": 30000000
                         }
                       }
                     },
@@ -1911,7 +1726,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -1945,7 +1760,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 100000000
+                "lo": 10000000
               }
             }
           }
@@ -2006,38 +1821,11 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
                   "u32": 0
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "nft_mint"
-              },
-              {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "symbol": "Seedling"
                 }
               ]
             }
@@ -2075,7 +1863,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -2109,7 +1897,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 100000000
+                "lo": 10000000
               }
             }
           }
@@ -2161,13 +1949,13 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
                   "vec": [
                     {
-                      "symbol": "Seedling"
+                      "symbol": "None"
                     }
                   ]
                 },
@@ -2228,7 +2016,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -2262,7 +2050,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 100000000
+                "lo": 10000000
               }
             }
           }
@@ -2323,38 +2111,11 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
                   "u32": 0
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "nft_mint"
-              },
-              {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "symbol": "Seedling"
                 }
               ]
             }
@@ -2392,7 +2153,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -2426,7 +2187,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 100000000
+                "lo": 10000000
               }
             }
           }
@@ -2478,13 +2239,13 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
                   "vec": [
                     {
-                      "symbol": "Seedling"
+                      "symbol": "None"
                     }
                   ]
                 },
@@ -2545,7 +2306,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -2579,7 +2340,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 100000000
+                "lo": 10000000
               }
             }
           }
@@ -2640,38 +2401,11 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
                   "u32": 0
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "nft_mint"
-              },
-              {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "symbol": "Seedling"
                 }
               ]
             }
@@ -2709,7 +2443,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -2743,7 +2477,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 100000000
+                "lo": 10000000
               }
             }
           }
@@ -2795,13 +2529,13 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100000000
+                    "lo": 10000000
                   }
                 },
                 {
                   "vec": [
                     {
-                      "symbol": "Seedling"
+                      "symbol": "None"
                     }
                   ]
                 },
@@ -2934,7 +2668,7 @@
                   "val": {
                     "i128": {
                       "hi": 0,
-                      "lo": 300000000
+                      "lo": 30000000
                     }
                   }
                 },
@@ -2947,6 +2681,53 @@
                   }
                 }
               ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              {
+                "symbol": "get_donation_count"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "get_donation_count"
+              }
+            ],
+            "data": {
+              "u32": 3
             }
           }
         }

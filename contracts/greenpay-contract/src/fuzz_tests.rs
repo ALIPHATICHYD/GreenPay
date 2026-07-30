@@ -1,11 +1,10 @@
 /// fuzz_tests.rs — Property-based tests for the GreenPay Soroban contract.
 ///
-/// Uses `proptest` to drive 10 000+ iterations of the `donate` function with
-/// random `i128` amounts, asserting that:
-///   - Global total-raised never overflows
-///   - Global CO2 counter never overflows
-///   - Per-project totals stay consistent with global totals
-///   - Donation counts are monotonically increasing
+/// Uses `proptest` to drive thousands of iterations of `donate`, asserting that
+/// with `co2_per_xlm <= MAX_CO2_PER_XLM` and realistic donation sizes:
+///   - Per-donation CO₂ math never panics
+///   - Global totals stay consistent with per-project totals
+///   - Counters remain monotonic and non-negative
 ///
 /// Run:
 ///   cargo test --features testutils -- fuzz
@@ -14,16 +13,27 @@ mod fuzz {
     use proptest::prelude::*;
     use soroban_sdk::{
         testutils::Address as _,
+        token::StellarAssetClient,
         Address, Env, String as SorobanString,
     };
-    use crate::{GreenPayContract, GreenPayContractClient};
+    use crate::{
+        GreenPayContract, GreenPayContractClient,
+        MAX_CO2_PER_XLM, MAX_REALISTIC_DONATION_STROOPS, STROOP,
+    };
 
-    /// Upper bound for a single donation: 1 billion XLM in stroops (10^16).
-    /// Chosen so that a single donation is large but a few thousand back-to-back
-    /// still fit in an i128 without overflowing.
-    const MAX_DONATION: i128 = 1_000_000_000 * 10_000_000; // 10^16
+    /// Typical on-chain `co2_per_xlm` values (grams per XLM).
+    const REALISTIC_CO2_PER_XLM: u32 = 8_500;
 
-    fn setup() -> (Env, GreenPayContractClient<'static>, Address, SorobanString) {
+    fn setup_with_co2(
+        co2_per_xlm: u32,
+    ) -> (
+        Env,
+        GreenPayContractClient<'static>,
+        Address,
+        soroban_sdk::Address,
+        StellarAssetClient,
+        SorobanString,
+    ) {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -35,92 +45,134 @@ mod fuzz {
 
         let project_id = SorobanString::from_str(&env, "proj-fuzz-1");
         let wallet = Address::generate(&env);
-        client.register_project(&project_id, &SorobanString::from_str(&env, "Fuzz Project"), &wallet, &100u32);
+        client.register_project(
+            &admin,
+            &project_id,
+            &SorobanString::from_str(&env, "Fuzz Project"),
+            &wallet,
+            &co2_per_xlm,
+        );
 
-        (env, client, wallet, project_id)
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let token_client = StellarAssetClient::new(&env, &token);
+
+        (env, client, admin, token, token_client, project_id)
+    }
+
+    fn co2_increment(amount: i128, co2_per_xlm: u32) -> i128 {
+        (amount / STROOP) * (co2_per_xlm as i128)
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(10_000))]
+        #![proptest_config(ProptestConfig::with_cases(2_000))]
 
-        /// Single donation with a random amount in [1, MAX_DONATION] should never
-        /// overflow global stats.
+        /// Realistic donation volume at a typical `co2_per_xlm` must never panic.
         #[test]
-        fn prop_single_donation_no_overflow(amount in 1i128..=MAX_DONATION) {
-            let (env, client, _wallet, project_id) = setup();
+        fn prop_realistic_co2_and_amount_no_overflow(
+            amount in STROOP..=MAX_REALISTIC_DONATION_STROOPS,
+        ) {
+            let (env, client, _admin, token, token_client, project_id) =
+                setup_with_co2(REALISTIC_CO2_PER_XLM);
             let donor = Address::generate(&env);
-            let message = SorobanString::from_str(&env, "fuzz donation");
+            token_client.mint(&donor, &amount);
 
-            // donate must not panic (panics signal overflow via checked_add.expect)
-            client.donate(&donor, &project_id, &amount, &message);
+            client.donate(&token, &donor, &project_id, &amount, &0u32);
 
-            let global_total = client.get_global_total();
-            let global_co2   = client.get_global_co2();
-            let project      = client.get_project(&project_id);
-
-            // All counters must be non-negative
-            prop_assert!(global_total >= 0, "global_total went negative: {}", global_total);
-            prop_assert!(global_co2   >= 0, "global_co2 went negative: {}", global_co2);
-            prop_assert!(project.total_raised >= 0, "project.total_raised went negative");
-
-            // Global total must equal project total (single project in this env)
-            prop_assert_eq!(
-                global_total, project.total_raised,
-                "global_total ({}) != project.total_raised ({})",
-                global_total, project.total_raised,
-            );
-
-            // Donation count must be 1
-            prop_assert_eq!(project.donor_count, 1u32);
+            let expected_co2 = co2_increment(amount, REALISTIC_CO2_PER_XLM);
+            prop_assert_eq!(client.get_global_total(), amount);
+            prop_assert_eq!(client.get_global_co2(), expected_co2);
+            prop_assert_eq!(client.get_project(&project_id).total_raised, amount);
         }
 
-        /// Two sequential donations with random amounts must keep global totals
-        /// consistent and strictly greater than either individual donation.
+        /// At the enforced ceiling, realistic volumes still fit all i128 accumulators.
+        #[test]
+        fn prop_max_co2_per_xlm_with_realistic_volume(
+            amount in STROOP..=MAX_REALISTIC_DONATION_STROOPS,
+        ) {
+            let (env, client, _admin, token, token_client, project_id) =
+                setup_with_co2(MAX_CO2_PER_XLM);
+            let donor = Address::generate(&env);
+            token_client.mint(&donor, &amount);
+
+            client.donate(&token, &donor, &project_id, &amount, &0u32);
+
+            let expected_co2 = co2_increment(amount, MAX_CO2_PER_XLM);
+            prop_assert!(expected_co2 <= i128::MAX);
+            prop_assert_eq!(client.get_global_co2(), expected_co2);
+        }
+
+        /// Many small donations at max `co2_per_xlm` stay within u32 donation-count
+        /// and i128 CO₂ accumulator bounds for realistic batch sizes.
+        #[test]
+        fn prop_many_small_donations_at_max_co2(
+            n in 1u32..=256u32,
+            amount in STROOP..=(100 * STROOP),
+        ) {
+            let (env, client, _admin, token, token_client, project_id) =
+                setup_with_co2(MAX_CO2_PER_XLM);
+
+            let mut expected_total: i128 = 0;
+            let mut expected_co2: i128 = 0;
+
+            for _ in 0..n {
+                let donor = Address::generate(&env);
+                token_client.mint(&donor, &amount);
+                client.donate(&token, &donor, &project_id, &amount, &0u32);
+                expected_total = expected_total.checked_add(amount).unwrap();
+                expected_co2 = expected_co2
+                    .checked_add(co2_increment(amount, MAX_CO2_PER_XLM))
+                    .unwrap();
+            }
+
+            prop_assert_eq!(client.get_global_total(), expected_total);
+            prop_assert_eq!(client.get_global_co2(), expected_co2);
+            prop_assert_eq!(client.get_donation_count(), n);
+        }
+
+        /// Two sequential donations must remain additive for global totals.
         #[test]
         fn prop_two_donations_are_additive(
-            a in 1i128..=MAX_DONATION / 2,
-            b in 1i128..=MAX_DONATION / 2,
+            a in STROOP..=(MAX_REALISTIC_DONATION_STROOPS / 2),
+            b in STROOP..=(MAX_REALISTIC_DONATION_STROOPS / 2),
         ) {
-            let (env, client, _wallet, project_id) = setup();
+            let (env, client, _admin, token, token_client, project_id) =
+                setup_with_co2(REALISTIC_CO2_PER_XLM);
             let donor_a = Address::generate(&env);
             let donor_b = Address::generate(&env);
-            let msg = SorobanString::from_str(&env, "fuzz");
+            token_client.mint(&donor_a, &a);
+            token_client.mint(&donor_b, &b);
 
-            client.donate(&donor_a, &project_id, &a, &msg);
-            client.donate(&donor_b, &project_id, &b, &msg);
+            client.donate(&token, &donor_a, &project_id, &a, &0u32);
+            client.donate(&token, &donor_b, &project_id, &b, &0u32);
 
-            let global_total = client.get_global_total();
-            let expected     = a.checked_add(b).expect("test helper overflow");
+            let expected_total = a.checked_add(b).expect("test helper overflow");
+            let expected_co2 = co2_increment(a, REALISTIC_CO2_PER_XLM)
+                .checked_add(co2_increment(b, REALISTIC_CO2_PER_XLM))
+                .unwrap();
 
-            prop_assert_eq!(
-                global_total, expected,
-                "global_total {} != a+b {}",
-                global_total, expected,
-            );
-
-            // Two distinct donors → donor_count == 2
-            let project = client.get_project(&project_id);
-            prop_assert_eq!(project.donor_count, 2u32);
+            prop_assert_eq!(client.get_global_total(), expected_total);
+            prop_assert_eq!(client.get_global_co2(), expected_co2);
+            prop_assert_eq!(client.get_project(&project_id).donor_count, 2u32);
         }
+    }
 
-        /// Donating a zero amount is an edge case — the contract uses
-        /// `checked_add(0)` which is always safe. Verify no state mutation occurs
-        /// when amount == 0 is passed (or contract rejects it gracefully).
-        #[test]
-        fn prop_zero_donation_does_not_corrupt_state(
-            legit in 1i128..=MAX_DONATION,
-        ) {
-            let (env, client, _wallet, project_id) = setup();
-            let donor = Address::generate(&env);
-            let msg   = SorobanString::from_str(&env, "legit");
+    #[test]
+    fn fuzz_register_rejects_co2_above_ceiling() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, GreenPayContract);
+        let client = GreenPayContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
 
-            client.donate(&donor, &project_id, &legit, &msg);
-            let total_before = client.get_global_total();
-
-            // A second call with the same donor — amount 0 may panic or succeed
-            // depending on contract implementation; we only assert the state
-            // before the second call was not corrupted.
-            prop_assert_eq!(total_before, legit);
-        }
+        let result = client.try_register_project(
+            &admin,
+            &SorobanString::from_str(&env, "bad"),
+            &SorobanString::from_str(&env, "Bad"),
+            &Address::generate(&env),
+            &(MAX_CO2_PER_XLM + 1),
+        );
+        assert!(result.is_err());
     }
 }

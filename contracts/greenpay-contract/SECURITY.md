@@ -92,20 +92,79 @@ project with a very large `co2_per_xlm`.
 
 **Fix.** Every arithmetic site uses `checked_add` / `checked_mul` and
 calls `.expect(...)` with a named message so a regression produces a
-diagnosable error rather than silent corruption.
+diagnosable error rather than silent corruption. **`register_project`
+now rejects `co2_per_xlm > MAX_CO2_PER_XLM` (10_000_000 g/XLM, equal to
+`STROOP`)** so the per-donation CO₂ multiply is unreachable by
+construction — see [Accumulator bounds](#accumulator-bounds-at-max_co2_per_xlm)
+below.
 
 **Regression tests:**
 
 * `test_donate_total_raised_overflow_protected` injects a near-`i128::MAX`
   `total_raised` into project storage and asserts the next donation
   panics with `"Project total_raised overflow"` rather than wrapping.
-* `test_donate_co2_overflow_protected` registers a project with
-  `co2_per_xlm = u32::MAX` and donates an amount large enough that the
-  CO2 multiplication would overflow `i128`, asserting the named panic.
-* `test_voting_deadline_checked_add_guard` asserts the
-  `ledger + VOTING_WINDOW_LEDGERS` add panics near `u32::MAX` instead
-  of wrapping into the past (which would let `resolve_proposal` run
-  immediately).
+* `test_donate_total_raised_overflow_rolls_back_state_and_token` and
+  `test_donate_global_co2_overflow_rolls_back_state_and_token` assert
+  Soroban atomicity: on panic, contract storage **and** SAC token
+  balances are unchanged (no token transfer after a failed checked op).
+* `test_donate_co2_overflow_protected_at_registration` asserts
+  `co2_per_xlm = u32::MAX` is rejected at registration after the ceiling
+  was introduced (replacing the old donate-time mul panic test).
+* `test_register_project_rejects_excessive_co2_per_xlm` locks the
+  `MAX_CO2_PER_XLM` gate.
+* `test_voting_deadline_checked_add_guard` proves the
+  `ledger + VOTING_WINDOW_LEDGERS` add would return `None` near `u32::MAX`
+  (the same condition that triggers `"Voting deadline overflow"` in
+  `create_proposal`).
+
+## Accumulator bounds at `MAX_CO2_PER_XLM`
+
+`MAX_CO2_PER_XLM = STROOP = 10_000_000` grams per XLM. Realistic project
+values (e.g. 8_500 g/XLM in the README) are ~1_000× below this cap.
+
+### Per-donation CO₂ multiply (`co2_increment`)
+
+For any donation amount `a: i128` and registered `co2_per_xlm ≤ MAX_CO2_PER_XLM`:
+
+```
+xlm_units = a / STROOP  ≤  i128::MAX / STROOP
+co2_increment = xlm_units * co2_per_xlm  ≤  i128::MAX
+```
+
+**Overflow ledger count:** unreachable once `register_project` enforces the cap.
+
+### `GlobalCO2OffsetGrams` (i128)
+
+Each 1 XLM donation adds `co2_per_xlm` grams. At `MAX_CO2_PER_XLM` that is
+`STROOP` grams per donation.
+
+| Scenario | Donations to overflow | Reachable on Soroban? |
+| --- | --- | --- |
+| 1 XLM per donation | `i128::MAX / STROOP` ≈ **1.70×10³¹** | No — `DonationCount` is `u32` |
+| 1 XLM per donation until `u32::MAX` | **4_294_967_295** | Yes — accumulated CO₂ ≈ **4.3×10¹⁶** g, far below `i128::MAX` |
+| Single donation at `i128::MAX` stroops | 1 | Yes — `co2_increment` = `(i128::MAX/STROOP)*STROOP` ≤ `i128::MAX` |
+
+### `GlobalTotalRaised` / `Project.total_raised` / `DonorStats.total_donated` (i128)
+
+| Scenario | Donations to overflow | Reachable? |
+| --- | --- | --- |
+| 1 stroop per donation | `i128::MAX` ≈ **1.70×10³⁸** | No — needs more txs than `u32::MAX` |
+| 1 XLM per donation | `i128::MAX / STROOP` ≈ **1.70×10³¹** | No |
+| `u32::MAX` donations of `MAX_REALISTIC_DONATION_STROOPS` (1B XLM each) | **4_294_967_295** | Yes in theory — total ≈ **4.3×10²⁵** stroops, below `i128::MAX` |
+
+### `DonationCount` / `Project.donor_count` / `DonorStats.donation_count` (u32)
+
+Overflow on the **4_294_967_296**-th increment (0-based: after `u32::MAX`
+successful operations). This is the first binding counter limit under
+normal positive donation amounts.
+
+### Property / fuzz coverage
+
+[`src/fuzz_tests.rs`](src/fuzz_tests.rs) (requires `--features testutils`) exercises:
+
+* random donations in `[1 XLM, 1B XLM]` at realistic and max `co2_per_xlm`;
+* batches of up to 256 small donations at `MAX_CO2_PER_XLM`;
+* registration rejection for `co2_per_xlm > MAX_CO2_PER_XLM`.
 
 ### M-01 — `Project.donor_count` was a donation counter  *(Fixed)*
 
@@ -252,9 +311,9 @@ change later.
 
 ```
 cargo test -p greenpay-contract --lib
-running 19 tests
-... 19 passed; 0 failed; 0 ignored
+cargo test -p greenpay-contract --features testutils -- fuzz
 ```
 
-13 pre-audit tests + 6 new regression tests (one per finding fixed
-above) all pass.
+Regression tests cover CEI ordering, overflow guards, `co2_per_xlm`
+registration ceiling, atomic rollback on failed `donate`, and property
+tests in `fuzz_tests.rs`.
