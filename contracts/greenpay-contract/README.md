@@ -59,7 +59,9 @@ stellar contract invoke \
   --co2_per_xlm 8500
 ```
 
-`co2_per_xlm` = estimated grams of CO₂ offset per XLM donated (8,500 ≈ 8.5 kg per XLM)
+`co2_per_xlm` = estimated grams of CO₂ offset per XLM donated (8,500 ≈ 8.5 kg per XLM).
+Must be ≤ `MAX_CO2_PER_XLM` (10_000_000 g/XLM); values above that are rejected at registration.
+See [`SECURITY.md`](SECURITY.md#accumulator-bounds-at-max_co2_per_xlm) for formal overflow horizons.
 
 ## Roadmap
 

@@ -116,7 +116,36 @@ pub enum DataKey {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const STROOP: i128 = 10_000_000;
+pub const STROOP: i128 = 10_000_000;
+
+/// Upper bound on admin-supplied `co2_per_xlm` (grams credited per 1 XLM).
+///
+/// # Why `STROOP`
+///
+/// For any donation amount `a: i128`, let `x = a / STROOP`. Then
+/// `x <= i128::MAX / STROOP`, so
+/// `x * MAX_CO2_PER_XLM <= i128::MAX / STROOP * STROOP <= i128::MAX`.
+/// The per-donation `checked_mul` in `donate()` therefore cannot overflow
+/// when `co2_per_xlm <= MAX_CO2_PER_XLM`.
+///
+/// Realistic project values (e.g. 8_500 g/XLM per README) sit ~1_000× below
+/// this ceiling.
+///
+/// # Accumulator overflow horizons at `MAX_CO2_PER_XLM`
+///
+/// | Accumulator | Width | First overflow (worst case) | Reachable? |
+/// | --- | --- | --- | --- |
+/// | `co2_increment` (mul) | i128 | N/A — blocked by this cap | No |
+/// | `GlobalCO2OffsetGrams` | i128 | `i128::MAX / STROOP` donations of 1 XLM (~1.7×10³¹) | No (`DonationCount` is u32) |
+/// | `GlobalCO2OffsetGrams` @ u32::MAX | i128 | `u32::MAX` donations of 1 XLM → ~4.3×10¹⁶ g | Yes, far below `i128::MAX` |
+/// | `GlobalTotalRaised` | i128 | `i128::MAX` stroops total (e.g. 1-stroop donations) | No (needs > u32::MAX txs) |
+/// | `GlobalTotalRaised` @ u32::MAX | i128 | `u32::MAX` × (`i128::MAX` / `u32::MAX`) stroops/donation | Theoretical per-invocation bound |
+/// | `DonationCount` | u32 | `u32::MAX + 1` successful donations | Yes |
+/// | `Project.donor_count` | u32 | `u32::MAX + 1` unique donors to one project | Yes |
+pub const MAX_CO2_PER_XLM: u32 = STROOP as u32;
+
+/// Largest single donation exercised in property tests (1 billion XLM).
+pub const MAX_REALISTIC_DONATION_STROOPS: i128 = 1_000_000_000 * STROOP;
 
 // 7 days × 24 h × 3600 s ÷ 5 s per ledger ≈ 120_960 ledgers — used as the
 // default when `create_proposal` is called without an explicit duration.
@@ -174,6 +203,9 @@ impl GreenPayContract {
         if stored_admin != admin { panic!("Only admin can register projects"); }
         if env.storage().instance().has(&DataKey::Project(project_id.clone())) {
             panic!("Project already registered");
+        }
+        if co2_per_xlm > MAX_CO2_PER_XLM {
+            panic!("co2_per_xlm exceeds maximum allowed");
         }
         let project = Project {
             id: project_id.clone(), name, wallet, co2_per_xlm,
@@ -481,7 +513,7 @@ impl GreenPayContract {
 mod tests {
     use super::*;
     use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env, String};
-    use soroban_sdk::token::StellarAssetClient;
+    use soroban_sdk::token::{StellarAssetClient, Client as TokenClient};
 
     // ─── Existing tests ───────────────────────────────────────────────────────
 
@@ -532,6 +564,264 @@ mod tests {
         assert_eq!(calculate_badge(1999 * STROOP),   BadgeTier::Forest);
         assert_eq!(calculate_badge(2000 * STROOP),   BadgeTier::EarthGuardian);
         assert_eq!(calculate_badge(100000 * STROOP), BadgeTier::EarthGuardian);
+    }
+
+    /// Set up contract + SAC token for donation tests.
+    fn setup_donation() -> (
+        Env,
+        soroban_sdk::Address,
+        GreenPayContractClient<'static>,
+        Address,
+        String,
+        soroban_sdk::Address,
+        StellarAssetClient<'static>,
+    ) {
+        let (env, cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+        let token_client = StellarAssetClient::new(&env, &token);
+        (env, cid, client, admin, pid, token, token_client)
+    }
+
+    fn token_balance(env: &Env, token: &soroban_sdk::Address, account: &Address) -> i128 {
+        TokenClient::new(env, token).balance(account)
+    }
+
+    fn mint_to(_env: &Env, token_client: &StellarAssetClient, donor: &Address, amount: i128) {
+        token_client.mint(donor, &amount);
+    }
+
+    // ─── Donation / overflow regression tests ─────────────────────────────────
+
+    #[test]
+    fn test_register_project_accepts_max_co2_per_xlm() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "max-co2");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Max CO2 Project"),
+            &wallet,
+            &MAX_CO2_PER_XLM,
+        );
+        assert_eq!(client.get_project(&pid).co2_per_xlm, MAX_CO2_PER_XLM);
+    }
+
+    #[test]
+    #[should_panic(expected = "co2_per_xlm exceeds maximum allowed")]
+    fn test_register_project_rejects_excessive_co2_per_xlm() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "bad-co2");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Bad CO2 Project"),
+            &wallet,
+            &(MAX_CO2_PER_XLM + 1),
+        );
+    }
+
+    #[test]
+    fn test_max_co2_per_xlm_mul_invariant_holds_at_i128_max_amount() {
+        let xlm_units = i128::MAX / STROOP;
+        let product = xlm_units
+            .checked_mul(MAX_CO2_PER_XLM as i128)
+            .expect("bound proof: product must fit in i128");
+        assert!(product <= i128::MAX);
+    }
+
+    #[test]
+    fn test_donate_at_max_co2_with_largest_amount_succeeds() {
+        let (env, _cid, client, admin, _pid, token, token_client) = setup_donation();
+        let wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "max-co2-donate");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Stress"),
+            &wallet,
+            &MAX_CO2_PER_XLM,
+        );
+        let donor = Address::generate(&env);
+        let amount = i128::MAX;
+        mint_to(&env, &token_client, &donor, amount);
+        client.donate(&token, &donor, &pid, &amount, &0u32);
+
+        let expected_co2 = (amount / STROOP) * (MAX_CO2_PER_XLM as i128);
+        assert_eq!(client.get_project(&pid).total_raised, amount);
+        assert_eq!(client.get_global_co2(), expected_co2);
+    }
+
+    #[test]
+    fn test_donate_basic_flow_after_cei_reorder() {
+        let (env, _cid, client, _admin, pid, token, token_client) = setup_donation();
+        let donor = Address::generate(&env);
+        let amount = 25 * STROOP;
+        mint_to(&env, &token_client, &donor, amount);
+
+        client.donate(&token, &donor, &pid, &amount, &42u32);
+
+        let project = client.get_project(&pid);
+        assert_eq!(project.total_raised, amount);
+        assert_eq!(project.donor_count, 1);
+        assert_eq!(client.get_global_total(), amount);
+        assert_eq!(client.get_global_co2(), 25 * 100);
+        assert_eq!(client.get_donation_count(), 1);
+        assert_eq!(token_balance(&env, &token, &donor), 0);
+        assert_eq!(token_balance(&env, &token, &project.wallet), amount);
+    }
+
+    #[test]
+    #[should_panic(expected = "Project total_raised overflow")]
+    fn test_donate_total_raised_overflow_protected() {
+        let (env, cid, client, _admin, pid, token, token_client) = setup_donation();
+        let donor = Address::generate(&env);
+        let amount = STROOP;
+        mint_to(&env, &token_client, &donor, amount);
+
+        env.as_contract(&cid, || {
+            let mut project: Project = env.storage().instance()
+                .get(&DataKey::Project(pid.clone()))
+                .expect("project");
+            project.total_raised = i128::MAX - (STROOP / 2);
+            env.storage().instance().set(&DataKey::Project(pid.clone()), &project);
+        });
+
+        client.donate(&token, &donor, &pid, &amount, &0u32);
+    }
+
+    #[test]
+    fn test_donate_total_raised_overflow_rolls_back_state_and_token() {
+        let (env, cid, client, _admin, pid, token, token_client) = setup_donation();
+        let donor = Address::generate(&env);
+        let amount = STROOP;
+        mint_to(&env, &token_client, &donor, amount);
+
+        env.as_contract(&cid, || {
+            let mut project: Project = env.storage().instance()
+                .get(&DataKey::Project(pid.clone()))
+                .expect("project");
+            project.total_raised = i128::MAX - (STROOP / 2);
+            env.storage().instance().set(&DataKey::Project(pid.clone()), &project);
+        });
+
+        let project_before = client.get_project(&pid);
+        let global_before = client.get_global_total();
+        let donor_balance_before = token_balance(&env, &token, &donor);
+        let wallet_balance_before = token_balance(&env, &token, &project_before.wallet);
+
+        let result = client.try_donate(&token, &donor, &pid, &amount, &0u32);
+        assert!(result.is_err(), "donate must fail on total_raised overflow");
+
+        assert_eq!(client.get_project(&pid).total_raised, project_before.total_raised);
+        assert_eq!(client.get_global_total(), global_before);
+        assert_eq!(client.get_donation_count(), 0);
+        assert_eq!(token_balance(&env, &token, &donor), donor_balance_before);
+        assert_eq!(token_balance(&env, &token, &project_before.wallet), wallet_balance_before);
+    }
+
+    #[test]
+    #[should_panic(expected = "co2_per_xlm exceeds maximum allowed")]
+    fn test_donate_co2_overflow_protected_at_registration() {
+        let (env, _cid, client, admin, _pid, _token, _token_client) = setup_donation();
+        let wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "proj-co2");
+        // Pre-cap behaviour: u32::MAX co2 would allow mul overflow at donate-time.
+        // With the register_project ceiling this is rejected before any donation path.
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "CO2 overflow"),
+            &wallet,
+            &u32::MAX,
+        );
+    }
+
+    #[test]
+    fn test_donate_global_co2_overflow_rolls_back_state_and_token() {
+        let (env, cid, client, admin, _pid, token, token_client) = setup_donation();
+        let wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "co2-cap-proj");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "CO2 cap"),
+            &wallet,
+            &MAX_CO2_PER_XLM,
+        );
+
+        let donor = Address::generate(&env);
+        let amount = STROOP;
+        mint_to(&env, &token_client, &donor, amount);
+
+        env.as_contract(&cid, || {
+            env.storage().instance().set(
+                &DataKey::GlobalCO2OffsetGrams,
+                &(i128::MAX - (MAX_CO2_PER_XLM as i128 / 2)),
+            );
+        });
+
+        let global_co2_before = client.get_global_co2();
+        let global_total_before = client.get_global_total();
+        let donor_balance_before = token_balance(&env, &token, &donor);
+
+        let result = client.try_donate(&token, &donor, &pid, &amount, &0u32);
+        assert!(result.is_err(), "donate must fail on GlobalCO2 overflow");
+
+        assert_eq!(client.get_global_co2(), global_co2_before);
+        assert_eq!(client.get_global_total(), global_total_before);
+        assert_eq!(client.get_donation_count(), 0);
+        assert_eq!(token_balance(&env, &token, &donor), donor_balance_before);
+    }
+
+    #[test]
+    fn test_donate_unique_donor_count_not_inflated() {
+        let (env, _cid, client, _admin, pid, token, token_client) = setup_donation();
+        let donor = Address::generate(&env);
+        let amount = STROOP;
+        mint_to(&env, &token_client, &donor, amount * 3);
+
+        for _ in 0..3 {
+            client.donate(&token, &donor, &pid, &amount, &0u32);
+        }
+
+        let project = client.get_project(&pid);
+        assert_eq!(project.donor_count, 1);
+        assert_eq!(client.get_donation_count(), 3);
+        assert_eq!(client.get_donor_stats(&donor).donation_count, 3);
+    }
+
+    #[test]
+    fn test_donate_distinct_donors_increment_count() {
+        let (env, _cid, client, _admin, pid, token, token_client) = setup_donation();
+        let amount = STROOP;
+
+        for _ in 0..3 {
+            let donor = Address::generate(&env);
+            mint_to(&env, &token_client, &donor, amount);
+            client.donate(&token, &donor, &pid, &amount, &0u32);
+        }
+
+        assert_eq!(client.get_project(&pid).donor_count, 3);
+        assert_eq!(client.get_donation_count(), 3);
+    }
+
+    /// Proves the `create_proposal` deadline add would overflow near `u32::MAX`.
+    /// Full host integration at this ledger is impractical (instance TTL / context
+    /// limits in the test VM); the contract uses the same `checked_add` path.
+    #[test]
+    fn test_voting_deadline_checked_add_guard() {
+        let ledger = u32::MAX - MIN_VOTING_WINDOW_LEDGERS;
+        assert!(
+            ledger.checked_add(VOTING_WINDOW_LEDGERS).is_none(),
+            "default voting window must not wrap deadline_ledger"
+        );
+        assert!(
+            ledger.checked_add(MAX_VOTING_WINDOW_LEDGERS).is_none(),
+            "max custom voting window must not wrap deadline_ledger"
+        );
     }
 
     // ─── Governance helpers ───────────────────────────────────────────────────
