@@ -43,7 +43,31 @@ export async function getConnectedPublicKey(): Promise<string | null> {
   } catch { return null; }
 }
 
-export async function signTransactionWithWallet(xdr: string): Promise<{ signedXDR: string | null; error: string | null }> {
+export interface SignTransactionResult {
+  signedXDR: string | null;
+  error: string | null;
+  /**
+   * True when the user declined in Freighter (happens before submission — this is
+   * an expected, quiet outcome, not a scary error). False/undefined for any other
+   * signing failure.
+   */
+  rejected?: boolean;
+}
+
+export async function signTransactionWithWallet(xdr: string): Promise<SignTransactionResult> {
+  // Test seam: e2e tests can inject a deterministic signer via
+  // window.__test_signTransaction__ so donate-flow tests don't have to drive the
+  // real Freighter postMessage handshake (see the __test_publicKey__ seam in
+  // pages/_app.tsx for the same rationale). Untouched in production.
+  if (typeof window !== "undefined") {
+    const testSigner = (window as unknown as {
+      __test_signTransaction__?: (xdr: string) => Promise<SignTransactionResult> | SignTransactionResult;
+    }).__test_signTransaction__;
+    if (typeof testSigner === "function") {
+      return testSigner(xdr);
+    }
+  }
+
   try {
     const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet" ? "MAINNET" : "TESTNET";
     const result: any = await signTransaction(xdr, { networkPassphrase: NETWORK_PASSPHRASE, network });
@@ -52,7 +76,9 @@ export async function signTransactionWithWallet(xdr: string): Promise<{ signedXD
     return { signedXDR: signedXDR, error: null };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("User declined") || msg.includes("rejected")) return { signedXDR: null, error: "Transaction rejected." };
+    if (msg.includes("User declined") || msg.includes("rejected")) {
+      return { signedXDR: null, error: "Transaction rejected.", rejected: true };
+    }
     return { signedXDR: null, error: `Signing failed: ${msg}` };
   }
 }

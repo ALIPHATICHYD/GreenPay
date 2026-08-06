@@ -3,7 +3,7 @@
  * Donation form for a climate project.
  */
 import { useState, useEffect } from "react";
-import { buildDonationTransaction, buildContractDonationTransaction, submitTransaction, explorerUrl, getXLMBalance, getAssetBalance, getDonorStats, hashMessage, CONTRACT_ID } from "@/lib/stellar";
+import { buildDonationTransaction, buildContractDonationTransaction, submitAndConfirmDonation, DonationSubmissionError, explorerUrl, getXLMBalance, getAssetBalance, getDonorStats, hashMessage, CONTRACT_ID } from "@/lib/stellar";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { recordDonation } from "@/lib/api";
 import { formatXLM, formatCO2 } from "@/utils/format";
@@ -20,6 +20,18 @@ interface DonateFormProps {
 
 type Step = "idle" | "building" | "signing" | "submitting" | "recording" | "success" | "error";
 
+/**
+ * Distinguishes *why* a donation didn't complete, so the UI can react appropriately:
+ *  - "wallet_rejected": user declined in Freighter before anything was submitted —
+ *    expected, quiet, not an error.
+ *  - "execution_failed": the transaction landed on-chain but the contract call
+ *    failed/panicked — the donation did not apply; any optimistic state must revert.
+ *  - "network_unknown": we could not determine the final outcome — must not claim
+ *    success or failure, just point the donor at their transaction history.
+ *  - "generic": any other failure (build/sign/validation errors, etc.).
+ */
+type ErrorKind = "wallet_rejected" | "execution_failed" | "network_unknown" | "generic";
+
 const PRESETS_XLM = ["10", "25", "50", "100", "250"];
 const PRESETS_USDC = ["5", "10", "25", "50", "100"];
 
@@ -30,7 +42,12 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
   const [currency, setCurrency] = useState<"XLM" | "USDC">("XLM");
   const [step, setStep]       = useState<Step>("idle");
   const [error, setError]     = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<ErrorKind | null>(null);
   const [txHash, setTxHash]   = useState<string | null>(null);
+  // Set only for a transaction that genuinely landed on-chain but failed to
+  // execute — kept separate from txHash so a failed donation can never fall
+  // into the `step === "success" && txHash` success-screen branch below.
+  const [failedTxHash, setFailedTxHash] = useState<string | null>(null);
   const [xlmBalance, setXlmBalance] = useState<string | null>(null);
   const [usdcBalance, setUsdcBalance] = useState<string | null>(null);
   const [trustlineMissing, setTrustlineMissing] = useState<boolean>(false);
@@ -100,10 +117,17 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
   const handleDonate = async () => {
     if (!isValid || step !== "idle") return;
     setError(null);
+    setErrorKind(null);
+    setFailedTxHash(null);
+
+    // Snapshot every piece of state this donation could optimistically touch,
+    // so a failure after submission has something concrete to revert to.
+    const preDonationBadge = donorBadge;
 
     try {
       const useContract = CONTRACT_ID && currency === "XLM";
 
+      let tx;
       if (useContract) {
         setStep("building");
 
@@ -111,7 +135,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
         const nativeTokenAddress = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"; // Native XLM on testnet
         const msgHash = message.trim() ? hashMessage(message.trim()) : 0;
 
-        const tx = await buildContractDonationTransaction({
+        tx = await buildContractDonationTransaction({
           contractId: CONTRACT_ID,
           tokenAddress: nativeTokenAddress,
           donor: publicKey,
@@ -119,16 +143,50 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           amount: amountNum.toFixed(7),
           msgHash,
         });
+      } else {
+        // Fallback to standard payment
+        setStep("building");
+        const asset = currency === "USDC"
+          ? { code: "USDC", issuer: process.env.NEXT_PUBLIC_USDC_ISSUER }
+          : undefined;
 
-        setStep("signing");
-        const { signedXDR, error: signErr } = await signTransactionWithWallet(tx.toXDR());
-        if (signErr || !signedXDR) throw new Error(signErr || "Signing failed");
+        if (currency === "USDC") {
+          if (!process.env.NEXT_PUBLIC_USDC_ISSUER) throw new Error("USDC issuer not configured (NEXT_PUBLIC_USDC_ISSUER).");
+          if (trustlineMissing) throw new Error("No USDC trustline on your account. Add a trustline to receive/send USDC.");
+        }
 
-        setStep("submitting");
-        const result = await submitTransaction(signedXDR);
-        setTxHash(result.hash);
+        tx = await buildDonationTransaction({
+          fromPublicKey: publicKey,
+          toPublicKey: project.walletAddress,
+          amount: currency === "XLM" ? amountNum.toFixed(7) : amountNum.toFixed(2),
+          memo: `GreenPay:${project.id.slice(0, 16)}`,
+          asset,
+        });
+      }
 
-        setStep("recording");
+      setStep("signing");
+      const { signedXDR, error: signErr, rejected } = await signTransactionWithWallet(tx.toXDR());
+      if (rejected) {
+        // Wallet rejection happens before anything is submitted — nothing to
+        // revert, and it isn't an error the donor needs to be alarmed by.
+        setErrorKind("wallet_rejected");
+        setError(signErr || "Transaction rejected.");
+        setStep("error");
+        setTimeout(() => setStep("idle"), 1200);
+        return;
+      }
+      if (signErr || !signedXDR) throw new Error(signErr || "Signing failed");
+
+      // submitAndConfirmDonation only resolves once the transaction's *final*
+      // on-chain outcome is known — a Soroban donate() call can still panic
+      // after a successful simulation (e.g. a checked-arithmetic overflow), so
+      // nothing below this point may run until execution is actually confirmed.
+      setStep("submitting");
+      const { hash } = await submitAndConfirmDonation(signedXDR);
+      setTxHash(hash);
+
+      setStep("recording");
+      if (useContract) {
         // Query updated donor stats from contract
         const stats = await getDonorStats(publicKey);
         if (stats && stats.badge) {
@@ -140,64 +198,43 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           };
           setDonorBadge(badgeNames[stats.badge] || null);
         }
-
-        // Still record in backend for feed/analytics
-        await recordDonation({
-          projectId: project.id,
-          donorAddress: publicKey,
-          amount: amountNum.toString(),
-          currency: currency,
-          message: message.trim() || undefined,
-          transactionHash: result.hash,
-        });
-
-        setStep("success");
-        onSuccess?.();
-      } else {
-      // Fallback to standard payment
-        setStep("building");
-        const asset = currency === "USDC"
-          ? { code: "USDC", issuer: process.env.NEXT_PUBLIC_USDC_ISSUER }
-          : undefined;
-
-        if (currency === "USDC") {
-          if (!process.env.NEXT_PUBLIC_USDC_ISSUER) throw new Error("USDC issuer not configured (NEXT_PUBLIC_USDC_ISSUER).");
-          if (trustlineMissing) throw new Error("No USDC trustline on your account. Add a trustline to receive/send USDC.");
-        }
-
-        const tx = await buildDonationTransaction({
-          fromPublicKey: publicKey,
-          toPublicKey: project.walletAddress,
-          amount: currency === "XLM" ? amountNum.toFixed(7) : amountNum.toFixed(2),
-          memo: `GreenPay:${project.id.slice(0, 16)}`,
-          asset,
-        });
-
-        setStep("signing");
-        const { signedXDR, error: signErr } = await signTransactionWithWallet(tx.toXDR());
-        if (signErr || !signedXDR) throw new Error(signErr || "Signing failed");
-
-        setStep("submitting");
-        const result = await submitTransaction(signedXDR);
-        setTxHash(result.hash);
-
-        setStep("recording");
-        await recordDonation({
-          projectId: project.id,
-          donorAddress: publicKey,
-          amount: amountNum.toString(),
-          currency: currency,
-          message: message.trim() || undefined,
-          transactionHash: result.hash,
-        });
-
-        setStep("success");
-        onSuccess?.();
       }
+
+      // Only record — and thus only affect the donation total / leaderboard —
+      // once the transaction is confirmed successful.
+      await recordDonation({
+        projectId: project.id,
+        donorAddress: publicKey,
+        amount: amountNum.toString(),
+        currency: currency,
+        message: message.trim() || undefined,
+        transactionHash: hash,
+      });
+
+      setStep("success");
+      onSuccess?.();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      // Revert any optimistic state a previous attempt (or this one, before
+      // hitting the confirmed-failure branch above) may have set.
+      setDonorBadge(preDonationBadge);
+      setTxHash(null);
+
+      if (err instanceof DonationSubmissionError) {
+        if (err.outcome === "execution_failed") {
+          setErrorKind("execution_failed");
+          if (err.hash) setFailedTxHash(err.hash);
+        } else if (err.outcome === "unknown") {
+          setErrorKind("network_unknown");
+        } else {
+          setErrorKind("generic");
+        }
+        setError(err.message);
+      } else {
+        setErrorKind("generic");
+        setError(err instanceof Error ? err.message : "An error occurred");
+      }
       setStep("error");
-      setTimeout(() => setStep("idle"), 3000);
+      setTimeout(() => setStep("idle"), 6000);
     }
   };
 
@@ -296,8 +333,48 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           </p>
         </div>
 
-        {step === "error" && error && (
-          <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm font-body">{error}</div>
+        {step === "error" && error && errorKind === "wallet_rejected" && (
+          <div
+            data-testid="donate-error-wallet-rejected"
+            className="p-3 rounded-xl bg-forest-50 border border-forest-200 text-[#5a7a5a] text-sm font-body"
+          >
+            Signing cancelled — no donation was made.
+          </div>
+        )}
+
+        {step === "error" && error && errorKind === "execution_failed" && (
+          <div
+            data-testid="donate-error-execution-failed"
+            className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm font-body"
+          >
+            <p className="font-semibold mb-1">Your donation didn&apos;t go through</p>
+            <p>{error}</p>
+            {failedTxHash && (
+              <a href={explorerUrl(failedTxHash)} target="_blank" rel="noopener noreferrer"
+                className="underline text-red-700 hover:text-red-800">
+                View the failed transaction ↗
+              </a>
+            )}
+          </div>
+        )}
+
+        {step === "error" && error && errorKind === "network_unknown" && (
+          <div
+            data-testid="donate-error-network-unknown"
+            className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-sm font-body"
+          >
+            <p className="font-semibold mb-1">We couldn&apos;t confirm this donation</p>
+            <p>{error}</p>
+          </div>
+        )}
+
+        {step === "error" && error && (errorKind === "generic" || errorKind === null) && (
+          <div
+            data-testid="donate-error-generic"
+            className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm font-body"
+          >
+            {error}
+          </div>
         )}
 
         {currency === "USDC" && (
@@ -317,7 +394,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           className="btn-primary w-full flex items-center justify-center gap-2">
           {step === "building"   && <><Spinner />Building transaction...</>}
           {step === "signing"    && <><Spinner />Sign in Freighter...</>}
-          {step === "submitting" && <><Spinner />Submitting...</>}
+          {step === "submitting" && <><Spinner />Submitting &amp; confirming...</>}
           {step === "recording"  && <>Done</>}
           {step === "idle"       && <>🌱 Donate {amount ? (currency === "XLM" ? formatXLM(amountNum, 2, localeTag) : `$${amountNum.toFixed(2)} ${currency}`) : currency}</>}
           {step === "error"      && "Retry"}
