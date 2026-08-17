@@ -85,7 +85,7 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
   if (entries.length === 0) return (
     <div className="text-center py-12">
       <p className="text-3xl mb-3">🌱</p>
-      <p className="text-[#5a7a5a] font-body">No donors yet — be the first!</p>
+      <p className="text-[#4b654b] font-body">No donors yet — be the first!</p>
     </div>
   );
 
@@ -101,7 +101,7 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
           <div className="w-8 text-center flex-shrink-0">
             {entry.rank <= 3
               ? <span className="text-lg">{medals[entry.rank - 1]}</span>
-              : <span className="text-sm font-semibold text-[#8aaa8a] font-body">#{entry.rank}</span>
+              : <span className="text-sm font-semibold text-[#547454] font-body">#{entry.rank}</span>
             }
           </div>
 
@@ -124,7 +124,7 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
               >
                 {entry.displayName || shortenAddress(entry.publicKey)}
               </a>
-              <p className="text-xs text-[#8aaa8a] font-body mt-0.5">
+              <p className="text-xs text-[#547454] font-body mt-0.5">
                 {t("project.projectsSupportedCount", { count: entry.projectsSupported })}
               </p>
             </div>
@@ -136,11 +136,11 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
               {formatXLM(entry.totalDonatedXLM, 2, localeTag)}
             </p>
             {formatUSDEquivalent(entry.totalDonatedXLM, xlmUsd, localeTag) && (
-              <p className="text-[11px] text-[#8aaa8a] font-body">
+              <p className="text-[11px] text-[#547454] font-body">
                 {formatUSDEquivalent(entry.totalDonatedXLM, xlmUsd, localeTag)}
               </p>
             )}
-            <p className="text-xs text-[#8aaa8a] font-body">donated</p>
+            <p className="text-xs text-[#547454] font-body">donated</p>
           </div>
         </div>
       ))}

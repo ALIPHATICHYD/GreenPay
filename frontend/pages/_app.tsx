@@ -1,4 +1,4 @@
-import type { AppProps } from "next/app";
+import NextApp, { type AppContext, type AppInitialProps, type AppProps } from "next/app";
 import { useState, useEffect } from "react";
 import Head from "next/head";
 import { Toaster } from "sonner";
@@ -7,6 +7,17 @@ import { PriceProvider } from "@/lib/priceContext";
 import { I18nProvider } from "@/lib/i18n";
 import { connectWallet, getConnectedPublicKey } from "@/lib/wallet";
 import "@/styles/globals.css";
+
+// Custom getInitialProps opts every page out of Automatic Static
+// Optimization, forcing per-request server rendering. This is required so
+// _document.tsx's getInitialProps sees a real `ctx.req` on every page load
+// and can thread the per-request CSP nonce (set by middleware.ts) onto
+// <Head> and <NextScript> — a statically-generated page bakes a stale
+// getInitialProps result at build time with no request, so its script tags
+// end up nonce-less and get blocked by the strict-dynamic CSP at runtime.
+App.getInitialProps = async (appContext: AppContext): Promise<AppInitialProps> => {
+  return NextApp.getInitialProps(appContext);
+};
 
 export default function App({ Component, pageProps }: AppProps) {
   const [publicKey, setPublicKey] = useState<string | null>(null);

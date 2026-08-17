@@ -1,7 +1,11 @@
 "use strict";
 
 jest.mock("../db/pool", () => ({
-  connect: jest.fn(),
+  query: jest.fn(),
+}));
+
+jest.mock("../eventSourcing/commandBus", () => ({
+  execute: jest.fn(),
 }));
 
 jest.mock("../middleware/rateLimiter", () => ({
@@ -9,7 +13,9 @@ jest.mock("../middleware/rateLimiter", () => ({
 }));
 
 const pool = require("../db/pool");
+const { execute } = require("../eventSourcing/commandBus");
 const { computeBadges } = require("../services/store");
+const { DonationRecordedEvent } = require("../eventSourcing/events");
 const { recordDonation } = require("./donations");
 
 function makePublicKey(char = "A") {
@@ -24,23 +30,18 @@ function queryResult(rows = []) {
   return { rows };
 }
 
-function createMockClient(...responses) {
-  const client = {
-    query: jest.fn(),
-    release: jest.fn(),
-  };
-
-  responses.forEach((response) => {
-    if (response instanceof Error) {
-      client.query.mockRejectedValueOnce(response);
-      return;
-    }
-
-    client.query.mockResolvedValueOnce(response);
+function makeDonationRecordedEvent({ projectId, donorAddress, amountXlm, transactionHash, currency = "XLM", message = null }) {
+  return new DonationRecordedEvent({
+    aggregateId: `Donation:${transactionHash}`,
+    version: 1,
+    actor: donorAddress,
+    projectId,
+    donorAddress,
+    amountXlm,
+    currency,
+    message,
+    transactionHash,
   });
-
-  pool.connect.mockResolvedValue(client);
-  return client;
 }
 
 function createMockResponse() {
@@ -87,15 +88,7 @@ function expectBadge(totalXLM, tier) {
   ]);
 }
 
-function findQueryCall(client, snippet) {
-  return client.query.mock.calls.find(([sql]) => sql.includes(snippet));
-}
-
 describe("donations route badge calculation", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
   test("awards no badge at 0 XLM", () => {
     expectBadge(0, null);
   });
@@ -131,93 +124,6 @@ describe("donations route badge calculation", () => {
   test("awards Earth Guardian at 2000 XLM", () => {
     expectBadge(2000, "earth");
   });
-
-  test("uses a database-level idempotency key conflict to make concurrent retries a no-op", async () => {
-    const donorAddress = makePublicKey("H");
-    const transactionHash = makeTxHash("8");
-    const existingDonation = {
-      id: "donation-idempotent",
-      project_id: "project-5",
-      donor_address: donorAddress,
-      amount_xlm: "7",
-      amount: "7",
-      currency: "XLM",
-      message: null,
-      transaction_hash: transactionHash,
-      idempotency_key: "payment:user-1:checkout-1",
-      status: "committed",
-      saga_step: "profile_updated",
-      created_at: "2026-03-29T10:00:00.000Z",
-      inserted: false,
-    };
-    const client = createMockClient(
-      queryResult(),
-      queryResult([{ id: "project-5" }]),
-      queryResult([existingDonation]),
-      queryResult(),
-    );
-
-    const { res, next } = await invokeRecordDonation({
-      projectId: "project-5",
-      donorAddress,
-      amountXLM: "7",
-      transactionHash,
-      idempotencyKey: "payment:user-1:checkout-1",
-    });
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.statusCode).toBe(200);
-    expect(res.body.data.id).toBe("donation-idempotent");
-    expect(findQueryCall(client, "ON CONFLICT (idempotency_key) DO UPDATE")).toBeTruthy();
-    expect(findQueryCall(client, "UPDATE projects")).toBeUndefined();
-  });
-
-  test("does not depend on Redis when a high-latency lock expires before commit", async () => {
-    jest.useFakeTimers();
-    const donorAddress = makePublicKey("I");
-    const transactionHash = makeTxHash("9");
-    const donationRow = {
-      id: "donation-chaos",
-      project_id: "project-6",
-      donor_address: donorAddress,
-      amount_xlm: "13",
-      amount: "13",
-      currency: "XLM",
-      message: null,
-      transaction_hash: transactionHash,
-      created_at: "2026-03-29T10:00:00.000Z",
-      inserted: true,
-    };
-    const client = createMockClient(
-      queryResult(),
-      queryResult([{ id: "project-6" }]),
-      new Promise((resolve) => setTimeout(() => resolve(queryResult([donationRow])), 250)),
-      queryResult([]),
-      queryResult(),
-      queryResult([]),
-      queryResult([{ count: "1" }]),
-      queryResult(),
-      queryResult(),
-      queryResult(),
-    );
-
-    const promise = invokeRecordDonation({
-      projectId: "project-6",
-      donorAddress,
-      amountXLM: "13",
-      transactionHash,
-    });
-
-    await jest.advanceTimersByTimeAsync(300);
-    const { res, next } = await promise;
-    jest.useRealTimers();
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.statusCode).toBe(201);
-    expect(client.query.mock.calls[0][0]).toBe("BEGIN ISOLATION LEVEL SERIALIZABLE");
-    expect(findQueryCall(client, "FOR UPDATE")).toBeTruthy();
-  });
-
 });
 
 describe("POST /api/donations", () => {
@@ -225,32 +131,23 @@ describe("POST /api/donations", () => {
     jest.clearAllMocks();
   });
 
-  test("records a valid donation and updates the donor profile", async () => {
+  test("records a valid donation and dispatches it through the command bus", async () => {
     const donorAddress = makePublicKey("A");
     const transactionHash = makeTxHash("a");
-    const donationRow = {
-      id: "donation-1",
-      project_id: "project-1",
-      donor_address: donorAddress,
-      amount_xlm: "10",
-      amount: "10",
-      currency: "XLM",
-      message: null,
-      transaction_hash: transactionHash,
-      created_at: "2026-03-29T10:00:00.000Z",
-      inserted: true,
-    };
 
-    const client = createMockClient(
-      queryResult(),                           // BEGIN
-      queryResult([{ id: "project-1" }]),   // SELECT project FOR UPDATE
-      queryResult([donationRow]),              // INSERT donation
-      queryResult([]),                         // SELECT donation_matches (empty)
-      queryResult(),                           // UPDATE projects
-      queryResult([]),                         // SELECT * FROM profiles (new donor)
-      queryResult([{ count: "1" }]),           // SELECT COUNT(DISTINCT project_id)
-      queryResult(),                           // INSERT INTO profiles
-    );
+    pool.query.mockResolvedValueOnce(queryResult([{ id: "project-1" }])); // project lookup
+
+    const donationEvent = makeDonationRecordedEvent({
+      projectId: "project-1",
+      donorAddress,
+      amountXlm: "10",
+      transactionHash,
+    });
+    execute.mockResolvedValueOnce({
+      events: [donationEvent],
+      data: { donationId: donationEvent.eventId, amountXlm: 10 },
+      deduplicated: false,
+    });
 
     const { res, next } = await invokeRecordDonation({
       projectId: "project-1",
@@ -264,28 +161,25 @@ describe("POST /api/donations", () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data).toEqual(
       expect.objectContaining({
-        id: expect.any(String),
+        id: donationEvent.eventId,
         projectId: "project-1",
         donorAddress,
-        amountXLM: "10.0000000",
-        amount: "10",
+        amountXlm: 10,
         currency: "XLM",
         transactionHash,
       }),
     );
-    expect(client.release).toHaveBeenCalledTimes(1);
 
-    const profileUpsertCall = findQueryCall(client, "INSERT INTO profiles");
-    expect(profileUpsertCall[1][0]).toBe(donorAddress);
-    expect(profileUpsertCall[1][3]).toBe("10.0000000");
-    expect(profileUpsertCall[1][4]).toBe(1);
-    expect(JSON.parse(profileUpsertCall[1][5])).toEqual([
-      expect.objectContaining({ tier: "seedling", earnedAt: expect.any(String) }),
-    ]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    const dispatchedCommand = execute.mock.calls[0][0];
+    expect(dispatchedCommand.commandType).toBe("RecordDonation");
+    expect(dispatchedCommand.payload).toEqual(
+      expect.objectContaining({ projectId: "project-1", donorAddress, transactionHash }),
+    );
   });
 
   test("returns 404 for an unknown project id", async () => {
-    const client = createMockClient(queryResult(), queryResult([]));
+    pool.query.mockResolvedValueOnce(queryResult([]));
 
     const { res, next } = await invokeRecordDonation({
       projectId: "missing-project",
@@ -297,7 +191,7 @@ describe("POST /api/donations", () => {
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(404);
     expect(res.body.error).toBe("Project not found");
-    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   test("returns 400 for an invalid public key", async () => {
@@ -311,7 +205,7 @@ describe("POST /api/donations", () => {
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(400);
     expect(res.body.error).toBe("Invalid Stellar public key");
-    expect(pool.connect).not.toHaveBeenCalled();
+    expect(pool.query).not.toHaveBeenCalled();
   });
 
   test("returns 400 for an invalid transaction hash", async () => {
@@ -325,30 +219,18 @@ describe("POST /api/donations", () => {
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(400);
     expect(res.body.error).toBe("Invalid transaction hash");
-    expect(pool.connect).not.toHaveBeenCalled();
+    expect(pool.query).not.toHaveBeenCalled();
   });
 
   test("deduplicates duplicate transaction hashes and returns the existing record", async () => {
     const donorAddress = makePublicKey("D");
     const transactionHash = makeTxHash("d");
-    const existingDonation = {
-      id: "donation-existing",
-      project_id: "project-1",
-      donor_address: donorAddress,
-      amount_xlm: "25",
-      amount: "25",
-      currency: "XLM",
-      message: null,
-      transaction_hash: transactionHash,
-      created_at: "2026-03-29T10:00:00.000Z",
-      inserted: false,
-    };
-    const client = createMockClient(
-      queryResult(),
-      queryResult([{ id: "project-1" }]),
-      queryResult([existingDonation]),
-      queryResult(),
-    );
+
+    pool.query.mockResolvedValueOnce(queryResult([{ id: "project-1" }]));
+    execute.mockResolvedValueOnce({
+      data: { id: "donation-existing", transactionHash, amountXlm: 25 },
+      deduplicated: true,
+    });
 
     const { res, next } = await invokeRecordDonation({
       projectId: "project-1",
@@ -363,119 +245,15 @@ describe("POST /api/donations", () => {
       expect.objectContaining({
         id: "donation-existing",
         transactionHash,
-        amountXLM: "25.0000000",
+        amountXlm: 25,
       }),
     );
-    expect(client.query).toHaveBeenCalledTimes(4);
-    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(res.body.deduplicated).toBe(true);
   });
 
-  test("updates project totals after a donation", async () => {
-    const client = createMockClient(
-      queryResult(),                            // BEGIN
-      queryResult([{ id: "project-2" }]),    // SELECT project FOR UPDATE
-      queryResult([{
-        id: "donation-2",
-        project_id: "project-2",
-        donor_address: makePublicKey("E"),
-        amount_xlm: "5.5",
-        amount: "5.5",
-        currency: "XLM",
-        message: null,
-        transaction_hash: makeTxHash("e"),
-        created_at: "2026-03-29T10:00:00.000Z",
-      inserted: true,
-      }]),                                      // INSERT donation
-      queryResult([]),                          // SELECT donation_matches (empty)
-      queryResult(),                            // UPDATE projects
-      queryResult([]),                          // SELECT * FROM profiles (new donor)
-      queryResult([{ count: "1" }]),            // SELECT COUNT(DISTINCT project_id)
-      queryResult(),                            // INSERT INTO profiles
-    );
-
-    const { res, next } = await invokeRecordDonation({
-      projectId: "project-2",
-      donorAddress: makePublicKey("E"),
-      amountXLM: "5.5",
-      transactionHash: makeTxHash("e"),
-    });
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.statusCode).toBe(201);
-
-    const updateProjectCall = findQueryCall(client, "UPDATE projects");
-    expect(updateProjectCall[1]).toEqual([5.5, "project-2"]);
-  });
-
-  test("calculates badges from cumulative donations across multiple requests", async () => {
-    const donorAddress = makePublicKey("F");
-    const client = createMockClient(
-      queryResult(),                            // BEGIN
-      queryResult([{ id: "project-3" }]),    // SELECT project FOR UPDATE
-      queryResult([{
-        id: "donation-3",
-        project_id: "project-3",
-        donor_address: donorAddress,
-        amount_xlm: "1",
-        amount: "1",
-        currency: "XLM",
-        message: null,
-        transaction_hash: makeTxHash("f"),
-        created_at: "2026-03-29T10:00:00.000Z",
-      inserted: true,
-      }]),                                      // INSERT donation
-      queryResult([]),                          // SELECT donation_matches (empty)
-      queryResult(),                            // UPDATE projects
-      queryResult([{                            // SELECT * FROM profiles (returning existing)
-        public_key: donorAddress,
-        display_name: "Existing Donor",
-        bio: "Already donated before",
-        total_donated_xlm: "99.0000000",
-      }]),
-      queryResult([{ count: "3" }]),            // SELECT COUNT(DISTINCT project_id)
-      queryResult(),                            // INSERT INTO profiles
-    );
-
-    const { res, next } = await invokeRecordDonation({
-      projectId: "project-3",
-      donorAddress,
-      amountXLM: "1",
-      transactionHash: makeTxHash("f"),
-    });
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.statusCode).toBe(201);
-
-    const profileUpsertCall = findQueryCall(client, "INSERT INTO profiles");
-    expect(profileUpsertCall[1][3]).toBe("100.0000000");
-    expect(profileUpsertCall[1][4]).toBe(3);
-    expect(JSON.parse(profileUpsertCall[1][5])).toEqual([
-      expect.objectContaining({ tier: "tree", earnedAt: expect.any(String) }),
-    ]);
-  });
-
-  test("rolls back the transaction if profile persistence fails after BEGIN", async () => {
-    const client = createMockClient(
-      queryResult(),
-      queryResult([{ id: "project-4" }]),
-      queryResult([{
-        id: "donation-4",
-        project_id: "project-4",
-        donor_address: makePublicKey("G"),
-        amount_xlm: "12",
-        amount: "12",
-        currency: "XLM",
-        message: null,
-        transaction_hash: makeTxHash("a"),
-        created_at: "2026-03-29T10:00:00.000Z",
-      inserted: true,
-      }]),
-      queryResult(),
-      queryResult([]),
-      queryResult([{ count: "1" }]),
-      new Error("profile write failed"),
-      queryResult(),
-    );
+  test("propagates command bus failures to the error handler", async () => {
+    pool.query.mockResolvedValueOnce(queryResult([{ id: "project-4" }]));
+    execute.mockRejectedValueOnce(new Error("profile write failed"));
 
     const { res, next } = await invokeRecordDonation({
       projectId: "project-4",
@@ -487,7 +265,5 @@ describe("POST /api/donations", () => {
     expect(next).toHaveBeenCalledTimes(1);
     expect(next.mock.calls[0][0].message).toBe("profile write failed");
     expect(res.statusCode).toBe(500);
-    expect(client.query).toHaveBeenLastCalledWith("ROLLBACK");
-    expect(client.release).toHaveBeenCalledTimes(1);
   });
 });

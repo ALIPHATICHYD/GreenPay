@@ -271,112 +271,112 @@ class MigratedDonationEvent extends DomainEvent {
 function fromPayload(payload) {
   const data = payload.data || {};
   switch (payload.eventType) {
-    case "DonationRecorded":
-      return new DonationRecordedEvent({
-        aggregateId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        projectId: data.projectId,
-        donorAddress: data.donorAddress,
-        amountXlm: data.amountXlm,
-        currency: data.currency,
-        message: data.message,
-        transactionHash: data.transactionHash,
-      });
-    case "MatchApplied":
-      return new MatchAppliedEvent({
-        aggregateId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        matchId: data.matchId,
-        projectId: data.projectId,
-        donorAddress: data.donorAddress,
-        matchAmount: data.matchAmount,
-        originalTxHash: data.originalTxHash,
-        multiplier: data.multiplier,
-      });
-    case "MatchCreated":
-      return new MatchCreatedEvent({
-        aggregateId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        matchId: data.matchId,
-        projectId: data.projectId,
-        matcherAddress: data.matcherAddress,
-        capXlm: data.capXlm,
-        multiplier: data.multiplier,
-        expiresAt: data.expiresAt,
-      });
-    case "ProjectStatusChanged":
-      return new ProjectStatusChangedEvent({
-        aggregateId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        previousStatus: data.previousStatus,
-        newStatus: data.newStatus,
-        reason: data.reason,
-      });
-    case "MilestoneReached":
-      return new MilestoneReachedEvent({
-        aggregateId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        milestoneId: data.milestoneId,
-        projectId: data.projectId,
-        percentage: data.percentage,
-        title: data.title,
-        transactionHash: data.transactionHash,
-      });
-    case "JobReleased":
-      return new JobReleasedEvent({
-        aggregateId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        clientPublicKey: data.clientPublicKey,
-        freelancerPublicKey: data.freelancerPublicKey,
-        amountXlm: data.amountXlm,
-        releaseTransactionHash: data.releaseTransactionHash,
-      });
-    case "ProjectCreated":
-      return new ProjectCreatedEvent({
-        aggregateId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        name: data.name,
-        description: data.description,
-        category: data.category,
-        location: data.location,
-        walletAddress: data.walletAddress,
-        goalXlm: data.goalXlm,
-        tags: data.tags,
-      });
-    case "ProfileCreated":
-      return new ProfileCreatedEvent({
-        aggregateId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        displayName: data.displayName,
-        bio: data.bio,
-      });
-    case "LegacyDonationMigrated":
-      return new MigratedDonationEvent({
-        originalId: payload.originalId,
-        donationId: payload.aggregateId,
-        version: payload.version,
-        actor: payload.actor,
-        originalCreatedAt: data.originalCreatedAt,
-        projectId: data.projectId,
-        donorAddress: data.donorAddress,
-        amountXlm: data.amountXlm,
-        currency: data.currency,
-        message: data.message,
-        transactionHash: data.transactionHash,
-        isMatch: data.isMatch,
-        matchId: data.matchId,
-        originalDonationTxHash: data.originalDonationTxHash,
-      });
-    default:
-      throw new Error(`Unknown event type: ${payload.eventType}`);
+  case "DonationRecorded":
+    return new DonationRecordedEvent({
+      aggregateId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      projectId: data.projectId,
+      donorAddress: data.donorAddress,
+      amountXlm: data.amountXlm,
+      currency: data.currency,
+      message: data.message,
+      transactionHash: data.transactionHash,
+    });
+  case "MatchApplied":
+    return new MatchAppliedEvent({
+      aggregateId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      matchId: data.matchId,
+      projectId: data.projectId,
+      donorAddress: data.donorAddress,
+      matchAmount: data.matchAmount,
+      originalTxHash: data.originalTxHash,
+      multiplier: data.multiplier,
+    });
+  case "MatchCreated":
+    return new MatchCreatedEvent({
+      aggregateId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      matchId: data.matchId,
+      projectId: data.projectId,
+      matcherAddress: data.matcherAddress,
+      capXlm: data.capXlm,
+      multiplier: data.multiplier,
+      expiresAt: data.expiresAt,
+    });
+  case "ProjectStatusChanged":
+    return new ProjectStatusChangedEvent({
+      aggregateId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      previousStatus: data.previousStatus,
+      newStatus: data.newStatus,
+      reason: data.reason,
+    });
+  case "MilestoneReached":
+    return new MilestoneReachedEvent({
+      aggregateId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      milestoneId: data.milestoneId,
+      projectId: data.projectId,
+      percentage: data.percentage,
+      title: data.title,
+      transactionHash: data.transactionHash,
+    });
+  case "JobReleased":
+    return new JobReleasedEvent({
+      aggregateId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      clientPublicKey: data.clientPublicKey,
+      freelancerPublicKey: data.freelancerPublicKey,
+      amountXlm: data.amountXlm,
+      releaseTransactionHash: data.releaseTransactionHash,
+    });
+  case "ProjectCreated":
+    return new ProjectCreatedEvent({
+      aggregateId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      name: data.name,
+      description: data.description,
+      category: data.category,
+      location: data.location,
+      walletAddress: data.walletAddress,
+      goalXlm: data.goalXlm,
+      tags: data.tags,
+    });
+  case "ProfileCreated":
+    return new ProfileCreatedEvent({
+      aggregateId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      displayName: data.displayName,
+      bio: data.bio,
+    });
+  case "LegacyDonationMigrated":
+    return new MigratedDonationEvent({
+      originalId: payload.originalId,
+      donationId: payload.aggregateId,
+      version: payload.version,
+      actor: payload.actor,
+      originalCreatedAt: data.originalCreatedAt,
+      projectId: data.projectId,
+      donorAddress: data.donorAddress,
+      amountXlm: data.amountXlm,
+      currency: data.currency,
+      message: data.message,
+      transactionHash: data.transactionHash,
+      isMatch: data.isMatch,
+      matchId: data.matchId,
+      originalDonationTxHash: data.originalDonationTxHash,
+    });
+  default:
+    throw new Error(`Unknown event type: ${payload.eventType}`);
   }
 }
 

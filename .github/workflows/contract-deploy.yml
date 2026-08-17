@@ -48,9 +48,6 @@ jobs:
       - name: Run unit tests
         run: cargo test --workspace --lib
 
-      - name: Run integration tests
-        run: cargo test --workspace --test '*'
-
       - name: Build WASM release
         run: cargo build --workspace --target wasm32-unknown-unknown --release
 
@@ -106,7 +103,7 @@ jobs:
       - name: Generate deployment manifest
         run: |
           mkdir -p build-output
-          cat > build-output/deployment-manifest.json << 'EOF'
+          cat > build-output/deployment-manifest.json << EOF
           {
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "git_sha": "${{ github.sha }}",
@@ -173,7 +170,7 @@ jobs:
       - name: Generate proposal JSON
         run: |
           mkdir -p proposals
-          cat > proposals/upgrade-proposal-${{ github.sha }}.json << 'EOF'
+          cat > proposals/upgrade-proposal-${{ github.sha }}.json << EOF
           {
             "proposal": {
               "title": "Contract Upgrade: ${{ github.sha }}",

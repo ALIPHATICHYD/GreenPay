@@ -89,13 +89,13 @@ function buildHtml({ project, update, projectUrl }) {
 function buildText({ project, update, projectUrl }) {
   return [
     `Project Update — ${project.name}`,
-    ``,
+    "",
     update.title,
-    ``,
+    "",
     update.body,
-    ``,
+    "",
     `View the project: ${projectUrl}`,
-    ``,
+    "",
     `You're receiving this because you subscribed to updates for ${project.name}.`,
   ].join("\n");
 }

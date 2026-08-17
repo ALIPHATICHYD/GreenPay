@@ -52,7 +52,7 @@ export default function Navbar({ publicKey, onConnect, onDisconnect }: NavbarPro
                 "px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 font-body",
                 router.pathname === l.href || router.pathname.startsWith(l.href + "/") && l.href !== "/"
                   ? "bg-forest-100 text-forest-700"
-                  : "text-[#5a7a5a] hover:text-forest-700 hover:bg-forest-50"
+                  : "text-[#4b654b] hover:text-forest-700 hover:bg-forest-50"
               )}>
               {l.label}
             </Link>
@@ -67,7 +67,7 @@ export default function Navbar({ publicKey, onConnect, onDisconnect }: NavbarPro
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 {shortenAddress(publicKey)}
               </span>
-              <button onClick={onDisconnect} className="text-xs text-[#8aaa8a] hover:text-[#5a7a5a] transition-colors px-2">
+              <button onClick={onDisconnect} className="text-xs text-[#547454] hover:text-[#4b654b] transition-colors px-2">
                 {t("nav.disconnect")}
               </button>
             </>

@@ -156,9 +156,9 @@ function detectDrift(subscription, charges, options = {}) {
     if (usedActualIndexes.has(idx)) return;
     const nearestExpectedMs = expected.length
       ? expected.reduce((closest, iso) => {
-          const diff = Math.abs(new Date(iso).getTime() - a.ms);
-          return diff < Math.abs(new Date(closest).getTime() - a.ms) ? iso : closest;
-        }, expected[0])
+        const diff = Math.abs(new Date(iso).getTime() - a.ms);
+        return diff < Math.abs(new Date(closest).getTime() - a.ms) ? iso : closest;
+      }, expected[0])
       : null;
     const diff = nearestExpectedMs ? Math.abs(new Date(nearestExpectedMs).getTime() - a.ms) : Infinity;
     if (nearestExpectedMs && diff <= maxMatchWindowMs) {

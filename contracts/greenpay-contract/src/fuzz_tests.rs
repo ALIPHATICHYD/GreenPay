@@ -10,15 +10,13 @@
 ///   cargo test --features testutils -- fuzz
 #[cfg(all(test, feature = "testutils"))]
 mod fuzz {
+    use crate::{
+        GreenPayContract, GreenPayContractClient, MAX_CO2_PER_XLM, MAX_REALISTIC_DONATION_STROOPS,
+        STROOP,
+    };
     use proptest::prelude::*;
     use soroban_sdk::{
-        testutils::Address as _,
-        token::StellarAssetClient,
-        Address, Env, String as SorobanString,
-    };
-    use crate::{
-        GreenPayContract, GreenPayContractClient,
-        MAX_CO2_PER_XLM, MAX_REALISTIC_DONATION_STROOPS, STROOP,
+        testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
     };
 
     /// Typical on-chain `co2_per_xlm` values (grams per XLM).
@@ -31,7 +29,7 @@ mod fuzz {
         GreenPayContractClient<'static>,
         Address,
         soroban_sdk::Address,
-        StellarAssetClient,
+        StellarAssetClient<'static>,
         SorobanString,
     ) {
         let env = Env::default();
@@ -54,7 +52,9 @@ mod fuzz {
         );
 
         let token_admin = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         let token_client = StellarAssetClient::new(&env, &token);
 
         (env, client, admin, token, token_client, project_id)
@@ -98,7 +98,6 @@ mod fuzz {
             client.donate(&token, &donor, &project_id, &amount, &0u32);
 
             let expected_co2 = co2_increment(amount, MAX_CO2_PER_XLM);
-            prop_assert!(expected_co2 <= i128::MAX);
             prop_assert_eq!(client.get_global_co2(), expected_co2);
         }
 

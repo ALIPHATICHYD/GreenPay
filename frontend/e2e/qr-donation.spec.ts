@@ -41,11 +41,11 @@ const MOCK_PROJECT = {
 // ── Helper: mock all API routes the donate page may fetch ────────────────────
 
 async function mockDonatePageApi(page: Page, projectId = PROJECT_ID) {
-  await page.route(`**/api/projects/${projectId}`, (route) =>
+  await page.route(`**/api/v1/projects/${projectId}`, (route) =>
     route.fulfill({ json: { success: true, data: MOCK_PROJECT } })
   );
   // Blanket catch-all for any other /api/** calls
-  await page.route("**/api/**", (route) =>
+  await page.route("**/api/v1/**", (route) =>
     route.fulfill({ json: { success: true, data: [] } })
   );
 }
@@ -102,7 +102,7 @@ test.describe("QR code donation link flow", () => {
     page,
   }) => {
     const badId = "00000000-0000-0000-0000-000000000000";
-    await page.route(`**/api/projects/${badId}`, (route) =>
+    await page.route(`**/api/v1/projects/${badId}`, (route) =>
       route.fulfill({ status: 404, json: { success: false, error: "Not found" } })
     );
 

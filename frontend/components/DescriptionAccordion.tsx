@@ -98,7 +98,7 @@ function AccordionItem({
         style={{ maxHeight, transition: "max-height 320ms ease" }}
       >
         <div ref={contentRef} className="pb-4">
-          <p className="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body">
+          <p className="text-[#4b654b] leading-relaxed text-sm whitespace-pre-wrap font-body">
             {lines.join("\n").trim()}
           </p>
         </div>
@@ -113,7 +113,7 @@ export default function DescriptionAccordion({ description }: { description: str
 
   if (!sections) {
     return (
-      <p className="text-[#5a7a5a] leading-relaxed text-sm whitespace-pre-wrap font-body">
+      <p className="text-[#4b654b] leading-relaxed text-sm whitespace-pre-wrap font-body">
         {description}
       </p>
     );

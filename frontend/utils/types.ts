@@ -20,7 +20,7 @@ export type ProjectCategory =
 /**
  * Lifecycle status for a project in the marketplace.
  */
-export type ProjectStatus = "active" | "completed" | "paused";
+export type ProjectStatus = "active" | "completed" | "paused" | "rejected";
 
 /**
  * A climate project listed on Stellar GreenPay.

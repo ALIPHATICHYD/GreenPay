@@ -145,7 +145,7 @@ export default function BridgePage() {
             <h1 className="font-display text-3xl font-bold text-forest-900 mb-2">
               Bridge USDC to Stellar
             </h1>
-            <p className="text-[#5a7a5a] font-body">
+            <p className="text-[#4b654b] font-body">
               Transfer your Ethereum-based USDC to Stellar using Circle&apos;s Cross-Chain Transfer Protocol (CCTP)
             </p>
           </div>
@@ -271,7 +271,7 @@ export default function BridgePage() {
                   </div>
                   <div className="flex-1">
                     <h3 className="font-semibold text-forest-900 mb-1">{s.title}</h3>
-                    <p className="text-sm text-[#5a7a5a]">{s.description}</p>
+                    <p className="text-sm text-[#4b654b]">{s.description}</p>
                   </div>
                 </div>
               ))}
@@ -308,7 +308,7 @@ export default function BridgePage() {
                       <p className="text-sm font-semibold text-forest-900">
                         {entry.sourceChain} → Stellar
                       </p>
-                      <p className="text-xs text-[#5a7a5a]">
+                      <p className="text-xs text-[#4b654b]">
                         {new Date(entry.timestamp).toLocaleString()}
                       </p>
                     </div>
