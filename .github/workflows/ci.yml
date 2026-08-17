@@ -7,6 +7,19 @@ on:
     branches: [main]
 
 jobs:
+  docs:
+    name: Contributor Docs (command drift)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # Asserts every lint/test/build entry point documented in
+      # docs/getting-started.md §7 still exists. No toolchains needed — this only
+      # checks that the commands the doc names are still declared.
+      - run: node scripts/check-documented-commands.js
+
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
