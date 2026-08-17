@@ -73,7 +73,31 @@ async function mockApi(page: Page) {
 
 // ── Axe helper — assert zero critical/serious violations ─────────────────────
 
+/**
+ * Several pages wrap their content in a `animate-fade-in` (opacity 0 → 1,
+ * ~500ms) on mount. If axe's color-contrast check samples computed colors
+ * while that's still running, it measures a transient, partially-transparent
+ * blend against the background — not the resting-state color — which
+ * produces flaky, timing-dependent "violations" that have nothing to do
+ * with the actual contrast once the page has settled. Neutralize all
+ * CSS animations/transitions before scanning so axe always sees final state.
+ */
+async function disableAnimations(page: Page) {
+  await page.addStyleTag({
+    content: `
+      *, *::before, *::after {
+        animation-duration: 0s !important;
+        animation-delay: 0s !important;
+        transition-duration: 0s !important;
+        transition-delay: 0s !important;
+      }
+    `,
+  });
+}
+
 async function assertNoCriticalViolations(page: Page) {
+  await disableAnimations(page);
+
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
     .analyze();
