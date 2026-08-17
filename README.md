@@ -3,7 +3,7 @@
 > Donate directly to verified climate projects using XLM — every transaction tracked on-chain.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](docs/CONTRIBUTING.md)
 [![Stellar](https://img.shields.io/badge/Stellar-Testnet-blue)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Soroban-Smart%20Contracts-green)](https://soroban.stellar.org)
 
@@ -29,11 +29,9 @@ stellar-greenpay/
 ├── frontend/          # Next.js + React + Tailwind CSS
 ├── backend/           # Node.js + Express API
 ├── contracts/         # Stellar Soroban smart contracts (Rust)
-├── docs/              # Architecture & API documentation
+├── docs/              # Architecture, API, and project documentation
 ├── scripts/           # Deployment & utility scripts
 ├── .github/           # CI/CD workflows & issue templates
-├── CONTRIBUTING.md
-├── ROADMAP.md
 └── LICENSE
 ```
 
@@ -116,9 +114,9 @@ ALLOWED_ORIGINS=http://localhost:3000
 
 ## 🤝 Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). All skill levels welcome!
+See [CONTRIBUTING.md](docs/CONTRIBUTING.md). All skill levels welcome!
 
-Please note that this project is governed by a [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to uphold its terms.
+Please note that this project is governed by a [Code of Conduct](docs/CODE_OF_CONDUCT.md). By participating, you agree to uphold its terms.
 
 ### Secret Scanning
 
@@ -126,7 +124,7 @@ Every push and every pull request to `main` runs Gitleaks with the repo-local `.
 
 ## 🗺 Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned features.
+See [ROADMAP.md](docs/ROADMAP.md) for planned features.
 
 ## 📄 License
 
