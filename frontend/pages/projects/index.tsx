@@ -349,7 +349,13 @@ export default function ProjectsPage() {
                         : "bg-white text-forest-700 border-forest-200"
                     }`}
                     onClick={(e) => {
-                      e.preventDefault();
+                      // Stop the click from bubbling to anything else on the
+                      // card (e.g. its navigation link) — but do NOT call
+                      // preventDefault() here: doing so on a click that
+                      // targets/bubbles through the checkbox itself cancels
+                      // its native checked-state toggle before React's
+                      // controlled `checked` prop ever gets a chance to
+                      // re-apply it.
                       e.stopPropagation();
                     }}
                   >
