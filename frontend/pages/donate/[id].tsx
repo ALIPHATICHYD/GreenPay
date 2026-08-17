@@ -466,7 +466,9 @@ export const getServerSideProps: GetServerSideProps<DonatePageProps> = async (ct
     if (!res.ok) {
       return { props: { project: null, presetAmount } };
     }
-    const data = await res.json();
+    const body = await res.json();
+    // The backend wraps every response as { success, data }.
+    const data = body?.data ?? body;
 
     // Normalise API response shape to DonateProject
     const project: DonateProject = {
