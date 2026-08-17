@@ -13,11 +13,18 @@ function buildCsp(nonce: string, isWidget: boolean): string {
   // a different origin (local dev, or a separate API subdomain in
   // production), NEXT_PUBLIC_API_URL names it explicitly — allowlist that
   // origin too, in every environment, or every API call gets CSP-blocked.
-  const apiOrigin = (() => {
+  // lib/socket.ts also opens a Socket.IO (WebSocket) connection to this same
+  // host for the live donation feed — CSP matches ws(s):// as a distinct
+  // scheme from http(s):// for the *same* host, so both must be listed or
+  // the WebSocket upgrade gets silently blocked while plain fetch works fine.
+  const apiOrigins = (() => {
+    if (!process.env.NEXT_PUBLIC_API_URL) return []
     try {
-      return process.env.NEXT_PUBLIC_API_URL ? new URL(process.env.NEXT_PUBLIC_API_URL).origin : null
+      const { protocol, host } = new URL(process.env.NEXT_PUBLIC_API_URL)
+      const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
+      return [`${protocol}//${host}`, `${wsProtocol}//${host}`]
     } catch {
-      return null
+      return []
     }
   })()
 
@@ -25,7 +32,7 @@ function buildCsp(nonce: string, isWidget: boolean): string {
     "'self'",
     STELLAR_CONNECT,
     'https://api.coingecko.com',
-    ...(apiOrigin ? [apiOrigin] : []),
+    ...apiOrigins,
   ].join(' ')
 
   const directives = [
