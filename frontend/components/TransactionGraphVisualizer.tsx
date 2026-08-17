@@ -233,8 +233,8 @@ export default function TransactionGraphVisualizer({ nodes, edges }: Transaction
     renderer.domElement.addEventListener("click", onClick);
 
     function handleResize() {
-      const w = container.clientWidth;
-      const h = container.clientHeight;
+      const w = container!.clientWidth;
+      const h = container!.clientHeight;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);

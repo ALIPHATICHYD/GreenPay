@@ -50,10 +50,7 @@ api.interceptors.request.use(async (config) => {
     }
 
     if (csrfToken) {
-      config.headers = {
-        ...config.headers,
-        "X-CSRF-Token": csrfToken,
-      };
+      config.headers.set("X-CSRF-Token", csrfToken);
     }
   }
 

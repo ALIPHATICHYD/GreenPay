@@ -43,12 +43,12 @@ router.get("/graph", async (req, res, next) => {
     const edges = [...donationEdges.rows, ...escrowEdges.rows].slice(0, limit);
 
     const nodes = new Map();
-    function touchNode(address) {
+    const touchNode = (address) => {
       if (!nodes.has(address)) {
         nodes.set(address, { id: address, totalIn: 0, totalOut: 0, degree: 0 });
       }
       return nodes.get(address);
-    }
+    };
 
     for (const edge of edges) {
       const amount = parseFloat(edge.amount) || 0;

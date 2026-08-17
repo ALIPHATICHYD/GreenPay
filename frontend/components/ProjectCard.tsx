@@ -28,10 +28,10 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
                 {CATEGORY_ICONS[project.category] || "🌿"}
               </div>
               <div>
-                <p className="text-xs text-[#5a7a5a] font-body">
+                <p className="text-xs text-[#4b654b] font-body">
                   {project.category}
                 </p>
-                <p className="text-xs text-[#8aaa8a] font-body">
+                <p className="text-xs text-[#547454] font-body">
                   {project.location}
                 </p>
               </div>
@@ -64,7 +64,7 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
           <h3 className="font-display font-semibold text-forest-900 text-base leading-snug mb-2 group-hover:text-forest-600 transition-colors line-clamp-2">
             {project.name}
           </h3>
-          <p className="text-[#5a7a5a] text-sm leading-relaxed line-clamp-3 mb-4 flex-1 font-body">
+          <p className="text-[#4b654b] text-sm leading-relaxed line-clamp-3 mb-4 flex-1 font-body">
             {project.description}
           </p>
 
@@ -77,7 +77,7 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
           ) : (
             <div className="flex items-center gap-3">
               <CircularProgress percentage={pct} size={48} strokeWidth={4} />
-              <div className="flex-1 flex justify-between text-xs text-[#8aaa8a] font-body">
+              <div className="flex-1 flex justify-between text-xs text-[#547454] font-body">
                 <div>
                   <span className="font-semibold text-forest-700 block mb-0.5">{formatXLM(project.raisedXLM, 2, localeTag)}</span>
                   {formatUSDEquivalent(project.raisedXLM, xlmUsd, localeTag) && (
@@ -98,7 +98,7 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
 
           {/* Stats row */}
           <div className="flex items-center justify-between pt-3 border-t border-[rgba(34,114,57,0.07)]">
-            <div className="flex items-center gap-3 text-xs text-[#5a7a5a] font-body">
+            <div className="flex items-center gap-3 text-xs text-[#4b654b] font-body">
               <span>👥 {t("project.donorsCount", { count: project.donorCount })}</span>
               <span className="flex items-center gap-1">
                 ♻️ {formatCO2(project.co2OffsetKg, localeTag)}

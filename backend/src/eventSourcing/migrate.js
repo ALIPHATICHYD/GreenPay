@@ -247,7 +247,7 @@ async function rebuildReadModels() {
 
     for (let i = 0; i < totalEvents; i += BATCH_SIZE) {
       const rows = await client.query(
-        `SELECT event_id, payload FROM event_stream WHERE processed = false ORDER BY occurred_at ASC, version ASC LIMIT $1 OFFSET $2`,
+        "SELECT event_id, payload FROM event_stream WHERE processed = false ORDER BY occurred_at ASC, version ASC LIMIT $1 OFFSET $2",
         [BATCH_SIZE, i]
       );
 

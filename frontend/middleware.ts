@@ -9,12 +9,23 @@ const STELLAR_CONNECT = [
 ].join(' ')
 
 function buildCsp(nonce: string, isWidget: boolean): string {
-  // API origin: 'self' covers same-origin deploys; localhost:4000 covers local dev.
+  // API origin: 'self' covers same-origin deploys. When the backend lives on
+  // a different origin (local dev, or a separate API subdomain in
+  // production), NEXT_PUBLIC_API_URL names it explicitly — allowlist that
+  // origin too, in every environment, or every API call gets CSP-blocked.
+  const apiOrigin = (() => {
+    try {
+      return process.env.NEXT_PUBLIC_API_URL ? new URL(process.env.NEXT_PUBLIC_API_URL).origin : null
+    } catch {
+      return null
+    }
+  })()
+
   const connectSrc = [
     "'self'",
     STELLAR_CONNECT,
     'https://api.coingecko.com',
-    ...(process.env.NODE_ENV === 'development' ? ['http://localhost:4000'] : []),
+    ...(apiOrigin ? [apiOrigin] : []),
   ].join(' ')
 
   const directives = [

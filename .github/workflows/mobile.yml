@@ -19,8 +19,21 @@ jobs:
           cache: "npm"
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
+      - name: Check EXPO_TOKEN is configured
+        id: check-token
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -n "$EXPO_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::EXPO_TOKEN secret is not configured — skipping EAS preview build. Add an Expo access token as the EXPO_TOKEN repository secret to enable this workflow."
+          fi
       - uses: expo/expo-github-action@v8
+        if: steps.check-token.outputs.configured == 'true'
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
       - run: eas build --platform all --profile preview --non-interactive
+        if: steps.check-token.outputs.configured == 'true'

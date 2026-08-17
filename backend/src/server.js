@@ -59,19 +59,44 @@ const io = new Server(server, {
 app.set("io", io);
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 150, standardHeaders: true, legacyHeaders: false }));
 
-app.use("/health",        require("./routes/health"));
-app.use("/api/projects",  require("./routes/projects"));
-app.use("/api/donations", require("./routes/donations"));
-app.use("/api/profiles",  require("./routes/profiles"));
-app.use("/api/leaderboard", require("./routes/leaderboard"));
-app.use("/api/updates",        require("./routes/updates"));
-app.use("/api/subscriptions",  require("./routes/subscriptions"));
-app.use("/api/jobs",           require("./routes/jobs"));
-app.use("/api/stats",          require("./routes/stats"));
-app.use("/api/impact",         require("./routes/impact"));
-app.use("/api/ratings",        require("./routes/ratings"));
-app.use("/api/admin",          require("./routes/admin"));
-app.use("/api/network",        require("./routes/network"));
+// ── API versioning ───────────────────────────────────────────────────────────
+// All routes are served under the `/api/v1` prefix. Legacy unversioned `/api/*`
+// requests are redirected to their `/api/v1/*` equivalent with a `Deprecation`
+// header so existing clients keep working. See docs/api.md for the policy.
+const API_V1 = "/api/v1";
+
+app.get(`${API_V1}/csrf-token`, (req, res) => {
+  res.json({ success: true, csrfToken: req.csrfToken() });
+});
+
+app.use("/health",                  require("./routes/health"));
+app.use(`${API_V1}/projects`,       require("./routes/projects"));
+app.use(`${API_V1}/donations`,      require("./routes/donations"));
+app.use(`${API_V1}/profiles`,       require("./routes/profiles"));
+app.use(`${API_V1}/leaderboard`,    require("./routes/leaderboard"));
+app.use(`${API_V1}/updates`,        require("./routes/updates"));
+app.use(`${API_V1}/subscriptions`,  require("./routes/subscriptions"));
+app.use(`${API_V1}/jobs`,           require("./routes/jobs"));
+app.use(`${API_V1}/stats`,          require("./routes/stats"));
+app.use(`${API_V1}/impact`,         require("./routes/impact"));
+app.use(`${API_V1}/ratings`,        require("./routes/ratings"));
+app.use(`${API_V1}/notifications`,  require("./routes/notifications"));
+app.use(`${API_V1}/admin`,          require("./routes/admin"));
+app.use(`${API_V1}/network`,        require("./routes/network"));
+
+// Legacy unversioned routes → redirect to /api/v1 with a deprecation notice.
+app.use("/api", (req, res, next) => {
+  // Already-versioned and Swagger UI requests are handled elsewhere.
+  if (req.path === "/v1" || req.path.startsWith("/v1/") ||
+      req.path === "/docs" || req.path.startsWith("/docs/")) {
+    return next();
+  }
+  res.set("Deprecation", "true");
+  res.set("Link", `<${API_V1}>; rel="successor-version"`);
+  // 308 preserves the request method and body for non-GET clients.
+  // req.url is relative to the "/api" mount and retains the query string.
+  return res.redirect(308, `${API_V1}${req.url}`);
+});
 
 app.use((req, res) => res.status(404).json({ error: `${req.method} ${req.path} not found` }));
 app.use((err, req, res, next) => {

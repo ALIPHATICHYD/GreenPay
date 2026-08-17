@@ -47,11 +47,11 @@ export default function ImpactCertificate(props: {
 
       <div className="px-8 py-8">
         <div className="text-center mb-8">
-          <p className="text-sm text-[#5a7a5a] font-body">Presented to</p>
+          <p className="text-sm text-[#4b654b] font-body">Presented to</p>
           <p className="font-display text-3xl font-bold text-forest-900 mt-2">
             {donorName?.trim() ? donorName : shortenAddress(donorAddress)}
           </p>
-          <p className="text-xs text-[#8aaa8a] mt-2 font-body">
+          <p className="text-xs text-[#547454] mt-2 font-body">
             Donor Address: {shortenAddress(donorAddress, 10)}
           </p>
         </div>
@@ -62,7 +62,7 @@ export default function ImpactCertificate(props: {
             <p className="font-display font-bold text-forest-900 text-lg">
               {formatXLM(totalDonatedXLM, 2, localeTag)}
             </p>
-            <p className="text-xs text-[#8aaa8a] mt-1 font-body uppercase tracking-wider font-bold opacity-60">
+            <p className="text-xs text-[#547454] mt-1 font-body uppercase tracking-wider font-bold opacity-60">
               Total Donated
             </p>
           </div>
@@ -71,7 +71,7 @@ export default function ImpactCertificate(props: {
             <p className="font-display font-bold text-forest-900 text-lg">
               {formatCO2(totalCO2OffsetKg, localeTag)}
             </p>
-            <p className="text-xs text-[#8aaa8a] mt-1 font-body uppercase tracking-wider font-bold opacity-60">
+            <p className="text-xs text-[#547454] mt-1 font-body uppercase tracking-wider font-bold opacity-60">
               CO₂ Offset
             </p>
           </div>
@@ -80,7 +80,7 @@ export default function ImpactCertificate(props: {
             <p className="font-display font-bold text-forest-900 text-lg">
               {badgeTier ? badgeLabel(badgeTier) : "Supporter"}
             </p>
-            <p className="text-xs text-[#8aaa8a] mt-1 font-body uppercase tracking-wider font-bold opacity-60">
+            <p className="text-xs text-[#547454] mt-1 font-body uppercase tracking-wider font-bold opacity-60">
               Badge Tier
             </p>
           </div>
@@ -91,7 +91,7 @@ export default function ImpactCertificate(props: {
             Projects Supported
           </h3>
           {projectsSupported.length === 0 ? (
-            <p className="text-sm text-[#5a7a5a] font-body">
+            <p className="text-sm text-[#4b654b] font-body">
               Your supported projects will appear here after your first donation.
             </p>
           ) : (
@@ -105,17 +105,17 @@ export default function ImpactCertificate(props: {
             </ul>
           )}
           {projectsSupported.length > 8 && (
-            <p className="text-xs text-[#5a7a5a] mt-2 font-body">
+            <p className="text-xs text-[#4b654b] mt-2 font-body">
               +{projectsSupported.length - 8} more
             </p>
           )}
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mt-8 pt-6 border-t border-forest-100">
-          <p className="text-xs text-[#8aaa8a] font-body">
+          <p className="text-xs text-[#547454] font-body">
             Issued on {issuedDate}
           </p>
-          <p className="text-xs text-[#8aaa8a] font-body">
+          <p className="text-xs text-[#547454] font-body">
             Verified by on-chain donation history
           </p>
         </div>

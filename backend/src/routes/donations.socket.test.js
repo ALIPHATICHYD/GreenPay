@@ -1,6 +1,7 @@
 "use strict";
 
-jest.mock("../db/pool", () => ({ connect: jest.fn() }));
+jest.mock("../db/pool", () => ({ query: jest.fn() }));
+jest.mock("../eventSourcing/commandBus", () => ({ execute: jest.fn() }));
 jest.mock("../middleware/rateLimiter", () => ({
   createRateLimiter: () => (req, res, next) => next(),
 }));
@@ -11,6 +12,8 @@ const { Server: SocketServer } = require("socket.io");
 const { io: ioc } = require("socket.io-client");
 const supertest = require("supertest");
 const pool = require("../db/pool");
+const { execute } = require("../eventSourcing/commandBus");
+const { DonationRecordedEvent } = require("../eventSourcing/events");
 
 function makePublicKey(char = "A") {
   return `G${char.repeat(55)}`;
@@ -24,17 +27,24 @@ function queryResult(rows = []) {
   return { rows };
 }
 
-function createMockClient(...responses) {
-  const client = { query: jest.fn(), release: jest.fn() };
-  responses.forEach((r) => {
-    if (r instanceof Error) {
-      client.query.mockRejectedValueOnce(r);
-    } else {
-      client.query.mockResolvedValueOnce(r);
-    }
+function mockSuccessfulDonation({ projectId, donorAddress, amountXlm, transactionHash }) {
+  pool.query.mockResolvedValueOnce(queryResult([{ id: projectId }])); // project lookup
+  const donationEvent = new DonationRecordedEvent({
+    aggregateId: `Donation:${transactionHash}`,
+    version: 1,
+    actor: donorAddress,
+    projectId,
+    donorAddress,
+    amountXlm,
+    currency: "XLM",
+    message: null,
+    transactionHash,
   });
-  pool.connect.mockResolvedValue(client);
-  return client;
+  execute.mockResolvedValueOnce({
+    events: [donationEvent],
+    data: { donationId: donationEvent.eventId, amountXlm: Number.parseFloat(amountXlm) },
+    deduplicated: false,
+  });
 }
 
 describe("POST /api/donations → donation_event WebSocket broadcast", () => {
@@ -75,29 +85,13 @@ describe("POST /api/donations → donation_event WebSocket broadcast", () => {
     (done) => {
       const donorAddress = makePublicKey("W");
       const transactionHash = makeTxHash("7");
-      const donationRow = {
-        id: "socket-donation-1",
-        project_id: "project-ws",
-        donor_address: donorAddress,
-        amount_xlm: "25",
-        amount: "25",
-        currency: "XLM",
-        message: null,
-        transaction_hash: transactionHash,
-        created_at: new Date().toISOString(),
-      };
 
-      createMockClient(
-        queryResult([{ id: "project-ws" }]),   // SELECT project
-        queryResult([]),                          // dedup check
-        queryResult(),                            // BEGIN
-        queryResult([donationRow]),               // INSERT donation
-        queryResult([]),                          // SELECT donation_matches (empty)
-        queryResult(),                            // UPDATE projects
-        queryResult([]),                          // SELECT * FROM profiles (new donor)
-        queryResult([{ count: "1" }]),            // SELECT COUNT(DISTINCT project_id)
-        queryResult(),                            // INSERT INTO profiles
-      );
+      mockSuccessfulDonation({
+        projectId: "project-ws",
+        donorAddress,
+        amountXlm: "25",
+        transactionHash,
+      });
 
       const socket = ioc(baseUrl, {
         transports: ["websocket"],
@@ -155,9 +149,7 @@ describe("POST /api/donations → donation_event WebSocket broadcast", () => {
       const donorAddress = makePublicKey("X");
       const transactionHash = makeTxHash("8");
 
-      createMockClient(
-        queryResult([]),  // SELECT project → empty (not found)
-      );
+      pool.query.mockResolvedValueOnce(queryResult([])); // project lookup → not found
 
       const socket = ioc(baseUrl, {
         transports: ["websocket"],
@@ -185,6 +177,7 @@ describe("POST /api/donations → donation_event WebSocket broadcast", () => {
             try {
               expect(res.status).toBe(404);
               expect(eventReceived).toBe(false);
+              expect(execute).not.toHaveBeenCalled();
               done();
             } catch (assertionError) {
               done(assertionError);
@@ -202,29 +195,13 @@ describe("POST /api/donations → donation_event WebSocket broadcast", () => {
     (done) => {
       const donorAddress = makePublicKey("Y");
       const transactionHash = makeTxHash("9");
-      const donationRow = {
-        id: "socket-donation-2",
-        project_id: "project-ws-2",
-        donor_address: donorAddress,
-        amount_xlm: "100",
-        amount: "100",
-        currency: "XLM",
-        message: null,
-        transaction_hash: transactionHash,
-        created_at: new Date().toISOString(),
-      };
 
-      createMockClient(
-        queryResult([{ id: "project-ws-2" }]),
-        queryResult([]),
-        queryResult(),
-        queryResult([donationRow]),
-        queryResult([]),
-        queryResult(),
-        queryResult([]),
-        queryResult([{ count: "1" }]),
-        queryResult(),
-      );
+      mockSuccessfulDonation({
+        projectId: "project-ws-2",
+        donorAddress,
+        amountXlm: "100",
+        transactionHash,
+      });
 
       const socket = ioc(baseUrl, {
         transports: ["websocket"],
@@ -241,7 +218,7 @@ describe("POST /api/donations → donation_event WebSocket broadcast", () => {
           clearTimeout(deadline);
           socket.disconnect();
           try {
-            expect(data.amountXLM).toBe("100");
+            expect(data.amountXLM).toBe(100);
             done();
           } catch (assertionError) {
             done(assertionError);

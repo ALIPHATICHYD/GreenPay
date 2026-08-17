@@ -1,8 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token,
-    vec, Address, Bytes, Env, String, Symbol, IntoVal,
+    contract, contractimpl, contracttype, token, vec, Address, Bytes, Env, IntoVal, String, Symbol,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -87,7 +86,6 @@ pub struct DaoGovernanceContract;
 
 #[contractimpl]
 impl DaoGovernanceContract {
-
     // ─── Requirement 1: Initialisation ─────────────────────────────────────
 
     pub fn initialize(
@@ -107,7 +105,7 @@ impl DaoGovernanceContract {
         if voting_period_ledgers < MIN_VOTING_WINDOW {
             panic!("voting period too short");
         }
-        if timelock_ledgers <= 0 {
+        if timelock_ledgers == 0 {
             panic!("timelock must be positive");
         }
         let config = Config {
@@ -119,15 +117,17 @@ impl DaoGovernanceContract {
         };
         env.storage().instance().set(&DataKey::Config, &config);
         env.storage().instance().set(&DataKey::ProposalCount, &0u64);
-        env.storage().instance().extend_ttl(MIN_VOTING_WINDOW, MAX_LOCK_LEDGERS);
-        env.events().publish(
-            (Symbol::new(&env, "init"),),
-            config,
-        );
+        env.storage()
+            .instance()
+            .extend_ttl(MIN_VOTING_WINDOW, MAX_LOCK_LEDGERS);
+        env.events().publish((Symbol::new(&env, "init"),), config);
     }
 
     pub fn get_config(env: Env) -> Config {
-        env.storage().instance().get(&DataKey::Config).expect("not initialized")
+        env.storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized")
     }
 
     // ─── Requirement 2: GP Token Locking ───────────────────────────────────
@@ -165,7 +165,11 @@ impl DaoGovernanceContract {
         env.storage().persistent().set(&lock_key, &lock);
         extend_persistent_ttl(&env, &lock_key);
 
-        let config: Config = env.storage().instance().get(&DataKey::Config).expect("not initialized");
+        let config: Config = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized");
         let token_client = token::Client::new(&env, &config.gp_token);
         token_client.transfer(&voter, &env.current_contract_address(), &amount);
 
@@ -202,7 +206,9 @@ impl DaoGovernanceContract {
         if new_unlock_ledger <= lock.unlock_ledger {
             panic!("new unlock must be later");
         }
-        let max_unlock = env.ledger().sequence()
+        let max_unlock = env
+            .ledger()
+            .sequence()
             .checked_add(MAX_LOCK_LEDGERS)
             .expect("max unlock overflow");
         if new_unlock_ledger > max_unlock {
@@ -232,14 +238,16 @@ impl DaoGovernanceContract {
         let amount = lock.amount;
         env.storage().persistent().remove(&lock_key);
 
-        let config: Config = env.storage().instance().get(&DataKey::Config).expect("not initialized");
+        let config: Config = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized");
         let token_client = token::Client::new(&env, &config.gp_token);
         token_client.transfer(&env.current_contract_address(), &voter, &amount);
 
-        env.events().publish(
-            (Symbol::new(&env, "withdrw"), voter),
-            amount,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "withdrw"), voter), amount);
     }
 
     // ─── Requirement 5: Voting Power Calculation ───────────────────────────
@@ -286,8 +294,11 @@ impl DaoGovernanceContract {
         if power <= 0 {
             panic!("insufficient voting power to propose");
         }
-        let count: u64 = env.storage().instance()
-            .get(&DataKey::ProposalCount).unwrap_or(0);
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCount)
+            .unwrap_or(0);
         let proposal_id = count.checked_add(1).expect("proposal id overflow");
         let proposal = Proposal {
             id: proposal_id,
@@ -305,26 +316,37 @@ impl DaoGovernanceContract {
             executable_from_ledger: 0,
             created_ledger: current,
         };
-        env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
         extend_persistent_ttl(&env, &DataKey::Proposal(proposal_id));
-        env.storage().instance().set(&DataKey::ProposalCount, &proposal_id);
-        env.storage().instance().extend_ttl(MIN_VOTING_WINDOW, MAX_LOCK_LEDGERS);
-        env.events().publish(
-            (Symbol::new(&env, "prop_new"), proposal_id),
-            (),
-        );
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCount, &proposal_id);
+        env.storage()
+            .instance()
+            .extend_ttl(MIN_VOTING_WINDOW, MAX_LOCK_LEDGERS);
+        env.events()
+            .publish((Symbol::new(&env, "prop_new"), proposal_id), ());
         proposal_id
     }
 
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         let key = DataKey::Proposal(proposal_id);
-        let proposal: Proposal = env.storage().persistent().get(&key).expect("proposal not found");
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("proposal not found");
         extend_persistent_ttl(&env, &key);
         proposal
     }
 
     pub fn get_proposal_count(env: Env) -> u64 {
-        env.storage().instance().get(&DataKey::ProposalCount).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::ProposalCount)
+            .unwrap_or(0)
     }
 
     // ─── Requirement 7: Discussion → Snapshot ──────────────────────────────
@@ -332,13 +354,22 @@ impl DaoGovernanceContract {
     pub fn advance_to_snapshot(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
         let key = DataKey::Proposal(proposal_id);
-        let mut proposal: Proposal = env.storage().persistent().get(&key).expect("proposal not found");
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("proposal not found");
         if proposal.stage != ProposalStage::Discussion {
             panic!("invalid stage transition");
         }
-        let config: Config = env.storage().instance().get(&DataKey::Config).expect("not initialized");
+        let config: Config = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized");
         if caller != config.dao_admin {
-            let power = Self::get_voting_power(env.clone(), caller.clone(), env.ledger().sequence());
+            let power =
+                Self::get_voting_power(env.clone(), caller.clone(), env.ledger().sequence());
             if power <= 0 {
                 panic!("not authorised to advance proposal");
             }
@@ -364,7 +395,11 @@ impl DaoGovernanceContract {
     pub fn cast_vote(env: Env, voter: Address, proposal_id: u64, approve: bool) {
         voter.require_auth();
         let key = DataKey::Proposal(proposal_id);
-        let mut proposal: Proposal = env.storage().persistent().get(&key).expect("proposal not found");
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("proposal not found");
         if proposal.stage != ProposalStage::SnapshotVote {
             panic!("voting not active");
         }
@@ -379,16 +414,20 @@ impl DaoGovernanceContract {
         if power <= 0 {
             panic!("no voting power at snapshot");
         }
-        let snapshot = Snapshot { voting_power: power };
+        let snapshot = Snapshot {
+            voting_power: power,
+        };
         env.storage().persistent().set(&snap_key, &snapshot);
         extend_persistent_ttl(&env, &snap_key);
 
         if approve {
-            proposal.votes_for = proposal.votes_for
+            proposal.votes_for = proposal
+                .votes_for
                 .checked_add(power)
                 .expect("votes_for overflow");
         } else {
-            proposal.votes_against = proposal.votes_against
+            proposal.votes_against = proposal
+                .votes_against
                 .checked_add(power)
                 .expect("votes_against overflow");
         }
@@ -404,16 +443,25 @@ impl DaoGovernanceContract {
 
     pub fn finalise_vote(env: Env, proposal_id: u64) {
         let key = DataKey::Proposal(proposal_id);
-        let mut proposal: Proposal = env.storage().persistent().get(&key).expect("proposal not found");
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("proposal not found");
         if proposal.stage != ProposalStage::SnapshotVote {
             panic!("invalid stage transition");
         }
         if env.ledger().sequence() <= proposal.vote_end_ledger {
             panic!("voting period not closed");
         }
-        let config: Config = env.storage().instance().get(&DataKey::Config).expect("not initialized");
+        let config: Config = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized");
 
-        let total_votes = proposal.votes_for
+        let total_votes = proposal
+            .votes_for
             .checked_add(proposal.votes_against)
             .expect("total votes overflow");
 
@@ -446,7 +494,11 @@ impl DaoGovernanceContract {
 
     pub fn execute_proposal(env: Env, proposal_id: u64) {
         let key = DataKey::Proposal(proposal_id);
-        let proposal: Proposal = env.storage().persistent().get(&key).expect("proposal not found");
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("proposal not found");
         if proposal.stage != ProposalStage::Execution {
             panic!("proposal not executable");
         }
@@ -454,27 +506,23 @@ impl DaoGovernanceContract {
             panic!("timelock not elapsed");
         }
         let args = vec![&env, proposal.calldata.into_val(&env)];
-        env.invoke_contract::<()>(
-            &proposal.target_contract,
-            &proposal.function,
-            args,
-        );
+        env.invoke_contract::<()>(&proposal.target_contract, &proposal.function, args);
 
         let mut executed = proposal;
         executed.stage = ProposalStage::Executed;
         env.storage().persistent().set(&key, &executed);
         extend_persistent_ttl(&env, &key);
-        env.events().publish(
-            (Symbol::new(&env, "executed"), proposal_id),
-            (),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "executed"), proposal_id), ());
     }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn extend_persistent_ttl(env: &Env, key: &DataKey) {
-    env.storage().persistent().extend_ttl(key, MIN_VOTING_WINDOW, MAX_LOCK_LEDGERS);
+    env.storage()
+        .persistent()
+        .extend_ttl(key, MIN_VOTING_WINDOW, MAX_LOCK_LEDGERS);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -511,7 +559,9 @@ mod tests {
     fn deploy(env: &Env) -> (Address, Config, DaoGovernanceContractClient<'static>) {
         let admin = Address::generate(env);
         let token_admin = Address::generate(env);
-        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         env.as_contract(&token, || {
             env.storage().instance().extend_ttl(1000000, 1000000);
         });
@@ -543,11 +593,7 @@ mod tests {
         )
     }
 
-    fn snapshot(
-        client: &DaoGovernanceContractClient<'static>,
-        caller: &Address,
-        pid: u64,
-    ) {
+    fn snapshot(client: &DaoGovernanceContractClient<'static>, caller: &Address, pid: u64) {
         client.advance_to_snapshot(caller, &pid);
     }
 
@@ -560,10 +606,7 @@ mod tests {
         client.cast_vote(voter, &pid, &approve);
     }
 
-    fn finalise(
-        client: &DaoGovernanceContractClient<'static>,
-        pid: u64,
-    ) {
+    fn finalise(client: &DaoGovernanceContractClient<'static>, pid: u64) {
         client.finalise_vote(&pid);
     }
 
@@ -816,7 +859,8 @@ mod tests {
 
         assert_eq!(balance_of(&env, &cfg.gp_token, &cid), 5000);
 
-        env.ledger().set_sequence_number(env.ledger().sequence() + short + 1);
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + short + 1);
         client.withdraw(&v);
 
         assert_eq!(balance_of(&env, &cfg.gp_token, &v), bal_before);
@@ -895,7 +939,10 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         let (_cid, _cfg, client) = deploy(&env);
-        assert_eq!(client.get_voting_power(&Address::generate(&env), &100u32), 0);
+        assert_eq!(
+            client.get_voting_power(&Address::generate(&env), &100u32),
+            0
+        );
     }
 
     #[test]
@@ -1241,8 +1288,11 @@ mod tests {
         client.lock_tokens(&b, &500_000i128, &MAX_LOCK_LEDGERS);
 
         let pid = client.create_proposal(
-            &a, &String::from_str(&env, "X"), &String::from_str(&env, "Y"),
-            &target, &Symbol::new(&env, "noop"),
+            &a,
+            &String::from_str(&env, "X"),
+            &String::from_str(&env, "Y"),
+            &target,
+            &Symbol::new(&env, "noop"),
             &Bytes::new(&env),
         );
         snapshot(&client, &a, pid);
@@ -1287,8 +1337,11 @@ mod tests {
         client.lock_tokens(&b, &500_000i128, &MAX_LOCK_LEDGERS);
 
         let pid = client.create_proposal(
-            &a, &String::from_str(&env, "X"), &String::from_str(&env, "Y"),
-            &target, &Symbol::new(&env, "noop"),
+            &a,
+            &String::from_str(&env, "X"),
+            &String::from_str(&env, "Y"),
+            &target,
+            &Symbol::new(&env, "noop"),
             &Bytes::new(&env),
         );
         snapshot(&client, &a, pid);
@@ -1316,7 +1369,8 @@ mod tests {
         assert_eq!(balance_of(&env, &cfg.gp_token, &v), bal_before - 10_000);
         assert_eq!(balance_of(&env, &cfg.gp_token, &cid), 10_000);
 
-        env.ledger().set_sequence_number(env.ledger().sequence() + MIN_LOCK_LEDGERS + 1);
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + MIN_LOCK_LEDGERS + 1);
         client.withdraw(&v);
         assert_eq!(balance_of(&env, &cfg.gp_token, &v), bal_before);
         assert_eq!(balance_of(&env, &cfg.gp_token, &cid), 0);
@@ -1402,7 +1456,10 @@ mod tests {
         client.lock_tokens(&p, &500_000i128, &MAX_LOCK_LEDGERS);
         let pid = mk_proposal(&env, &client, &p);
         snapshot(&client, &p, pid);
-        assert_eq!(client.get_voting_power(&Address::generate(&env), &env.ledger().sequence()), 0);
+        assert_eq!(
+            client.get_voting_power(&Address::generate(&env), &env.ledger().sequence()),
+            0
+        );
     }
 
     // ─── R13: Calldata Round-Trip ─────────────────────────────────────────
@@ -1419,8 +1476,12 @@ mod tests {
 
         let orig = Bytes::from_slice(&env, &[1, 2, 3, 255, 0, 128]);
         let pid = client.create_proposal(
-            &v, &String::from_str(&env, "T"), &String::from_str(&env, "D"),
-            &Address::generate(&env), &Symbol::new(&env, "f"), &orig,
+            &v,
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &Address::generate(&env),
+            &Symbol::new(&env, "f"),
+            &orig,
         );
         let p = client.get_proposal(&pid);
         assert_eq!(p.calldata, orig);
@@ -1438,8 +1499,12 @@ mod tests {
         client.lock_tokens(&v, &500_000i128, &MAX_LOCK_LEDGERS);
 
         let pid = client.create_proposal(
-            &v, &String::from_str(&env, "T"), &String::from_str(&env, "D"),
-            &Address::generate(&env), &Symbol::new(&env, "f"), &Bytes::new(&env),
+            &v,
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &Address::generate(&env),
+            &Symbol::new(&env, "f"),
+            &Bytes::new(&env),
         );
         assert_eq!(client.get_proposal(&pid).calldata.len(), 0);
     }
@@ -1461,8 +1526,11 @@ mod tests {
         client.lock_tokens(&b, &500_000i128, &MAX_LOCK_LEDGERS);
 
         let pid = client.create_proposal(
-            &a, &String::from_str(&env, "X"), &String::from_str(&env, "Y"),
-            &target, &Symbol::new(&env, "noop"),
+            &a,
+            &String::from_str(&env, "X"),
+            &String::from_str(&env, "Y"),
+            &target,
+            &Symbol::new(&env, "noop"),
             &Bytes::new(&env),
         );
         snapshot(&client, &a, pid);

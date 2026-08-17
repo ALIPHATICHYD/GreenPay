@@ -141,11 +141,8 @@ router.get("/", async (req, res, next) => {
 
     values.push(Math.min(Number.parseInt(limit, 10) || 50, 100));
 
-    let query = "SELECT * FROM projects ";
-    if (where.length) {
-      query += "WHERE " + where.join(" AND ") + " ";
-    }
-    query += "ORDER BY created_at DESC LIMIT $" + values.length;
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")} ` : "";
+    const query = `SELECT * FROM projects ${whereClause}ORDER BY created_at DESC LIMIT $${values.length}`;
 
     const result = await pool.query(query, values);
 
@@ -352,9 +349,9 @@ router.post("/admin/register", async (req, res) => {
       fee: "1000", 
       networkPassphrase: NETWORK_PASSPHRASE 
     })
-    .addOperation(contract.call("register_project", adminAddress, projectId, name, wallet, parseInt(co2PerXLM)))
-    .setTimeout(30)
-    .build();
+      .addOperation(contract.call("register_project", adminAddress, projectId, name, wallet, parseInt(co2PerXLM)))
+      .setTimeout(30)
+      .build();
 
     logAdminAction({
       actor: adminAddress,

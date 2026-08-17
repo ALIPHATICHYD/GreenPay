@@ -11,21 +11,20 @@ router.get("/", async (req, res, next) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
     const period = req.query.period || "all";
 
-    let query = `
+    const periodFilter =
+      period === "month"
+        ? " AND d.created_at >= NOW() - INTERVAL '30 days' "
+        : period === "year"
+          ? " AND d.created_at >= NOW() - INTERVAL '1 year' "
+          : "";
+
+    const query = `
       SELECT p.public_key, p.display_name, p.badges,
              COALESCE(SUM(d.amount_xlm), 0)::NUMERIC AS total_donated_xlm,
              COUNT(DISTINCT d.project_id)::INTEGER AS projects_supported
       FROM profiles p
       LEFT JOIN donations d ON p.public_key = d.donor_address
-    `;
-
-    if (period === "month") {
-      query += " AND d.created_at >= NOW() - INTERVAL '30 days' ";
-    } else if (period === "year") {
-      query += " AND d.created_at >= NOW() - INTERVAL '1 year' ";
-    }
-
-    query += `
+      ${periodFilter}
       GROUP BY p.public_key, p.display_name, p.badges
       ORDER BY total_donated_xlm DESC
       LIMIT $1

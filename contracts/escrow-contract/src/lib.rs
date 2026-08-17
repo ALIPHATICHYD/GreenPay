@@ -6,7 +6,9 @@
 //! `resolve_dispute`. If a job's `expiry_ledger` passes with no release or
 //! dispute, the client can reclaim funds with `cancel_job`.
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -128,8 +130,11 @@ impl EscrowContract {
         }
 
         job.status = JobStatus::Disputed;
-        env.storage().instance().set(&DataKey::Job(job_id.clone()), &job);
-        env.events().publish((symbol_short!("disputed"), caller), job_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::Job(job_id.clone()), &job);
+        env.events()
+            .publish((symbol_short!("disputed"), caller), job_id);
     }
 
     /// Admin resolves a disputed job: releases to the freelancer or refunds the client.
@@ -162,9 +167,13 @@ impl EscrowContract {
             token_client.transfer(&contract_addr, &job.client, &job.amount);
             job.status = JobStatus::Refunded;
         }
-        env.storage().instance().set(&DataKey::Job(job_id.clone()), &job);
-        env.events()
-            .publish((symbol_short!("resolved"), admin), (job_id, release_to_freelancer));
+        env.storage()
+            .instance()
+            .set(&DataKey::Job(job_id.clone()), &job);
+        env.events().publish(
+            (symbol_short!("resolved"), admin),
+            (job_id, release_to_freelancer),
+        );
     }
 
     /// Client reclaims funds once the job's expiry ledger has passed without
@@ -233,7 +242,9 @@ mod tests {
         let client = Address::generate(&env);
         let freelancer = Address::generate(&env);
         let token_admin = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         let token_client = StellarAssetClient::new(&env, &token);
 
         let amount = 100_i128;
@@ -241,9 +252,26 @@ mod tests {
 
         let job_id = String::from_str(&env, "job-1");
         let expiry_ledger = env.ledger().sequence() + EXPIRY_WINDOW;
-        client_handle.create_job(&client, &freelancer, &job_id, &token, &amount, &expiry_ledger);
+        client_handle.create_job(
+            &client,
+            &freelancer,
+            &job_id,
+            &token,
+            &amount,
+            &expiry_ledger,
+        );
 
-        (env, client_handle, admin, client, freelancer, token, job_id, amount, expiry_ledger)
+        (
+            env,
+            client_handle,
+            admin,
+            client,
+            freelancer,
+            token,
+            job_id,
+            amount,
+            expiry_ledger,
+        )
     }
 
     #[test]
@@ -270,7 +298,9 @@ mod tests {
         let client = Address::generate(&env);
         let freelancer = Address::generate(&env);
         let token_admin = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         StellarAssetClient::new(&env, &token).mint(&client, &100);
 
         let current = env.ledger().sequence();
@@ -286,7 +316,8 @@ mod tests {
 
     #[test]
     fn dispute_by_client_moves_job_to_disputed() {
-        let (_env, contract, _admin, client, _freelancer, _token, job_id, _amount, _expiry) = setup();
+        let (_env, contract, _admin, client, _freelancer, _token, job_id, _amount, _expiry) =
+            setup();
 
         contract.dispute(&client, &job_id);
 
@@ -296,7 +327,8 @@ mod tests {
 
     #[test]
     fn dispute_by_freelancer_moves_job_to_disputed() {
-        let (_env, contract, _admin, _client, freelancer, _token, job_id, _amount, _expiry) = setup();
+        let (_env, contract, _admin, _client, freelancer, _token, job_id, _amount, _expiry) =
+            setup();
 
         contract.dispute(&freelancer, &job_id);
 
@@ -307,7 +339,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Only the client or freelancer can dispute this job")]
     fn dispute_by_unrelated_address_panics() {
-        let (env, contract, _admin, _client, _freelancer, _token, job_id, _amount, _expiry) = setup();
+        let (env, contract, _admin, _client, _freelancer, _token, job_id, _amount, _expiry) =
+            setup();
         let stranger = Address::generate(&env);
         contract.dispute(&stranger, &job_id);
     }
@@ -341,7 +374,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Only admin can resolve disputes")]
     fn resolve_dispute_by_non_admin_panics() {
-        let (env, contract, _admin, client, _freelancer, _token, job_id, _amount, _expiry) = setup();
+        let (env, contract, _admin, client, _freelancer, _token, job_id, _amount, _expiry) =
+            setup();
         contract.dispute(&client, &job_id);
         let impostor = Address::generate(&env);
         contract.resolve_dispute(&impostor, &job_id, &true);
@@ -349,7 +383,8 @@ mod tests {
 
     #[test]
     fn cancel_after_expiry_refunds_client() {
-        let (env, contract, _admin, client, _freelancer, token, job_id, amount, expiry_ledger) = setup();
+        let (env, contract, _admin, client, _freelancer, token, job_id, amount, expiry_ledger) =
+            setup();
         env.ledger().set_sequence_number(expiry_ledger + 1);
 
         contract.cancel_job(&client, &job_id);
@@ -363,14 +398,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "Job has not expired yet")]
     fn cancel_before_expiry_fails() {
-        let (_env, contract, _admin, client, _freelancer, _token, job_id, _amount, _expiry) = setup();
+        let (_env, contract, _admin, client, _freelancer, _token, job_id, _amount, _expiry) =
+            setup();
         contract.cancel_job(&client, &job_id);
     }
 
     #[test]
     #[should_panic(expected = "Only the client can cancel this job")]
     fn cancel_by_non_client_panics() {
-        let (env, contract, _admin, _client, freelancer, _token, job_id, _amount, expiry_ledger) = setup();
+        let (env, contract, _admin, _client, freelancer, _token, job_id, _amount, expiry_ledger) =
+            setup();
         env.ledger().set_sequence_number(expiry_ledger + 1);
         contract.cancel_job(&freelancer, &job_id);
     }

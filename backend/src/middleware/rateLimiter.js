@@ -1,4 +1,4 @@
-const rateLimit = require('express-rate-limit')
+const rateLimit = require("express-rate-limit");
 
 /**
  * Factory function to create reusable rate limiters
@@ -12,9 +12,9 @@ const createRateLimiter = (maxRequests, windowMinutes) => {
     standardHeaders: true,
     legacyHeaders: false,
     handler: (req, res) => {
-      res.set('Retry-After', Math.ceil(windowMinutes * 60));
+      res.set("Retry-After", Math.ceil(windowMinutes * 60));
       return res.status(429).json({
-        message: 'Too many requests — Try again later.',
+        message: "Too many requests — Try again later.",
       });
     },
   });

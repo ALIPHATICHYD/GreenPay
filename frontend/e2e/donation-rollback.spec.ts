@@ -28,7 +28,10 @@ import { test, expect, type Page, type Route } from "@playwright/test";
 // ── Mock data ───────────────────────────────────────────────────────────────
 
 const MOCK_PROJECT_ID = "8d9ac19b-52eb-42f7-80d9-19a88ba59e43";
-const MOCK_WALLET     = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
+// A real, checksum-valid ed25519 public key (test-only, no funds/authority) —
+// the donate flow builds a real Stellar TransactionBuilder client-side, which
+// validates the destination's StrKey checksum before any network call happens.
+const MOCK_WALLET     = "GDXZGJFT2SHNKNCDXIFBO3MIJ2MZSMNFLUR6MJWW2PZMRGDHK43CJHHX";
 // A real, checksum-valid ed25519 keypair (test-only, no funds/authority) —
 // needed because the donate flow constructs a real Stellar `Account`/
 // `TransactionBuilder` client-side, which validates the StrKey checksum.

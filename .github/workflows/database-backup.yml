@@ -25,8 +25,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client
       
+      - name: Check AWS credentials are configured
+        id: check-aws
+        if: github.event.inputs.storage_type != 'gcs'
+        env:
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$AWS_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Configure AWS credentials
-        if: github.event.inputs.storage_type != 'gcs' && secrets.AWS_ACCESS_KEY_ID != ''
+        if: github.event.inputs.storage_type != 'gcs' && steps.check-aws.outputs.configured == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
