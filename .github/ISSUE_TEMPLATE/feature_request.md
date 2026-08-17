@@ -12,7 +12,7 @@ What problem does this solve?
 What should be built?
 
 ## Is this on the roadmap?
-Check [ROADMAP.md](../../ROADMAP.md).
+Check [ROADMAP.md](../../docs/ROADMAP.md).
 
 ## Additional context
 Any mockups or references?

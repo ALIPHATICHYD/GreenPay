@@ -413,7 +413,7 @@ View workflow status:
    ```
 
 3. **Full Documentation**:
-   - [DEPLOYMENT_GUIDE.md](../DEPLOYMENT_GUIDE.md)
+   - [DEPLOYMENT_GUIDE.md](../docs/DEPLOYMENT_GUIDE.md)
    - [TESTING_STRATEGY.md](../contracts/TESTING_STRATEGY.md)
    - [Stellar Soroban Docs](https://developers.stellar.org/docs/learn/introduction)
 

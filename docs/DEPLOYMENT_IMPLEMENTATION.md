@@ -245,8 +245,9 @@ GreenPay/
 │   ├── TESTING_STRATEGY.md           # Testing guide
 │   └── [greenpay-contract/...]       # Individual contracts
 ├── Makefile.contracts                # Convenient commands
-├── DEPLOYMENT_GUIDE.md               # Full guide
-└── DEPLOYMENT_IMPLEMENTATION.md      # This file
+└── docs/
+    ├── DEPLOYMENT_GUIDE.md           # Full guide
+    └── DEPLOYMENT_IMPLEMENTATION.md  # This file
 ```
 
 ## Key Features

@@ -231,7 +231,7 @@ jobs:
             4. DAO members vote to approve
             5. Automated execution after approval
 
-            See the [DEPLOYMENT_GUIDE.md](https://github.com/${{ github.repository }}/blob/main/DEPLOYMENT_GUIDE.md) for details.
+            See the [DEPLOYMENT_GUIDE.md](https://github.com/${{ github.repository }}/blob/main/docs/DEPLOYMENT_GUIDE.md) for details.
             `;
 
             github.rest.issues.createComment({
