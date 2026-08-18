@@ -36,7 +36,7 @@ services:
       - "4000:4000"
     environment:
       - PORT=4000
-      - NODE_ENV=development
+      - NODE_ENV=production
       - STELLAR_NETWORK=testnet
       - HORIZON_URL=https://horizon-testnet.stellar.org
       - ALLOWED_ORIGINS=http://localhost:3000
