@@ -117,23 +117,39 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Deploy Ephemeral Staging Stack
+        run: |
+          docker compose up -d --build
+          echo "Waiting for ephemeral staging environment to become healthy..."
+          timeout 120 bash -c '
+            until curl -sf http://localhost:3000 >/dev/null && curl -sf http://localhost:4000/health >/dev/null; do
+              echo "Waiting for frontend (:3000) and backend (:4000)..."
+              sleep 3
+            done
+          '
+          echo "Ephemeral staging environment is fully online."
+
       - name: Run ZAP Baseline Scan
         id: zap_scan
-        # The staging target isn't always deployed/reachable at the time this
-        # CI job runs (e.g. between deploys, or on branches without their own
-        # staging env) — a DNS/connection failure here is an environment
-        # precondition, not a code defect, so it must not fail the whole build.
-        continue-on-error: true
         uses: zaproxy/action-baseline@v0.14.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          target: 'https://staging.greenpay.app'
-          cmd_options: '-J report.json'
+          target: 'http://localhost:3000'
+          cmd_options: '-J report.json -r report_html.html'
           fail_action: false
 
       - name: Run Security Triage Script
-        if: steps.zap_scan.outcome == 'success'
+        if: always() && steps.zap_scan.conclusion != 'skipped'
         run: node scripts/triage-zap.js
+
+      - name: Teardown Ephemeral Staging Stack
+        if: always()
+        run: docker compose down -v
 
       - name: Upload ZAP Reports
         uses: actions/upload-artifact@v4
