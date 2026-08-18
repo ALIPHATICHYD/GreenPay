@@ -29,6 +29,8 @@ export default defineConfig({
       url: "http://localhost:4000/health",
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
+      stdout: "pipe",
+      stderr: "pipe",
       env: {
         PORT: "4000",
         NODE_ENV: "development",
@@ -43,6 +45,8 @@ export default defineConfig({
       url: "http://localhost:3000",
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      stdout: "pipe",
+      stderr: "pipe",
       env: {
         NEXT_PUBLIC_STELLAR_NETWORK: "testnet",
         NEXT_PUBLIC_API_URL: "http://localhost:4000",
