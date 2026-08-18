@@ -53,7 +53,7 @@ export default function ProjectsPage() {
     if (searchQuery && !search) {
       setSearch(searchQuery);
     }
-  }, [searchQuery, search]);
+  }, [searchQuery, search, setSearch]);
 
   // Click outside listener for autocomplete
   useEffect(() => {
@@ -127,7 +127,7 @@ export default function ProjectsPage() {
       }, 500);
       return () => clearTimeout(timer);
     },
-    [router],
+    [router, setSearch],
   );
 
   const handleSelectProject = (project: ClimateProject) => {
