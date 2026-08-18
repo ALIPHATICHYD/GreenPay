@@ -109,11 +109,15 @@ func (s *MLWorkloadScore) PreScore(
 	ctx context.Context,
 	state *framework.CycleState,
 	pod *corev1.Pod,
-	nodes []*corev1.Node,
+	nodes []*framework.NodeInfo,
 ) *framework.Status {
 	bwState := &clusterBandwidthState{}
 
-	for _, node := range nodes {
+	for _, nodeInfo := range nodes {
+		if nodeInfo == nil || nodeInfo.Node() == nil {
+			continue
+		}
+		node := nodeInfo.Node()
 		hw := hardware.ParseNodeHardware(node)
 		bwState.mu.Lock()
 		if hw.NetworkBandwidthGbps > bwState.maxGbps {
