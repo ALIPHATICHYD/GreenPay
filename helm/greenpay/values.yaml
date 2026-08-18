@@ -1,3 +1,25 @@
+# GreenPay Helm chart — BASE DEFAULTS (testnet).
+#
+# This file is the safe-by-default baseline: it targets Stellar **testnet**,
+# uses a placeholder ingress host and a well-known development password. It is
+# suitable for local clusters, CI and testnet staging, and for nothing else.
+#
+# Mainnet is deployed by layering the overlay on top of this file:
+#
+#   helm upgrade --install greenpay helm/greenpay \
+#     -f helm/greenpay/values.yaml \
+#     -f helm/greenpay/values-mainnet.yaml \
+#     --set config.contractId=<deployed mainnet contract id>
+#
+# Before any `helm upgrade`, run the pre-deploy guard, which renders the merged
+# values and rejects mismatched network/URL/secret combinations:
+#
+#   node scripts/validate-helm-release.js \
+#     -f helm/greenpay/values.yaml -f helm/greenpay/values-mainnet.yaml \
+#     --expect-network mainnet
+#
+# See docs/deployment-mainnet.md.
+
 namespace: greenpay
 
 backend:
@@ -17,6 +39,8 @@ postgres:
   awsRegion: us-east-1
 
 config:
+  # stellarNetwork is the single source of truth for which network every
+  # component talks to. The guard cross-checks every URL below against it.
   stellarNetwork: testnet
   horizonUrl: https://horizon-testnet.stellar.org
   sorobanRpcUrl: https://soroban-testnet.stellar.org
@@ -25,7 +49,14 @@ config:
   emailFrom: "GreenPay <updates@yourdomain.com>"
 
 secrets:
+  # existingSecret: when set, the chart does NOT render a Secret and instead
+  # mounts the named, pre-existing Secret. Mainnet uses this so no production
+  # credential is ever written into a values file. The Secret must supply
+  # POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, DATABASE_URL, RESEND_API_KEY
+  # and ADMIN_API_KEY (AWS_* optional).
+  existingSecret: ""
   postgresUser: postgres
+  # Development-only default. The guard rejects this value on mainnet.
   postgresPassword: changeme
   postgresDb: greenpay
   resendApiKey: ""
@@ -36,3 +67,6 @@ secrets:
 ingress:
   host: greenpay.local
   className: nginx
+  tls:
+    enabled: false
+    secretName: greenpay-tls

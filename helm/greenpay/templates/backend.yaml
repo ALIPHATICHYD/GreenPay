@@ -23,7 +23,7 @@ spec:
             - configMapRef:
                 name: greenpay-config
             - secretRef:
-                name: greenpay-secrets
+                name: {{ include "greenpay.secretName" . }}
           readinessProbe:
             httpGet:
               path: /health
