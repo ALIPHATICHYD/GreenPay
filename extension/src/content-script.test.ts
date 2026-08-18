@@ -6,6 +6,8 @@ import {
   initContentScript,
   resetContentScriptForTest,
   sanitizeStellarAddress,
+  GENERATED_NODES,
+  ACTIVE_TOOLTIPS,
 } from './content-script';
 
 const ADDRESS = `G${'A'.repeat(55)}`;
@@ -120,5 +122,81 @@ describe('content script hostile-page hardening', () => {
       action: 'openDonatePopup',
       address: ADDRESS,
     });
+  });
+
+  it('excludes tooltip nodes from re-scanning and performs no additional regex scanning when tooltip mounts/unmounts', async () => {
+    initContentScript();
+    const hook = document.createElement('div');
+    hook.textContent = ADDRESS;
+    document.body.appendChild(hook);
+
+    // Wait for observer
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const span = hook.querySelector<HTMLSpanElement>('.greenpay-address');
+    expect(span).not.toBeNull();
+
+    // Spy on RegExp.prototype.exec, filtering for the Stellar address regex specifically
+    const originalExec = RegExp.prototype.exec;
+    let stellarRegexCallCount = 0;
+    const execSpy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, string: string) {
+      if (this.source === '\\bG[A-Z2-7]{55}\\b') {
+        stellarRegexCallCount++;
+      }
+      return originalExec.call(this, string);
+    });
+
+    // Hover over the span to trigger tooltip creation and mounting
+    span!.dispatchEvent(new MouseEvent('mouseenter'));
+
+    const tooltip = document.body.querySelector('.greenpay-tooltip');
+    expect(tooltip).not.toBeNull();
+
+    // Verify the tooltip itself is registered in GENERATED_NODES
+    expect(GENERATED_NODES.has(tooltip!)).toBe(true);
+
+    // Wait for the MutationObserver microtask to flush (which runs on tooltip addition)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // Verify no additional address regex scanning was performed due to the tooltip mounting
+    expect(stellarRegexCallCount).toBe(0);
+
+    // Move mouse out to unmount
+    span!.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(document.body.querySelector('.greenpay-tooltip')).toBeNull();
+
+    // Wait for observer flush
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(stellarRegexCallCount).toBe(0);
+
+    execSpy.mockRestore();
+  });
+
+  it('cleans up tooltip when the originating span is detached from the DOM', async () => {
+    initContentScript();
+    const hook = document.createElement('div');
+    hook.textContent = ADDRESS;
+    document.body.appendChild(hook);
+
+    // Wait for observer
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const span = hook.querySelector<HTMLSpanElement>('.greenpay-address');
+    expect(span).not.toBeNull();
+
+    // Trigger hover to mount tooltip
+    span!.dispatchEvent(new MouseEvent('mouseenter'));
+    expect(document.body.querySelector('.greenpay-tooltip')).not.toBeNull();
+    expect(ACTIVE_TOOLTIPS.has(span!)).toBe(true);
+
+    // Now remove the parent container/span from the document
+    hook.remove();
+
+    // Wait for the MutationObserver to notice the removal and trigger cleanup
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // The tooltip should be cleaned up from the body and removed from active tooltips
+    expect(document.body.querySelector('.greenpay-tooltip')).toBeNull();
+    expect(ACTIVE_TOOLTIPS.has(span!)).toBe(false);
   });
 });
