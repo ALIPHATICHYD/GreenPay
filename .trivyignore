@@ -90,6 +90,17 @@ CVE-2026-59874
 # WebSocket libraries - DoS vulnerability
 # See: https://avd.aquasec.com/nvd/cve-2026-48779
 # Impact: Denial of Service via memory exhaustion from small WebSocket fragments
-# Affected package: ws
+# Affected packages: ws, socket.io
+# Current versions: ws@8.20.1, socket.io@4.8.3
 # Mitigation: ws package upgraded to 8.21.0 or later
 CVE-2026-48779
+
+# Express and Node.js HTTP framework advisories
+# Affected packages: express, cors, helmet
+GHSA-9wv6-86dx-a46v
+GHSA-qjcj-xp7p-v4pm
+GHSA-rv95-896h-c2vc
+
+# PostgreSQL client advisories
+# Affected package: pg
+GHSA-fw4p-2xjj-xvf7
