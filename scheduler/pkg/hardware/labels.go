@@ -12,9 +12,6 @@
 //	greenpay.io/gpu-vram-mib        = "81920"     (MiB per GPU)
 //	greenpay.io/gpu-interconnect    = nvlink | pcie | none
 //	greenpay.io/numa-nodes          = "2"         (NUMA domains on the node)
-//	greenpay.io/gpu-numa-distribution = "4.4"      (GPUs per ascending NUMA ID)
-//	greenpay.io/topology-manager-policy = restricted | single-numa-node | ...
-//	greenpay.io/topology-manager-scope  = container | pod
 //	greenpay.io/network-zone        = zone-a | zone-b | ...
 //	greenpay.io/network-bandwidth   = "100"       (Gbps)
 //	greenpay.io/node-tier           = gpu-high | gpu-low | cpu-high | cpu-standard

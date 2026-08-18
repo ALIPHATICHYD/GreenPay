@@ -121,7 +121,7 @@ func TestPreemption_NoVictimsNeededOrAvailable(t *testing.T) {
 	p := newPreemptionPlugin(t, []*framework.NodeInfo{ni})
 
 	preemptor := makePodWithPriority("training-job", 1000, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLTraining,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLTraining,
 		hardware.AnnotGPUVRAMMinMiB: "40960",
 	})
 
@@ -145,7 +145,7 @@ func TestPreemption_SingleVictimSuccess(t *testing.T) {
 
 	// Running victim with lower priority (100) and 40GiB VRAM request
 	victim := makePodWithPriority("batch-job", 100, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLBatch,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLBatch,
 		hardware.AnnotGPUVRAMMinMiB: "40960",
 	})
 
@@ -154,7 +154,7 @@ func TestPreemption_SingleVictimSuccess(t *testing.T) {
 
 	// Preemptor with high priority (1000) requiring 40GiB VRAM
 	preemptor := makePodWithPriority("training-job", 1000, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLTraining,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLTraining,
 		hardware.AnnotGPUVRAMMinMiB: "40960",
 	})
 
@@ -178,7 +178,7 @@ func TestPreemption_InsufficientCapacityEvenAfterPreemption(t *testing.T) {
 
 	// Victim only provides 16GiB VRAM
 	victim := makePodWithPriority("inference-job", 100, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLInference,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLInference,
 		hardware.AnnotGPUVRAMMinMiB: "16384",
 	})
 
@@ -187,7 +187,7 @@ func TestPreemption_InsufficientCapacityEvenAfterPreemption(t *testing.T) {
 
 	// Preemptor requires 80GiB VRAM (much larger than what preemption can free)
 	preemptor := makePodWithPriority("large-training-job", 1000, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLTraining,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLTraining,
 		hardware.AnnotGPUVRAMMinMiB: "81920",
 	})
 
@@ -210,7 +210,7 @@ func TestPreemption_ImmutableHardwareMismatch_SkipsNode(t *testing.T) {
 	node.Name = "amd-node"
 
 	victim := makePodWithPriority("batch-job", 100, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLBatch,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLBatch,
 		hardware.AnnotGPUVRAMMinMiB: "40960",
 	})
 
@@ -219,8 +219,8 @@ func TestPreemption_ImmutableHardwareMismatch_SkipsNode(t *testing.T) {
 
 	// Preemptor requires NVIDIA vendor specifically
 	preemptor := makePodWithPriority("nvidia-training-job", 1000, map[string]string{
-		hardware.AnnotGPUVendorReq:   hardware.GPUVendorNvidia,
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLTraining,
+		hardware.AnnotGPUVendorReq:  hardware.GPUVendorNvidia,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLTraining,
 		hardware.AnnotGPUVRAMMinMiB: "40960",
 	})
 
@@ -243,7 +243,7 @@ func TestPreemption_HigherPriorityVictimCannotBePreempted(t *testing.T) {
 
 	// Running pod has priority 2000 (higher than preemptor priority 1000)
 	criticalPod := makePodWithPriority("critical-job", 2000, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLTraining,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLTraining,
 		hardware.AnnotGPUVRAMMinMiB: "40960",
 	})
 
@@ -251,7 +251,7 @@ func TestPreemption_HigherPriorityVictimCannotBePreempted(t *testing.T) {
 	p := newPreemptionPlugin(t, []*framework.NodeInfo{ni})
 
 	preemptor := makePodWithPriority("training-job", 1000, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLTraining,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLTraining,
 		hardware.AnnotGPUVRAMMinMiB: "40960",
 	})
 
@@ -273,7 +273,7 @@ func TestPreemption_PDBProtection(t *testing.T) {
 	node.Name = "gpu-node-pdb"
 
 	victim := makePodWithPriority("protected-batch-job", 100, map[string]string{
-		hardware.AnnotWorkloadType:   hardware.WorkloadMLBatch,
+		hardware.AnnotWorkloadType:  hardware.WorkloadMLBatch,
 		hardware.AnnotGPUVRAMMinMiB: "40960",
 	})
 	victim.Labels = map[string]string{"app": "protected"}
