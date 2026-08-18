@@ -251,3 +251,77 @@ func TestFragmentationScore_VCurve(t *testing.T) {
 		t.Errorf("with fragThreshold=0.50, expected 0%% allocation score (%d) > 50%% allocation score (%d)", score0, score50)
 	}
 }
+
+func TestBinPackingScore(t *testing.T) {
+	ctx := context.Background()
+
+	lister := &mockNodeInfoLister{}
+	handle := &mockHandle{
+		sharedLister: &mockSharedLister{
+			nodeLister: lister,
+		},
+	}
+
+	makeNodeInfoSnapshot := func(nodeName string, totalGPUs, requestedGPUs int64, totalCPU, requestedCPU int64) (*framework.CycleState, *corev1.Node) {
+		node := &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: nodeName,
+				Labels: map[string]string{
+					"greenpay.io/gpu-vendor": "nvidia",
+				},
+			},
+		}
+
+		ni := framework.NewNodeInfo()
+		ni.SetNode(node)
+		
+		if ni.Allocatable == nil {
+			ni.Allocatable = &framework.Resource{}
+		}
+		ni.Allocatable.MilliCPU = totalCPU
+		if ni.Allocatable.ScalarResources == nil {
+			ni.Allocatable.ScalarResources = make(map[corev1.ResourceName]int64)
+		}
+		ni.Allocatable.ScalarResources["nvidia.com/gpu"] = totalGPUs
+
+		if ni.Requested == nil {
+			ni.Requested = &framework.Resource{}
+		}
+		ni.Requested.MilliCPU = requestedCPU
+		if ni.Requested.ScalarResources == nil {
+			ni.Requested.ScalarResources = make(map[corev1.ResourceName]int64)
+		}
+		ni.Requested.ScalarResources["nvidia.com/gpu"] = requestedGPUs
+
+		lister.nodes = append(lister.nodes, ni)
+		state := framework.NewCycleState()
+		return state, node
+	}
+
+	pod := &corev1.Pod{}
+	p, err := plugins.NewMLWorkloadScore(ctx, nil, handle)
+	if err != nil {
+		t.Fatalf("NewMLWorkloadScore: %v", err)
+	}
+	plugin := p.(*plugins.MLWorkloadScore)
+
+	// Node with 0 resources requested
+	state0, _ := makeNodeInfoSnapshot("node-empty", 8, 0, 8000, 0)
+	score0, status0 := plugin.Score(ctx, state0, pod, "node-empty")
+	if !status0.IsSuccess() {
+		t.Fatalf("Score failed: %v", status0.Message())
+	}
+
+	// Node with some resources requested
+	stateSome, _ := makeNodeInfoSnapshot("node-some", 8, 4, 8000, 4000)
+	scoreSome, statusSome := plugin.Score(ctx, stateSome, pod, "node-some")
+	if !statusSome.IsSuccess() {
+		t.Fatalf("Score failed: %v", statusSome.Message())
+	}
+
+	// Because of BinPacking positive scoring (higher packing = higher score),
+	// scoreSome should be higher than score0
+	if score0 >= scoreSome {
+		t.Errorf("expected score of partially packed node (%d) to be higher than empty node (%d)", scoreSome, score0)
+	}
+}
