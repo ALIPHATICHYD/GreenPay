@@ -17,6 +17,9 @@ RUN apk add --no-cache git ca-certificates
 # Copy source and build.
 COPY . .
 
+# Generate go.sum and resolve dependencies for imported packages
+RUN go mod tidy
+
 # Build a fully static binary (no libc, no CGO).
 # -trimpath removes local file paths from the binary for reproducibility.
 # -ldflags "-s -w" strips debug symbols to reduce image size.
