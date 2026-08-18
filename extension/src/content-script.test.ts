@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -9,6 +9,10 @@ import {
 } from './content-script';
 
 const ADDRESS = `G${'A'.repeat(55)}`;
+const SECOND_ADDRESS = `G${'B'.repeat(55)}`;
+const THIRD_ADDRESS = `G${'C'.repeat(55)}`;
+const FOURTH_ADDRESS = `G${'D'.repeat(55)}`;
+const FIFTH_ADDRESS = `G${'E'.repeat(55)}`;
 
 describe('content script hostile-page hardening', () => {
   const sendMessage = vi.fn();
@@ -48,6 +52,37 @@ describe('content script hostile-page hardening', () => {
     expect(hook.querySelector('img')).toBeNull();
     expect(hook.querySelector('script')).toBeNull();
     expect(hook.textContent).toContain('<img src=x onerror=');
+  });
+
+  it('highlights every original mixed sibling exactly once', () => {
+    const hook = document.createElement('div');
+    const emphasized = document.createElement('em');
+    emphasized.textContent = SECOND_ADDRESS;
+    const strong = document.createElement('strong');
+    strong.textContent = FOURTH_ADDRESS;
+
+    hook.append(
+      document.createTextNode(`lead ${ADDRESS} tail`),
+      emphasized,
+      document.createTextNode(`middle ${THIRD_ADDRESS} gap`),
+      strong,
+      document.createTextNode(`end ${FIFTH_ADDRESS}`)
+    );
+    document.body.appendChild(hook);
+
+    highlightAddresses(hook);
+
+    const highlightedAddresses = Array.from(
+      hook.querySelectorAll<HTMLSpanElement>('.greenpay-address'),
+      span => span.textContent
+    );
+    expect(highlightedAddresses).toEqual([
+      ADDRESS,
+      SECOND_ADDRESS,
+      THIRD_ADDRESS,
+      FOURTH_ADDRESS,
+      FIFTH_ADDRESS,
+    ]);
   });
 
   it('sends the validated capture even if the hostile page rewrites injected DOM', () => {

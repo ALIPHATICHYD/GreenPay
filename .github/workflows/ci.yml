@@ -13,6 +13,19 @@ on:
         default: ''
 
 jobs:
+  docs:
+    name: Contributor Docs (command drift)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # Asserts every lint/test/build entry point documented in
+      # docs/getting-started.md §7 still exists. No toolchains needed — this only
+      # checks that the commands the doc names are still declared.
+      - run: node scripts/check-documented-commands.js
+
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
@@ -21,12 +34,9 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-node-install
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
+          working-directory: frontend
       - run: npm run type-check
       - run: npm run lint
       - run: npm run build
@@ -43,13 +53,10 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-node-install
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
+          working-directory: frontend
+      - run: npx playwright install chromium
       - run: npm run build
         env:
           NEXT_PUBLIC_STELLAR_NETWORK: testnet
@@ -75,12 +82,9 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-node-install
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: backend/package-lock.json
-      - run: npm ci
+          working-directory: backend
       - run: npm run lint
       - run: npm test -- --coverage
       - uses: actions/upload-artifact@v4
@@ -148,6 +152,10 @@ jobs:
       - name: Run Security Triage Script
         if: steps.resolve_target.outputs.enabled == 'true' && steps.zap_scan.outcome == 'success'
         run: node scripts/triage-zap.js
+
+      - name: Teardown Ephemeral Staging Stack
+        if: always()
+        run: docker compose down -v
 
       - name: Upload ZAP Reports
         uses: actions/upload-artifact@v4

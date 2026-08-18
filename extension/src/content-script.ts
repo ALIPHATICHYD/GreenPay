@@ -129,7 +129,7 @@ export function highlightAddresses(node: Node): void {
       (node as HTMLElement).tagName
     )
   ) {
-    node.childNodes.forEach(child => highlightAddresses(child));
+    Array.from(node.childNodes).forEach(child => highlightAddresses(child));
   }
 }
 
