@@ -32,6 +32,7 @@ package plugins
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"sync"
 
@@ -75,12 +76,27 @@ func (s *clusterBandwidthState) Clone() framework.StateData {
 
 const bandwidthStateKey = "greenpay/bandwidthState"
 
+// MLWorkloadScoreArgs holds configuration parameters for the MLWorkloadScore plugin.
+type MLWorkloadScoreArgs struct {
+	FragThreshold float64 `json:"fragThreshold,omitempty"`
+}
+
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
 type MLWorkloadScore struct {
 	weights scoreWeights
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
 	fragThreshold float64
+}
+
+// FragThreshold returns the configured fragmentation threshold.
+func (s *MLWorkloadScore) FragThreshold() float64 {
+	return s.fragThreshold
+}
+
+// SetFragThreshold sets the fragmentation threshold.
+func (s *MLWorkloadScore) SetFragThreshold(t float64) {
+	s.fragThreshold = t
 }
 
 // Compile-time interface assertions.
@@ -91,10 +107,24 @@ var _ framework.PreScorePlugin = &MLWorkloadScore{}
 func (s *MLWorkloadScore) Name() string { return MLWorkloadScoreName }
 
 // NewMLWorkloadScore is the plugin factory.
-func NewMLWorkloadScore(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func NewMLWorkloadScore(obj runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+	threshold := 0.85
+	if obj != nil {
+		if args, ok := obj.(*MLWorkloadScoreArgs); ok && args != nil {
+			if args.FragThreshold > 0 {
+				threshold = args.FragThreshold
+			}
+		} else if unk, ok := obj.(*runtime.Unknown); ok && unk != nil && len(unk.Raw) > 0 {
+			var args MLWorkloadScoreArgs
+			if err := json.Unmarshal(unk.Raw, &args); err == nil && args.FragThreshold > 0 {
+				threshold = args.FragThreshold
+			}
+		}
+	}
+
 	return &MLWorkloadScore{
 		weights:       defaultWeights,
-		fragThreshold: 0.85,
+		fragThreshold: threshold,
 	}, nil
 }
 
@@ -154,7 +184,9 @@ func (s *MLWorkloadScore) Score(
 
 	// The framework provides nodeInfo keyed by name; fall back gracefully.
 	var node *corev1.Node
-	if ni, ok := nodeInfo.(*framework.NodeInfo); ok && ni != nil {
+	var ni *framework.NodeInfo
+	if nInfo, ok := nodeInfo.(*framework.NodeInfo); ok && nInfo != nil {
+		ni = nInfo
 		node = ni.Node()
 	}
 	if node == nil {
@@ -167,7 +199,7 @@ func (s *MLWorkloadScore) Score(
 	hw := hardware.ParseNodeHardware(node)
 
 	scoreA := s.binPackingScore(node, hw)
-	scoreB := s.fragmentationScore(node, hw)
+	scoreB := s.fragmentationScore(ni, node, hw)
 	scoreC := s.numaScore(reqs, hw)
 	scoreD := s.bandwidthScore(hw, bwState)
 
@@ -275,37 +307,104 @@ func (s *MLWorkloadScore) binPackingScore(node *corev1.Node, hw hardware.NodeHar
 	return fraction * 100.0
 }
 
-// fragmentationScore penalises nodes where GPU allocation is dangerously close
-// to full.  A node at 95 % GPU allocation is likely to waste the last 5 %
-// (too small for a new training job), so we prefer nodes that are either
-// lightly loaded OR fully packed — the "bimodal" bin-packing distribution
-// that minimises wasted GPU capacity.
+// fragmentationScore computes the allocated GPU fraction for a node and
+// applies a V-shaped scoring curve centered at fragThreshold.
 //
 // Score:
-//   - 0 → maxFrag:     100 (plenty of room OR fully packed)
-//   - fragThreshold:   0   (fragmented zone)
+//   - 0% or 100% allocation: 100 (plenty of room OR fully packed)
+//   - fragThreshold allocation: 0 (fragmented zone)
 //
-// The score function is a "V" shaped curve centred at fragThreshold.
-func (s *MLWorkloadScore) fragmentationScore(_ *corev1.Node, hw hardware.NodeHardware) float64 {
+// The score function is a "V" shaped curve centered at s.fragThreshold.
+func (s *MLWorkloadScore) fragmentationScore(ni *framework.NodeInfo, node *corev1.Node, hw hardware.NodeHardware) float64 {
 	if !hw.HasGPU() {
 		// Non-GPU nodes — skip GPU fragmentation logic.
 		return 100.0
 	}
 
-	// Without real-time GPU utilisation from metrics-server we use a
-	// heuristic: nodes with GPU interconnect=nvlink are high-value and more
-	// likely to be filling up with training jobs.  Give them a bonus to keep
-	// consolidating onto them.
-	if hw.GPUInterconnect == "nvlink" {
-		return 85.0 // slightly prefer NVLink nodes for large training
+	var totalGPUs int64 = hw.GPUCount
+	var allocatedGPUs int64 = 0
+
+	gpuResourceNames := []corev1.ResourceName{
+		"nvidia.com/gpu",
+		"amd.com/gpu",
+		"google.com/tpu",
 	}
 
-	// PCIe nodes are less desirable for large training but fine for inference.
-	if hw.GPUInterconnect == "pcie" {
-		return 70.0
+	if ni != nil {
+		if totalGPUs == 0 {
+			if ni.Allocatable != nil && ni.Allocatable.ScalarResources != nil {
+				for _, resName := range gpuResourceNames {
+					if qty, ok := ni.Allocatable.ScalarResources[resName]; ok && qty > 0 {
+						totalGPUs += qty
+					}
+				}
+			}
+			if totalGPUs == 0 && node != nil && node.Status.Allocatable != nil {
+				for _, resName := range gpuResourceNames {
+					if q, ok := node.Status.Allocatable[resName]; ok {
+						totalGPUs += q.Value()
+					}
+				}
+			}
+		}
+
+		if ni.Requested != nil && ni.Requested.ScalarResources != nil {
+			for _, resName := range gpuResourceNames {
+				if qty, ok := ni.Requested.ScalarResources[resName]; ok {
+					allocatedGPUs += qty
+				}
+			}
+		} else if len(ni.Pods) > 0 {
+			for _, podInfo := range ni.Pods {
+				if podInfo == nil || podInfo.Pod == nil {
+					continue
+				}
+				for _, container := range podInfo.Pod.Spec.Containers {
+					for _, resName := range gpuResourceNames {
+						if q, ok := container.Resources.Requests[resName]; ok {
+							allocatedGPUs += q.Value()
+						}
+					}
+				}
+			}
+		}
+	} else if node != nil && totalGPUs == 0 {
+		if node.Status.Allocatable != nil {
+			for _, resName := range gpuResourceNames {
+				if q, ok := node.Status.Allocatable[resName]; ok {
+					totalGPUs += q.Value()
+				}
+			}
+		}
 	}
 
-	return 50.0
+	if totalGPUs <= 0 {
+		return 100.0
+	}
+
+	fraction := float64(allocatedGPUs) / float64(totalGPUs)
+	if fraction < 0.0 {
+		fraction = 0.0
+	} else if fraction > 1.0 {
+		fraction = 1.0
+	}
+
+	threshold := s.fragThreshold
+	if threshold <= 0.0 {
+		return fraction * 100.0
+	}
+	if threshold >= 1.0 {
+		return (1.0 - fraction) * 100.0
+	}
+
+	var score float64
+	if fraction <= threshold {
+		score = 100.0 * (threshold - fraction) / threshold
+	} else {
+		score = 100.0 * (fraction - threshold) / (1.0 - threshold)
+	}
+
+	return score
 }
 
 // numaScore scores a node based on how well its NUMA topology matches the
