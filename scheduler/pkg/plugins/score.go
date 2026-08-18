@@ -32,11 +32,11 @@ package plugins
 
 import (
 	"context"
-	"encoding/json"
 	"math"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -78,7 +78,18 @@ const bandwidthStateKey = "greenpay/bandwidthState"
 
 // MLWorkloadScoreArgs holds configuration parameters for the MLWorkloadScore plugin.
 type MLWorkloadScoreArgs struct {
-	FragThreshold float64 `json:"fragThreshold,omitempty"`
+	metav1.TypeMeta `json:",inline"`
+	FragThreshold   float64 `json:"fragThreshold,omitempty"`
+}
+
+// DeepCopyObject implements runtime.Object.
+func (args *MLWorkloadScoreArgs) DeepCopyObject() runtime.Object {
+	if args == nil {
+		return nil
+	}
+	out := new(MLWorkloadScoreArgs)
+	out.FragThreshold = args.FragThreshold
+	return out
 }
 
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
@@ -108,7 +119,11 @@ var _ framework.PreScorePlugin = &MLWorkloadScore{}
 func (s *MLWorkloadScore) Name() string { return MLWorkloadScoreName }
 
 // NewMLWorkloadScore is the plugin factory.
-func NewMLWorkloadScore(_ context.Context, _ runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+func NewMLWorkloadScore(_ context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+	threshold := 0.85
+	if args, ok := obj.(*MLWorkloadScoreArgs); ok && args != nil && args.FragThreshold > 0 {
+		threshold = args.FragThreshold
+	}
 	return &MLWorkloadScore{
 		handle:        handle,
 		weights:       defaultWeights,
@@ -186,7 +201,7 @@ func (s *MLWorkloadScore) Score(
 	hw := hardware.ParseNodeHardware(node)
 
 	scoreA := s.binPackingScore(node, hw)
-	scoreB := s.fragmentationScore(ni, node, hw)
+	scoreB := s.fragmentationScore(nodeInfo, node, hw)
 	scoreC := s.numaScore(reqs, hw)
 	scoreD := s.bandwidthScore(hw, bwState)
 
