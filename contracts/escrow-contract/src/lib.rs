@@ -27,6 +27,7 @@ pub struct Job {
     pub freelancer: Address,
     pub token: Address,
     pub amount: i128,
+    pub remaining_amount: i128,
     pub status: JobStatus,
     pub expiry_ledger: u32,
 }
@@ -84,13 +85,14 @@ impl EscrowContract {
             freelancer,
             token: token.clone(),
             amount,
+            remaining_amount: amount,
             status: JobStatus::Escrowed,
             expiry_ledger,
         };
         env.storage().instance().set(&DataKey::Job(job_id), &job);
     }
 
-    /// Client authorizes release; contract transfers locked funds to the freelancer.
+    /// Client authorizes full release of remaining locked funds to the freelancer.
     pub fn release_escrow(env: Env, client: Address, job_id: String) {
         client.require_auth();
         let mut job: Job = env
@@ -107,9 +109,44 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&env, &job.token);
         let contract_addr = env.current_contract_address();
-        token_client.transfer(&contract_addr, &job.freelancer, &job.amount);
+        let release_amount = job.remaining_amount;
+        token_client.transfer(&contract_addr, &job.freelancer, &release_amount);
 
+        job.remaining_amount = 0;
         job.status = JobStatus::Released;
+        env.storage().instance().set(&DataKey::Job(job_id), &job);
+    }
+
+    /// Client authorizes a partial payment release to the freelancer.
+    /// Decrements `remaining_amount`. If `remaining_amount` reaches 0, status transitions to `Released`.
+    pub fn release_partial(env: Env, client: Address, job_id: String, amount: i128) {
+        client.require_auth();
+        if amount <= 0 {
+            panic!("Release amount must be positive");
+        }
+        let mut job: Job = env
+            .storage()
+            .instance()
+            .get(&DataKey::Job(job_id.clone()))
+            .expect("Job not found");
+        if job.client != client {
+            panic!("Only the client can release");
+        }
+        if job.status != JobStatus::Escrowed {
+            panic!("Job is not in escrow");
+        }
+        if amount > job.remaining_amount {
+            panic!("Amount exceeds remaining balance");
+        }
+
+        let token_client = token::Client::new(&env, &job.token);
+        let contract_addr = env.current_contract_address();
+        token_client.transfer(&contract_addr, &job.freelancer, &amount);
+
+        job.remaining_amount -= amount;
+        if job.remaining_amount == 0 {
+            job.status = JobStatus::Released;
+        }
         env.storage().instance().set(&DataKey::Job(job_id), &job);
     }
 
@@ -137,7 +174,7 @@ impl EscrowContract {
             .publish((symbol_short!("disputed"), caller), job_id);
     }
 
-    /// Admin resolves a disputed job: releases to the freelancer or refunds the client.
+    /// Admin resolves a disputed job: releases remaining funds to freelancer or refunds remaining funds to client.
     pub fn resolve_dispute(env: Env, admin: Address, job_id: String, release_to_freelancer: bool) {
         admin.require_auth();
         let stored_admin: Address = env
@@ -160,13 +197,15 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&env, &job.token);
         let contract_addr = env.current_contract_address();
+        let remaining = job.remaining_amount;
         if release_to_freelancer {
-            token_client.transfer(&contract_addr, &job.freelancer, &job.amount);
+            token_client.transfer(&contract_addr, &job.freelancer, &remaining);
             job.status = JobStatus::Released;
         } else {
-            token_client.transfer(&contract_addr, &job.client, &job.amount);
+            token_client.transfer(&contract_addr, &job.client, &remaining);
             job.status = JobStatus::Refunded;
         }
+        job.remaining_amount = 0;
         env.storage()
             .instance()
             .set(&DataKey::Job(job_id.clone()), &job);
@@ -176,8 +215,8 @@ impl EscrowContract {
         );
     }
 
-    /// Client reclaims funds once the job's expiry ledger has passed without
-    /// a release or a dispute being raised.
+    /// Client reclaims remaining funds once the job's expiry ledger has passed without
+    /// a full release or a dispute being raised.
     pub fn cancel_job(env: Env, client: Address, job_id: String) {
         client.require_auth();
         let mut job: Job = env
@@ -197,8 +236,10 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&env, &job.token);
         let contract_addr = env.current_contract_address();
-        token_client.transfer(&contract_addr, &job.client, &job.amount);
+        let remaining = job.remaining_amount;
+        token_client.transfer(&contract_addr, &job.client, &remaining);
 
+        job.remaining_amount = 0;
         job.status = JobStatus::Refunded;
         env.storage().instance().set(&DataKey::Job(job_id), &job);
     }
@@ -411,4 +452,91 @@ mod tests {
         env.ledger().set_sequence_number(expiry_ledger + 1);
         contract.cancel_job(&freelancer, &job_id);
     }
+
+    #[test]
+    fn release_partial_decrements_balance_and_keeps_escrowed() {
+        let (env, contract, _admin, client, freelancer, token, job_id, amount, _expiry) = setup();
+
+        contract.release_partial(&client, &job_id, &30);
+
+        let job = contract.get_job(&job_id).unwrap();
+        assert_eq!(job.status, JobStatus::Escrowed);
+        assert_eq!(job.amount, amount);
+        assert_eq!(job.remaining_amount, 70);
+
+        let token_client = token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&freelancer), 30);
+    }
+
+    #[test]
+    fn release_partial_until_zero_transitions_to_released() {
+        let (env, contract, _admin, client, freelancer, token, job_id, amount, _expiry) = setup();
+
+        contract.release_partial(&client, &job_id, &30);
+        contract.release_partial(&client, &job_id, &70);
+
+        let job = contract.get_job(&job_id).unwrap();
+        assert_eq!(job.status, JobStatus::Released);
+        assert_eq!(job.remaining_amount, 0);
+
+        let token_client = token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&freelancer), amount);
+    }
+
+    #[test]
+    #[should_panic(expected = "Amount exceeds remaining balance")]
+    fn release_partial_exceeding_remaining_amount_panics() {
+        let (_env, contract, _admin, client, _freelancer, _token, job_id, _amount, _expiry) =
+            setup();
+
+        contract.release_partial(&client, &job_id, &150);
+    }
+
+    #[test]
+    #[should_panic(expected = "Release amount must be positive")]
+    fn release_partial_zero_amount_panics() {
+        let (_env, contract, _admin, client, _freelancer, _token, job_id, _amount, _expiry) =
+            setup();
+
+        contract.release_partial(&client, &job_id, &0);
+    }
+
+    #[test]
+    fn dispute_and_resolve_after_partial_release() {
+        let (env, contract, admin, client, freelancer, token, job_id, _amount, _expiry) = setup();
+
+        contract.release_partial(&client, &job_id, &40);
+
+        let token_client = token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&freelancer), 40);
+
+        contract.dispute(&freelancer, &job_id);
+
+        contract.resolve_dispute(&admin, &job_id, &true);
+
+        let job = contract.get_job(&job_id).unwrap();
+        assert_eq!(job.status, JobStatus::Released);
+        assert_eq!(job.remaining_amount, 0);
+        assert_eq!(token_client.balance(&freelancer), 100);
+    }
+
+    #[test]
+    fn cancel_after_partial_release_refunds_remaining_only() {
+        let (env, contract, _admin, client, freelancer, token, job_id, _amount, expiry_ledger) =
+            setup();
+
+        contract.release_partial(&client, &job_id, &40);
+
+        let token_client = token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&freelancer), 40);
+
+        env.ledger().set_sequence_number(expiry_ledger + 1);
+        contract.cancel_job(&client, &job_id);
+
+        let job = contract.get_job(&job_id).unwrap();
+        assert_eq!(job.status, JobStatus::Refunded);
+        assert_eq!(job.remaining_amount, 0);
+        assert_eq!(token_client.balance(&client), 60);
+    }
 }
+

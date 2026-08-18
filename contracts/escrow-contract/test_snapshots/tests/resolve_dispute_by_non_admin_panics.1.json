@@ -298,6 +298,17 @@
                             },
                             {
                               "key": {
+                                "symbol": "remaining_amount"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 100
+                                }
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "status"
                               },
                               "val": {
@@ -1255,7 +1266,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'Only admin can resolve disputes' from contract function 'Symbol(obj#307)'"
+                  "string": "caught panic 'Only admin can resolve disputes' from contract function 'Symbol(obj#313)'"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"

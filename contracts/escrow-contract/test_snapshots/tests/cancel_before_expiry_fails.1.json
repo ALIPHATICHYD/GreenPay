@@ -276,6 +276,17 @@
                             },
                             {
                               "key": {
+                                "symbol": "remaining_amount"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 100
+                                }
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "status"
                               },
                               "val": {
@@ -1120,7 +1131,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'Job has not expired yet' from contract function 'Symbol(obj#259)'"
+                  "string": "caught panic 'Job has not expired yet' from contract function 'Symbol(obj#261)'"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
