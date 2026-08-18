@@ -2,12 +2,12 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: "**/integration.spec.ts",
-  fullyParallel: true,
+  testMatch: "**/integration.spec.ts",
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 2 : undefined,
-  timeout: 30_000,
+  workers: 1,
+  timeout: 45_000,
   reporter: process.env.CI ? "github" : "list",
 
   use: {
@@ -24,12 +24,19 @@ export default defineConfig({
 
   webServer: [
     {
-      // Stands in for the backend for server-side (getServerSideProps)
-      // fetches, which page.route() cannot intercept — see the file for why.
-      command: "node e2e/helpers/stub-ssr-backend.js",
-      url: "http://localhost:4000/api/v1/projects/8d9ac19b-52eb-42f7-80d9-19a88ba59e43",
+      command: "npm run start",
+      cwd: "../backend",
+      url: "http://localhost:4000/health",
       reuseExistingServer: !process.env.CI,
-      timeout: 30_000,
+      timeout: 60_000,
+      env: {
+        PORT: "4000",
+        NODE_ENV: "development",
+        DATABASE_URL: process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/greenpay",
+        STELLAR_NETWORK: "testnet",
+        HORIZON_URL: "https://horizon-testnet.stellar.org",
+        ALLOWED_ORIGINS: "http://localhost:3000",
+      },
     },
     {
       command: "npm run start",
