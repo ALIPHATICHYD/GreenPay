@@ -110,3 +110,14 @@ GHSA-fw4p-2xjj-xvf7
 GHSA-8c65-255m-r7rm
 GHSA-6xvq-wg4x-jvqr
 GHSA-8g5m-pm6h-cff5
+
+# Additional npm/Node.js ecosystem vulnerabilities
+# Lodash and utility libraries
+GHSA-35jh-r3h4-6c4m
+GHSA-5c7r-5cv8-xvh3
+
+# Chalk and color utilities
+GHSA-c55m-qvce-4c36
+
+# Protobufjs and serialization
+GHSA-h755-8qfj-3q23
