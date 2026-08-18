@@ -94,12 +94,11 @@ func (args *MLWorkloadScoreArgs) DeepCopyObject() runtime.Object {
 
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
 type MLWorkloadScore struct {
-	handle  framework.Handle
-	weights scoreWeights
+	handle        framework.Handle
+	weights       scoreWeights
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
 	fragThreshold float64
-	handle        framework.Handle
 }
 
 // FragThreshold returns the configured fragmentation threshold.
@@ -128,8 +127,7 @@ func NewMLWorkloadScore(_ context.Context, obj runtime.Object, handle framework.
 	return &MLWorkloadScore{
 		handle:        handle,
 		weights:       defaultWeights,
-		fragThreshold: 0.85,
-		handle:        h,
+		fragThreshold: threshold,
 	}, nil
 }
 
