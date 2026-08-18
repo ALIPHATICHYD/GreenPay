@@ -15,10 +15,10 @@ package plugins
 //                          free GPU slice left, which would fragment capacity.
 //                          Score = 100 when fragmentation is low, 0 when high.
 //
-//  C. NUMA Topology      — prefer nodes whose NUMA domain count matches what
-//                          the workload signals.  Multi-NUMA training jobs
-//                          want many NUMA nodes; inference jobs prefer 1.
-//                          Score = 100 on exact match, 0 on worst mismatch.
+//  C. NUMA Topology      — prefer nodes where the pod's requested GPUs fit in
+//                          the fewest NUMA domains, using the declared
+//                          GPU-per-domain distribution.  Topology scoring is
+//                          only trusted when kubelet alignment is enforced.
 //
 //  D. Network Bandwidth  — normalise the node's bandwidth against the cluster
 //                          maximum and score proportionally (high-bandwidth
@@ -32,11 +32,11 @@ package plugins
 
 import (
 	"context"
-	"encoding/json"
 	"math"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -50,10 +50,10 @@ const MLWorkloadScoreName = "MLWorkloadScore"
 // scoreWeights holds the relative importance of each sub-score dimension.
 // They must sum to 1.0.
 type scoreWeights struct {
-	BinPacking   float64
+	BinPacking    float64
 	Fragmentation float64
-	NUMA         float64
-	Bandwidth    float64
+	NUMA          float64
+	Bandwidth     float64
 }
 
 var defaultWeights = scoreWeights{
@@ -66,8 +66,8 @@ var defaultWeights = scoreWeights{
 // clusterBandwidthState is a CycleState key for storing the max observed
 // bandwidth across the candidate node set (used for normalisation).
 type clusterBandwidthState struct {
-	mu         sync.Mutex
-	maxGbps    int64
+	mu      sync.Mutex
+	maxGbps int64
 }
 
 func (s *clusterBandwidthState) Clone() framework.StateData {
@@ -78,11 +78,23 @@ const bandwidthStateKey = "greenpay/bandwidthState"
 
 // MLWorkloadScoreArgs holds configuration parameters for the MLWorkloadScore plugin.
 type MLWorkloadScoreArgs struct {
-	FragThreshold float64 `json:"fragThreshold,omitempty"`
+	metav1.TypeMeta `json:",inline"`
+	FragThreshold   float64 `json:"fragThreshold,omitempty"`
+}
+
+// DeepCopyObject implements runtime.Object.
+func (args *MLWorkloadScoreArgs) DeepCopyObject() runtime.Object {
+	if args == nil {
+		return nil
+	}
+	out := new(MLWorkloadScoreArgs)
+	out.FragThreshold = args.FragThreshold
+	return out
 }
 
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
 type MLWorkloadScore struct {
+	handle  framework.Handle
 	weights scoreWeights
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
@@ -108,8 +120,13 @@ var _ framework.PreScorePlugin = &MLWorkloadScore{}
 func (s *MLWorkloadScore) Name() string { return MLWorkloadScoreName }
 
 // NewMLWorkloadScore is the plugin factory.
-func NewMLWorkloadScore(_ context.Context, _ runtime.Object, h framework.Handle) (framework.Plugin, error) {
+func NewMLWorkloadScore(_ context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+	threshold := 0.85
+	if args, ok := obj.(*MLWorkloadScoreArgs); ok && args != nil && args.FragThreshold > 0 {
+		threshold = args.FragThreshold
+	}
 	return &MLWorkloadScore{
+		handle:        handle,
 		weights:       defaultWeights,
 		fragThreshold: 0.85,
 		handle:        h,
@@ -130,10 +147,10 @@ func (s *MLWorkloadScore) PreScore(
 	bwState := &clusterBandwidthState{}
 
 	for _, nodeInfo := range nodes {
-		if nodeInfo == nil || nodeInfo.Node() == nil {
+		node := nodeInfo.Node()
+		if node == nil {
 			continue
 		}
-		node := nodeInfo.Node()
 		hw := hardware.ParseNodeHardware(node)
 		bwState.mu.Lock()
 		if hw.NetworkBandwidthGbps > bwState.maxGbps {
@@ -170,16 +187,15 @@ func (s *MLWorkloadScore) Score(
 	}
 	bwState := raw.(*clusterBandwidthState)
 
-	// Fetch nodeInfo using the handle's snapshot shared lister
-	var node *corev1.Node
-	if s.handle != nil && s.handle.SnapshotSharedLister() != nil {
-		if nodeInfo, err2 := s.handle.SnapshotSharedLister().NodeInfos().Get(nodeName); err2 == nil && nodeInfo != nil {
-			node = nodeInfo.Node()
-		}
+	// Fetch nodeInfo using the framework handle.
+	nodeInfo, err := s.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
+	if err != nil {
+		klog.FromContext(ctx).V(3).Info("Score: could not retrieve node info", "node", nodeName, "err", err)
+		return framework.MaxNodeScore / 2, framework.NewStatus(framework.Success)
 	}
+	node := nodeInfo.Node()
 	if node == nil {
-		// If we can't get the node, return a neutral score rather than failing.
-		klog.FromContext(ctx).V(3).Info("Score: could not retrieve node info", "node", nodeName)
+		klog.FromContext(ctx).V(3).Info("Score: node object is missing from node info", "node", nodeName)
 		return framework.MaxNodeScore / 2, framework.NewStatus(framework.Success)
 	}
 
@@ -187,7 +203,7 @@ func (s *MLWorkloadScore) Score(
 	hw := hardware.ParseNodeHardware(node)
 
 	scoreA := s.binPackingScore(node, hw)
-	scoreB := s.fragmentationScore(ni, node, hw)
+	scoreB := s.fragmentationScore(nodeInfo, node, hw)
 	scoreC := s.numaScore(reqs, hw)
 	scoreD := s.bandwidthScore(hw, bwState)
 
@@ -209,6 +225,8 @@ func (s *MLWorkloadScore) Score(
 		"binPacking", scoreA,
 		"fragmentation", scoreB,
 		"numa", scoreC,
+		"requestedGPUs", reqs.GPUCountReq,
+		"topologyManagerPolicy", hw.TopologyManagerPolicy,
 		"bandwidth", scoreD,
 		"composite", final,
 	)
@@ -228,15 +246,15 @@ func (s *MLWorkloadScore) ScoreExtensions() framework.ScoreExtensions {
 // Interaction with KubeSchedulerProfile Plugin Weights:
 // In Kubernetes scheduling profiles, plugins are combined via a weighted sum across all scoring plugins:
 //
-//   TotalNodeScore = Sum(Plugin_i_Weight * NormalizedScore_i)
+//	TotalNodeScore = Sum(Plugin_i_Weight * NormalizedScore_i)
 //
 // By preserving absolute score magnitude rather than scaling the cycle's observed max to 100:
-// 1. Genuinely mediocre placements (e.g. all candidate nodes scoring ~40 due to poor packing/NUMA/bandwidth fit)
-//    retain their modest absolute scores, allowing other weighted plugins in the profile (such as NodeResourcesFit
-//    or ImageLocality) to drive placement decisions proportionally.
-// 2. An optimal node scoring near 100 exerts the full intended influence of this plugin's configured weight.
-// 3. Relative-max score stretching is avoided, preventing false confidence signals from dominating the multi-plugin
-//    profile evaluation.
+//  1. Genuinely mediocre placements (e.g. all candidate nodes scoring ~40 due to poor packing/NUMA/bandwidth fit)
+//     retain their modest absolute scores, allowing other weighted plugins in the profile (such as NodeResourcesFit
+//     or ImageLocality) to drive placement decisions proportionally.
+//  2. An optimal node scoring near 100 exerts the full intended influence of this plugin's configured weight.
+//  3. Relative-max score stretching is avoided, preventing false confidence signals from dominating the multi-plugin
+//     profile evaluation.
 func (s *MLWorkloadScore) NormalizeScore(
 	ctx context.Context,
 	state *framework.CycleState,
@@ -395,38 +413,17 @@ func (s *MLWorkloadScore) fragmentationScore(ni *framework.NodeInfo, node *corev
 	return score
 }
 
-// numaScore scores a node based on how well its NUMA topology matches the
-// workload's expected access pattern.
+// numaScore scores a node by the minimum number of NUMA domains needed to
+// supply the pod's requested GPUs.
 //
 // Strategy:
-//   - ml-training: more NUMA nodes = better (distributed memory domains
-//     allow pinning workers to independent memory buses).
-//   - ml-inference / ml-batch: single NUMA preferred (low-latency, no
-//     cross-NUMA memory accesses on serving hot-path).
-//   - all others: neutral.
+//   - Missing, inconsistent, or non-enforced topology metadata is neutral.
+//   - restricted policy scores 100 / required NUMA domains.
+//   - single-numa-node scores 100 only when all requested GPUs fit in one
+//     domain, otherwise 0 because kubelet will not admit that alignment.
+//   - Non-ML or CPU-only workloads remain neutral.
 func (s *MLWorkloadScore) numaScore(reqs hardware.PodHardwareReqs, hw hardware.NodeHardware) float64 {
-	if hw.NUMANodes == 0 {
-		return 50.0 // no NUMA label — neutral
-	}
-
-	switch reqs.WorkloadType {
-	case hardware.WorkloadMLTraining:
-		// Prefer higher NUMA count (up to 4 = score 100).
-		score := float64(hw.NUMANodes) / 4.0 * 100.0
-		return math.Min(score, 100.0)
-
-	case hardware.WorkloadMLInference, hardware.WorkloadMLBatch:
-		// Prefer single NUMA for lowest latency.
-		if hw.NUMANodes == 1 {
-			return 100.0
-		}
-		// Penalise proportionally for each extra NUMA domain.
-		penalty := float64(hw.NUMANodes-1) * 20.0
-		return math.Max(100.0-penalty, 0.0)
-
-	default:
-		return 50.0 // API/DB workloads: neutral
-	}
+	return scoreNUMALocality(reqs, hw)
 }
 
 // bandwidthScore rewards nodes with higher network bandwidth, normalised

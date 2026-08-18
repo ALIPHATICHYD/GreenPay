@@ -36,10 +36,9 @@ func main() {
 	// jitter in backoff loops.
 	rand.Seed(time.Now().UnixNano()) //nolint:staticcheck // pre-Go1.20 compat
 
-	// Build the scheduler command with our additional plugins registered.
+	// Build the scheduler command with our out-of-tree plugins.
 	command := app.NewSchedulerCommand(
-		app.WithPlugin(plugins.GPUHardwareFilterName, plugins.NewGPUHardwareFilter),
-		app.WithPlugin(plugins.MLWorkloadScoreName, plugins.NewMLWorkloadScore),
+		plugins.RegisterPlugins,
 	)
 
 	// cli.Run handles flag parsing, signal handling, and os.Exit.

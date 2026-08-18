@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
 	"github.com/greenpay/scheduler/pkg/plugins"
@@ -139,7 +140,7 @@ func TestMLWorkloadScore_ConfigurableFragThreshold(t *testing.T) {
 	}
 
 	// Configured via args.
-	p, err := plugins.NewMLWorkloadScore(&plugins.MLWorkloadScoreArgs{FragThreshold: 0.60}, nil)
+	p, err := plugins.NewMLWorkloadScore(context.Background(), &plugins.MLWorkloadScoreArgs{FragThreshold: 0.60}, nil)
 	if err != nil {
 		t.Fatalf("NewMLWorkloadScore: %v", err)
 	}
@@ -158,15 +159,23 @@ func TestMLWorkloadScore_ConfigurableFragThreshold(t *testing.T) {
 func TestFragmentationScore_VCurve(t *testing.T) {
 	ctx := context.Background()
 
+	lister := &mockNodeInfoLister{}
+	handle := &mockHandle{
+		sharedLister: &mockSharedLister{
+			nodeLister: lister,
+		},
+	}
+
 	// Helper to create a NodeInfo snapshot with given requested and allocatable GPUs
 	makeNodeInfoSnapshot := func(nodeName string, totalGPUs, requestedGPUs int64) (*framework.CycleState, *corev1.Node) {
 		node := &corev1.Node{
-			ObjectMeta: framework.NodeInfo{}.Node().ObjectMeta,
-		}
-		node.Name = nodeName
-		node.Labels = map[string]string{
-			"greenpay.io/gpu-vendor": "nvidia",
-			"greenpay.io/gpu-count":  "8",
+			ObjectMeta: metav1.ObjectMeta{
+				Name: nodeName,
+				Labels: map[string]string{
+					"greenpay.io/gpu-vendor": "nvidia",
+					"greenpay.io/gpu-count":  "8",
+				},
+			},
 		}
 
 		ni := framework.NewNodeInfo()
@@ -187,13 +196,17 @@ func TestFragmentationScore_VCurve(t *testing.T) {
 		}
 		ni.Requested.ScalarResources["nvidia.com/gpu"] = requestedGPUs
 
+		lister.nodes = append(lister.nodes, ni)
 		state := framework.NewCycleState()
-		state.Write(framework.NodeInfoSnapshotKey, ni)
 		return state, node
 	}
 
 	pod := &corev1.Pod{}
-	plugin := newScorePlugin(t) // default threshold 0.85
+	p, err := plugins.NewMLWorkloadScore(ctx, nil, handle)
+	if err != nil {
+		t.Fatalf("NewMLWorkloadScore: %v", err)
+	}
+	plugin := p.(*plugins.MLWorkloadScore)
 
 	// 0% allocation (0 of 8 GPUs): score near 0% should be high
 	state0, _ := makeNodeInfoSnapshot("node-0", 8, 0)
@@ -238,4 +251,3 @@ func TestFragmentationScore_VCurve(t *testing.T) {
 		t.Errorf("with fragThreshold=0.50, expected 0%% allocation score (%d) > 50%% allocation score (%d)", score0, score50)
 	}
 }
-
