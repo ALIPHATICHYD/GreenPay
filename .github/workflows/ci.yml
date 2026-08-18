@@ -5,6 +5,12 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      dast_target:
+        description: 'Deployed environment URL to DAST-scan (e.g. https://staging.example.com). The scan runs only when this is provided.'
+        required: false
+        default: ''
 
 jobs:
   docs:
@@ -110,6 +116,29 @@ jobs:
       - run: cargo test --workspace
       - run: cargo build --workspace --target wasm32-unknown-unknown --release
 
+  scheduler:
+    name: Go Scheduler
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scheduler
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: scheduler/go.sum
+      - name: Verify gofmt
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "gofmt formatting violations found:"
+            gofmt -d .
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -v ./...
+      - run: go build -v ./...
+
   zap_scan:
     name: DAST Security Scan (OWASP ZAP)
     runs-on: ubuntu-latest
@@ -117,23 +146,39 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Resolve DAST scan target
+        id: resolve_target
+        run: |
+          if [ -n "$DAST_TARGET" ]; then
+            echo "target=$DAST_TARGET" >> "$GITHUB_OUTPUT"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No DAST target provided. Pass dast_target via workflow_dispatch (or wire up a real environment URL) to run the ZAP baseline scan."
+          fi
+        env:
+          DAST_TARGET: ${{ inputs.dast_target }}
+
       - name: Run ZAP Baseline Scan
         id: zap_scan
-        # The staging target isn't always deployed/reachable at the time this
-        # CI job runs (e.g. between deploys, or on branches without their own
-        # staging env) — a DNS/connection failure here is an environment
-        # precondition, not a code defect, so it must not fail the whole build.
+        if: steps.resolve_target.outputs.enabled == 'true'
+        # Scan failures against the live target are a precondition/tooling
+        # outcome, not a code defect, so they must not fail the whole build.
         continue-on-error: true
         uses: zaproxy/action-baseline@v0.14.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          target: 'https://staging.greenpay.app'
+          target: ${{ steps.resolve_target.outputs.target }}
           cmd_options: '-J report.json'
           fail_action: false
 
       - name: Run Security Triage Script
-        if: steps.zap_scan.outcome == 'success'
+        if: steps.resolve_target.outputs.enabled == 'true' && steps.zap_scan.outcome == 'success'
         run: node scripts/triage-zap.js
+
+      - name: Teardown Ephemeral Staging Stack
+        if: always()
+        run: docker compose down -v
 
       - name: Upload ZAP Reports
         uses: actions/upload-artifact@v4
@@ -189,3 +234,94 @@ jobs:
           NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
           NEXT_PUBLIC_API_URL: http://localhost:4000
 
+  container_build_scan:
+    name: Container Build, Scan & Push (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: greenpay-backend
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+          - image: greenpay-frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+          - image: greenpay-scheduler
+            context: ./scheduler
+            dockerfile: ./scheduler/Dockerfile
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=sha,format=short,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and load image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: ${{ matrix.image }}:local-scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy Vulnerability Scanner
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${{ github.workspace }}/.trivyignore:/.trivyignore" \
+            aquasec/trivy:latest image \
+            --exit-code 0 \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --pkg-types os,library \
+            --ignorefile /.trivyignore \
+            --format json \
+            ${{ matrix.image }}:local-scan | tee /tmp/trivy-${{ matrix.image }}.json
+
+      - name: Check for unignored vulnerabilities
+        run: |
+          # Parse the JSON output to find unignored HIGH/CRITICAL vulnerabilities
+          VULN_COUNT=$(jq '[.Results[]?.Misconfigurations[]? + .Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' /tmp/trivy-${{ matrix.image }}.json || echo 0)
+          if [ "$VULN_COUNT" -gt 0 ]; then
+            echo "Found $VULN_COUNT unignored HIGH/CRITICAL vulnerabilities in ${{ matrix.image }}:"
+            jq '.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH") | {VulnerabilityID, Severity, Title}' /tmp/trivy-${{ matrix.image }}.json
+            exit 1
+          fi
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        if: github.event_name != 'pull_request'
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

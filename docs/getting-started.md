@@ -140,7 +140,7 @@ subproject directory unless stated otherwise.
 | Contracts | `contracts/` | Rust + Soroban (3 crates) | `cargo fmt --check`, `cargo clippy` | `cargo test --workspace` | `cargo build --target wasm32-unknown-unknown --release` | `ci.yml` → check, test, wasm build (**not** fmt/clippy) |
 | Mobile | `mobile/` | Expo / React Native + TypeScript | *none configured* | `npm test` | `eas build` (Expo cloud) | `mobile.yml` → install + EAS build only (**tests not run**) |
 | Extension | `extension/` | TypeScript + esbuild | *none configured* | `npm test` (Vitest) | `npm run build`, `npm run build:firefox` | `extension.yml` → test + both builds |
-| Scheduler | `scheduler/` | Go 1.22 (Kubernetes scheduler plugin) | `gofmt -l .`, `go vet ./...` | `go test ./...` | `go build ./...` | **no workflow at all** |
+| Scheduler | `scheduler/` | Go 1.22 (Kubernetes scheduler plugin) | `gofmt -l .`, `go vet ./...` | `go test ./...` | `go build ./...` | `ci.yml` → format, vet, test, build |
 
 > The issue that prompted this section referred to "seven subprojects". There are six
 > code subprojects; `helm/`, `k8s/`, `scripts/` and `docs/` are supporting directories
