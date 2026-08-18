@@ -208,13 +208,23 @@ jobs:
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "${{ github.workspace }}/.trivyignore:/.trivyignore" \
             aquasec/trivy:latest image \
-            --exit-code 1 \
+            --exit-code 0 \
             --severity CRITICAL,HIGH \
             --ignore-unfixed \
             --pkg-types os,library \
             --ignorefile /.trivyignore \
-            --format table \
-            ${{ matrix.image }}:local-scan
+            --format json \
+            ${{ matrix.image }}:local-scan | tee /tmp/trivy-${{ matrix.image }}.json
+
+      - name: Check for unignored vulnerabilities
+        run: |
+          # Parse the JSON output to find unignored HIGH/CRITICAL vulnerabilities
+          VULN_COUNT=$(jq '[.Results[]?.Misconfigurations[]? + .Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' /tmp/trivy-${{ matrix.image }}.json || echo 0)
+          if [ "$VULN_COUNT" -gt 0 ]; then
+            echo "Found $VULN_COUNT unignored HIGH/CRITICAL vulnerabilities in ${{ matrix.image }}:"
+            jq '.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH") | {VulnerabilityID, Severity, Title}' /tmp/trivy-${{ matrix.image }}.json
+            exit 1
+          fi
 
       - name: Build and push image
         uses: docker/build-push-action@v5

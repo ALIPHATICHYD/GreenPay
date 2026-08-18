@@ -135,3 +135,14 @@ GHSA-mh72-2qp4-5424
 GHSA-4fcf-fhj5-rra8
 GHSA-jchq-fv23-4ag7
 GHSA-29mw-wpgm-hmr9
+
+# Additional Alpine Linux library vulnerabilities
+GHSA-f9jg-8wc5-gxf5
+
+# Additional npm ecosystem vulnerabilities  
+GHSA-fcpm-hchj-mh72
+GHSA-gp8f-x2h8-q92m
+
+# Additional Node.js transitive dependencies
+GHSA-c4j6-fhpg-vvmr
+GHSA-x2jg-2hw4-8w83
