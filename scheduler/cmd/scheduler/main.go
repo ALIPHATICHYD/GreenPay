@@ -26,7 +26,6 @@ import (
 
 	"k8s.io/component-base/cli"
 	_ "k8s.io/component-base/logs/json/register" // register JSON log format
-	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 
 	"github.com/greenpay/scheduler/pkg/plugins"
