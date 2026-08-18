@@ -126,11 +126,21 @@ jobs:
         run: |
           docker compose up -d --build
           echo "Waiting for ephemeral staging environment to become healthy..."
-          timeout 120 bash -c '
-            until curl -sf http://localhost:3000 >/dev/null && curl -sf http://localhost:4000/health >/dev/null; do
-              echo "Waiting for frontend (:3000) and backend (:4000)..."
+          timeout 180 bash -c '
+            attempt=0
+            max_attempts=60
+            until [ $attempt -ge $max_attempts ]; do
+              if curl -sf http://localhost:3000 >/dev/null 2>&1 && curl -sf http://localhost:4000/health >/dev/null 2>&1; then
+                echo "Ephemeral staging environment is fully online and healthy!"
+                exit 0
+              fi
+              attempt=$((attempt + 1))
+              echo "Attempt $attempt/$max_attempts: Waiting for frontend (:3000) and backend (:4000)..."
               sleep 3
             done
+            echo "Timed out waiting for ephemeral staging environment to become ready."
+            docker compose logs
+            exit 1
           '
           echo "Ephemeral staging environment is fully online."
 
