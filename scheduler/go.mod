@@ -9,6 +9,7 @@ require (
 	k8s.io/component-base v0.30.2
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kubernetes v1.30.2
+	sigs.k8s.io/scheduler-plugins v0.30.2
 )
 
 // Kubernetes component replacements required when building outside k8s.io/kubernetes tree
