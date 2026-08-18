@@ -202,31 +202,36 @@ func (s *MLWorkloadScore) ScoreExtensions() framework.ScoreExtensions {
 	return s
 }
 
-// NormalizeScore rescales node scores to [0, framework.MaxNodeScore] so every
-// scheduling cycle makes full use of the score range regardless of absolute
-// score magnitudes.
+// NormalizeScore ensures all node scores are within the valid range [framework.MinNodeScore, framework.MaxNodeScore]
+// (0 to 100) while preserving the absolute magnitude of raw composite scores.
+//
+// Interaction with KubeSchedulerProfile Plugin Weights:
+// In Kubernetes scheduling profiles, plugins are combined via a weighted sum across all scoring plugins:
+//
+//   TotalNodeScore = Sum(Plugin_i_Weight * NormalizedScore_i)
+//
+// By preserving absolute score magnitude rather than scaling the cycle's observed max to 100:
+// 1. Genuinely mediocre placements (e.g. all candidate nodes scoring ~40 due to poor packing/NUMA/bandwidth fit)
+//    retain their modest absolute scores, allowing other weighted plugins in the profile (such as NodeResourcesFit
+//    or ImageLocality) to drive placement decisions proportionally.
+// 2. An optimal node scoring near 100 exerts the full intended influence of this plugin's configured weight.
+// 3. Relative-max score stretching is avoided, preventing false confidence signals from dominating the multi-plugin
+//    profile evaluation.
 func (s *MLWorkloadScore) NormalizeScore(
 	ctx context.Context,
 	state *framework.CycleState,
 	pod *corev1.Pod,
 	scores framework.NodeScoreList,
 ) *framework.Status {
-	var maxScore int64
-	for _, ns := range scores {
-		if ns.Score > maxScore {
-			maxScore = ns.Score
+	for i := range scores {
+		if scores[i].Score > framework.MaxNodeScore {
+			scores[i].Score = framework.MaxNodeScore
+		} else if scores[i].Score < framework.MinNodeScore {
+			scores[i].Score = framework.MinNodeScore
 		}
 	}
-	if maxScore == 0 {
-		// All nodes tied — leave scores as-is.
-		return framework.NewStatus(framework.Success)
-	}
 
-	for i := range scores {
-		scores[i].Score = scores[i].Score * framework.MaxNodeScore / maxScore
-	}
-
-	klog.FromContext(ctx).V(5).Info("NormalizeScore: rescaled scores", "pod", klog.KObj(pod), "maxRaw", maxScore)
+	klog.FromContext(ctx).V(5).Info("NormalizeScore: preserved absolute scores", "pod", klog.KObj(pod), "nodeCount", len(scores))
 	return framework.NewStatus(framework.Success)
 }
 
