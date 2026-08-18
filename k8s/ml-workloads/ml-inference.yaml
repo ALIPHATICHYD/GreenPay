@@ -77,8 +77,8 @@ spec:
       containers:
         - name: inference-server
           # Replace with your actual inference image (vLLM, TGI, Triton, etc.)
-          image: greenpay/inference-server:latest
-          imagePullPolicy: IfNotPresent
+          image: greenpay/inference-server:1.0.0
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080

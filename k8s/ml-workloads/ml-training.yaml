@@ -80,8 +80,8 @@ spec:
 
       containers:
         - name: trainer
-          image: greenpay/trainer:latest
-          imagePullPolicy: IfNotPresent
+          image: greenpay/trainer:1.0.0
+          imagePullPolicy: Always
           command:
             - python
             - -m
