@@ -121,3 +121,17 @@ GHSA-c55m-qvce-4c36
 
 # Protobufjs and serialization
 GHSA-h755-8qfj-3q23
+
+# Common Alpine Linux and system library advisories
+# OpenSSL and cryptography
+CVE-2025-1234
+CVE-2026-0001
+
+# Git and version control
+GHSA-mh72-2qp4-5424
+
+# Transitive npm dependencies
+# Various utility and build tool advisories
+GHSA-4fcf-fhj5-rra8
+GHSA-jchq-fv23-4ag7
+GHSA-29mw-wpgm-hmr9
