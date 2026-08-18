@@ -35,8 +35,8 @@ For production deployments:
 - Use strong, randomly generated passwords
 - Enable SSL/TLS connections
 - Configure proper firewall rules
-- Use managed database services (RDS, Cloud SQL) when possible
-- Enable automated backups
+- Use managed database services (RDS, Cloud SQL) when possible (see [ADR-004](adr/ADR-004-managed-postgres-vs-self-hosted-ha.md))
+- Enable automated backups and continuous WAL archiving
 
 ## Database Backup Strategy
 
@@ -257,11 +257,13 @@ backup — not to an arbitrary point in time.
 Example configuration that would need to be added (currently **absent** from the
 deployed manifests):
 
-```postgresql
+```ini
+# PostgreSQL Configuration with WAL Archiving for PITR
 wal_level = replica
 archive_mode = on
-archive_command = 'aws s3 cp %p s3://my-backup-bucket/wal/%f'
+archive_command = 'aws s3 cp %p s3://greenpay-wal-backups/wal/%f'
 archive_timeout = 300
+max_wal_senders = 10
 ```
 
 To make this real, `k8s/postgres.yaml` must mount a `postgresql.conf` containing
