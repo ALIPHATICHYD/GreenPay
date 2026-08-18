@@ -28,7 +28,6 @@ import (
 	_ "k8s.io/component-base/logs/json/register" // register JSON log format
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
-	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 
 	"github.com/greenpay/scheduler/pkg/plugins"
 )
@@ -38,17 +37,10 @@ func main() {
 	// jitter in backoff loops.
 	rand.Seed(time.Now().UnixNano()) //nolint:staticcheck // pre-Go1.20 compat
 
-	// Build the out-of-tree plugin registry.
-	outOfTreeRegistry := runtime.Registry{}
-	if err := plugins.RegisterPlugins(outOfTreeRegistry); err != nil {
-		klog.ErrorS(err, "Failed to register GreenPay scheduler plugins")
-		os.Exit(1)
-	}
-
-	// Build the scheduler command with our additional plugin registry.
-	// scheduler-plugins' WithPlugin merges our registry into the default one.
+	// Build the scheduler command with our additional plugins registered.
 	command := app.NewSchedulerCommand(
-		app.WithPlugin(outOfTreeRegistry),
+		app.WithPlugin(plugins.GPUHardwareFilterName, plugins.NewGPUHardwareFilter),
+		app.WithPlugin(plugins.MLWorkloadScoreName, plugins.NewMLWorkloadScore),
 	)
 
 	// cli.Run handles flag parsing, signal handling, and os.Exit.
