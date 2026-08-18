@@ -237,11 +237,25 @@ SELECT COUNT(*) FROM transactions;
 
 ## Point-in-Time Recovery (PITR)
 
-GreenPay supports Point-in-Time Recovery (PITR) to prevent data loss in disaster scenarios by continuously archiving Write-Ahead Logs (WAL) to object storage (S3/GCS).
+> **Status: not implemented.** PITR is currently a design goal, not a deployed
+> capability.
 
-### Configuration & Kubernetes Manifests
+The deployed database (`k8s/postgres.yaml`) is a stock `postgres:16-alpine`
+StatefulSet: it mounts no custom `postgresql.conf`, WAL archiving is **off**, and
+no WAL files are shipped to object storage. The only automated backup that
+exists today is the **nightly `pg_dump`** gzip snapshot produced by
+`.github/workflows/database-backup.yml` (runs at 02:00 UTC via
+`scripts/backup-db.sh`). That snapshot allows restoring to the time of the last
+backup — not to an arbitrary point in time.
 
-In Kubernetes (`k8s/postgres.yaml` and Helm templates), PostgreSQL configuration is managed via a dedicated `postgres-config` ConfigMap mounted at `/etc/postgresql/postgresql.conf`:
+### What PITR would require (not yet in `k8s/postgres.yaml`)
+
+1. Enable WAL (Write-Ahead Logging) archiving on the PostgreSQL instance
+2. Archive WAL files to S3/GCS continuously
+3. Restore using `pg_restore`/`recovery_target_time` when needed
+
+Example configuration that would need to be added (currently **absent** from the
+deployed manifests):
 
 ```ini
 # PostgreSQL Configuration with WAL Archiving for PITR
@@ -252,67 +266,11 @@ archive_timeout = 300
 max_wal_senders = 10
 ```
 
-### Least-Privilege IAM Credentials
-
-The `archive_command` runs inside the PostgreSQL container with least-privilege AWS IAM credentials passed via `greenpay-secrets`. The IAM user/role requires only `s3:PutObject` permission on the WAL archive prefix:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::greenpay-wal-backups/wal/*"
-    }
-  ]
-}
-```
-
-### RPO & RTO Target Specifications
-
-- **Recovery Point Objective (RPO):** **< 5 minutes**
-  - **Mechanism:** `archive_timeout = 300` ensures PostgreSQL forces a WAL segment switch at least every 5 minutes during low-activity periods, bounding maximum unarchived transactions to 300 seconds. Continuous WAL stream archiving achieves near-zero (< 5s) data loss during active transaction processing.
-- **Recovery Time Objective (RTO):**
-  - **Single-Pod StatefulSet (Development/Staging):** **30 – 60 minutes**
-    - Requires PVC re-attachment/recreation, base backup download, and sequential WAL segment replay up to target recovery time.
-  - **Managed PostgreSQL (AWS RDS / GCP Cloud SQL for Production):** **< 60 seconds**
-    - Automated multi-AZ failover and continuous storage snapshot restoration (see decision rationale in [ADR-004](adr/ADR-004-managed-postgres-vs-self-hosted-ha.md)).
-
-### Tested Restore-to-Point-in-Time Drill
-
-To validate disaster recovery readiness, a full Point-in-Time Recovery drill was performed and documented below.
-
-#### Drill Procedure
-
-1. **Simulated Failure Scenario:** Data corruption / accidental table deletion occurred at `2026-08-18 09:35:00 UTC`. Objective: restore database state to `2026-08-18 09:30:00 UTC` (5 minutes prior to incident).
-2. **Provision Target PostgreSQL Instance:** Spin up a clean PostgreSQL 16 container.
-3. **Restore Base Dump:** Decompress and load the latest nightly full backup (`greenpay_backup_20260818_020000.sql.gz`).
-4. **Fetch Archived WAL Logs:** Download archived WAL segments from `s3://greenpay-wal-backups/wal/`.
-5. **Configure Recovery Target:** Create a recovery configuration in `postgresql.conf` (or `standby.signal` / `recovery.signal`):
-   ```ini
-   restore_command = 'aws s3 cp s3://greenpay-wal-backups/wal/%f %p'
-   recovery_target_time = '2026-08-18 09:30:00 UTC'
-   recovery_target_action = 'promote'
-   ```
-6. **Execute WAL Replay:** Start PostgreSQL engine to begin WAL log segment replaying until `2026-08-18 09:30:00 UTC`.
-7. **Verify Data Integrity & Promote:** Validate transaction count and highest transaction timestamp:
-   ```sql
-   SELECT COUNT(*) FROM transactions;
-   SELECT MAX(created_at) FROM transactions;
-   ```
-
-#### Drill Execution Results & Metrics
-
-- **Drill Date:** 2026-08-18
-- **Base Backup Timestamp:** 2026-08-18 02:00:00 UTC (Size: 48.5 MB)
-- **WAL Segments Replayed:** 14 files (224 MB total WAL data)
-- **Target Recovery Time:** 2026-08-18 09:30:00 UTC
-- **Actual Replayed Limit:** 2026-08-18 09:29:57 UTC (Delta: 3 seconds, achieving < 5 min RPO)
-- **Total Drill Duration:** 18 minutes 42 seconds (achieving < 60 min RTO for single-pod StatefulSet)
-- **Validation Outcome:** 100% data integrity verified; all transactions up to 09:29:57 recovered cleanly without corruption.
+To make this real, `k8s/postgres.yaml` must mount a `postgresql.conf` containing
+the above (or the image entrypoint must append it), the pod must have
+credentials/network access to the S3/GCS bucket, and a WAL lifecycle/retention
+policy must be defined. Until then, do not claim PITR in runbooks or incident
+documentation — recovery granularity is limited to the nightly snapshot.
 
 ## Backup Testing
 
