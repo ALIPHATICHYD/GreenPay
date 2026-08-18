@@ -26,10 +26,20 @@ spec:
           labelSelector:
             matchLabels:
               app: backend
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backend
-          image: greenpay/backend:latest
-          imagePullPolicy: IfNotPresent
+          image: greenpay/backend:1.0.0
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 4000
           envFrom:

@@ -23,10 +23,12 @@ ENV PORT 3000
 COPY package*.json ./
 RUN npm ci --only=production
 
-# Copy built assets and configuration from builder
-COPY --from=builder /app/next.config.mjs ./
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+# Copy built assets and configuration from builder with non-root ownership
+COPY --from=builder --chown=node:node /app/next.config.mjs ./
+COPY --from=builder --chown=node:node /app/.next ./.next
+COPY --from=builder --chown=node:node /app/public ./public
+
+USER node
 
 EXPOSE 3000
 
