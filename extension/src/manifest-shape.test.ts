@@ -20,9 +20,11 @@ describe.each([
     expect(manifest).toHaveProperty('background');
   });
 
-  it('declares permissions as an array', () => {
+  it('declares permissions as an array with only required permissions', () => {
     expect(Array.isArray(manifest.permissions)).toBe(true);
-    expect(manifest.permissions.length).toBeGreaterThan(0);
+    expect(manifest.permissions).toEqual(['storage']);
+    expect(manifest.permissions).not.toContain('activeTab');
+    expect(manifest.permissions).not.toContain('scripting');
   });
 });
 
