@@ -11,6 +11,7 @@ import {
   Operation,
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
+import { isBadSequenceError } from './horizon-errors';
 import type { BackgroundRequest, BackgroundResponse } from './messages';
 import { recoverPopupSession, type PopupRecoveryClient } from './popup-session';
 import {
@@ -260,6 +261,28 @@ async function buildDonationTransaction(project: ProjectSummary, amount: number)
   return transaction.toXDR();
 }
 
+async function submitDonation(
+  project: ProjectSummary,
+  amount: number,
+  retryCount = 0
+): Promise<{ hash: string }> {
+  const xdr = await buildDonationTransaction(project, amount);
+  const signedXdr = await signTransaction(xdr, {
+    networkPassphrase: Networks.TESTNET,
+  });
+  const transaction = TransactionBuilder.fromXDR(signedXdr, Networks.TESTNET);
+
+  try {
+    return await server.submitTransaction(transaction);
+  } catch (error) {
+    if (isBadSequenceError(error) && retryCount === 0) {
+      showStatus('Sequence number changed — rebuilding transaction…');
+      return submitDonation(project, amount, retryCount + 1);
+    }
+    throw error;
+  }
+}
+
 async function donate() {
   if (!currentWallet || !activeProject || currentDonationAmount <= 0) return;
   setInteractive(false);
@@ -272,12 +295,7 @@ async function donate() {
       throw new Error('Wallet account changed or was locked. Reconnect to continue.');
     }
 
-    const xdr = await buildDonationTransaction(activeProject, currentDonationAmount);
-    const signedXdr = await signTransaction(xdr, {
-      networkPassphrase: Networks.TESTNET,
-    });
-    const transaction = TransactionBuilder.fromXDR(signedXdr, Networks.TESTNET);
-    const result = await server.submitTransaction(transaction);
+    const result = await submitDonation(activeProject, currentDonationAmount);
     showStatus(`Donation sent! ${result.hash.slice(0, 12)}…`, 'success');
   } catch (error) {
     showStatus(error instanceof Error ? error.message : 'Donation failed.', 'error');
