@@ -77,6 +77,7 @@ const bandwidthStateKey = "greenpay/bandwidthState"
 
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
 type MLWorkloadScore struct {
+	handle framework.Handle
 	weights scoreWeights
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
@@ -91,8 +92,9 @@ var _ framework.PreScorePlugin = &MLWorkloadScore{}
 func (s *MLWorkloadScore) Name() string { return MLWorkloadScoreName }
 
 // NewMLWorkloadScore is the plugin factory.
-func NewMLWorkloadScore(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func NewMLWorkloadScore(_ context.Context, _ runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 	return &MLWorkloadScore{
+		handle:        handle,
 		weights:       defaultWeights,
 		fragThreshold: 0.85,
 	}, nil
@@ -107,12 +109,15 @@ func (s *MLWorkloadScore) PreScore(
 	ctx context.Context,
 	state *framework.CycleState,
 	pod *corev1.Pod,
-	nodes []*corev1.Node,
+	nodes []*framework.NodeInfo,
 ) *framework.Status {
 	bwState := &clusterBandwidthState{}
 
-	for _, node := range nodes {
-		hw := hardware.ParseNodeHardware(node)
+	for _, ni := range nodes {
+		if ni == nil || ni.Node() == nil {
+			continue
+		}
+		hw := hardware.ParseNodeHardware(ni.Node())
 		bwState.mu.Lock()
 		if hw.NetworkBandwidthGbps > bwState.maxGbps {
 			bwState.maxGbps = hw.NetworkBandwidthGbps
@@ -148,14 +153,11 @@ func (s *MLWorkloadScore) Score(
 	}
 	bwState := raw.(*clusterBandwidthState)
 
-	// Fetch nodeInfo from CycleState — the framework stores it there.
-	nodeInfo, err2 := state.Read(framework.NodeInfoSnapshotKey)
-	_ = err2 // handled below
-
-	// The framework provides nodeInfo keyed by name; fall back gracefully.
 	var node *corev1.Node
-	if ni, ok := nodeInfo.(*framework.NodeInfo); ok && ni != nil {
-		node = ni.Node()
+	if s.handle != nil && s.handle.SnapshotSharedLister() != nil {
+		if ni, err := s.handle.SnapshotSharedLister().NodeInfos().Get(nodeName); err == nil && ni != nil {
+			node = ni.Node()
+		}
 	}
 	if node == nil {
 		// If we can't get the node, return a neutral score rather than failing.

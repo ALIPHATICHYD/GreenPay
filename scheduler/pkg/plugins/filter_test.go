@@ -48,7 +48,7 @@ func makeNodeInfo(node *corev1.Node) *framework.NodeInfo {
 
 func newFilter(t *testing.T) *plugins.GPUHardwareFilter {
 	t.Helper()
-	p, err := plugins.NewGPUHardwareFilter(nil, nil)
+	p, err := plugins.NewGPUHardwareFilter(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewGPUHardwareFilter: %v", err)
 	}
