@@ -93,7 +93,7 @@ export default function ProjectDetail({
       })
       .catch(() => router.push("/projects"))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, router]);
 
   useEffect(() => {
     if (!project) return;
@@ -102,7 +102,7 @@ export default function ProjectDetail({
       .then(setDiscussion)
       .catch(() => setDiscussion([]))
       .finally(() => setDiscussionLoading(false));
-  }, [project?.walletAddress]);
+  }, [project]);
 
   useEffect(() => {
     if (!id) return;
