@@ -62,6 +62,18 @@ async function mockHorizon(page: Page) {
 }
 
 test.describe("E2E Integration Tests (No API Mocking)", () => {
+  test.beforeEach(async ({ page }) => {
+    page.on("console", (msg) => {
+      console.log(`[BROWSER CONSOLE] [${msg.type()}] ${msg.text()}`);
+    });
+    page.on("pageerror", (err) => {
+      console.log(`[BROWSER PAGE ERROR] ${err.message}`);
+    });
+    page.on("requestfailed", (req) => {
+      console.log(`[BROWSER REQUEST FAILED] ${req.url()} - ${req.failure()?.errorText || "unknown"}`);
+    });
+  });
+
   test("1. Project Browsing Flow", async ({ page }) => {
     // Go to home page
     await page.goto("/");
