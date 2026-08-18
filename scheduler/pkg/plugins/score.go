@@ -49,10 +49,10 @@ const MLWorkloadScoreName = "MLWorkloadScore"
 // scoreWeights holds the relative importance of each sub-score dimension.
 // They must sum to 1.0.
 type scoreWeights struct {
-	BinPacking   float64
+	BinPacking    float64
 	Fragmentation float64
-	NUMA         float64
-	Bandwidth    float64
+	NUMA          float64
+	Bandwidth     float64
 }
 
 var defaultWeights = scoreWeights{
@@ -65,8 +65,8 @@ var defaultWeights = scoreWeights{
 // clusterBandwidthState is a CycleState key for storing the max observed
 // bandwidth across the candidate node set (used for normalisation).
 type clusterBandwidthState struct {
-	mu         sync.Mutex
-	maxGbps    int64
+	mu      sync.Mutex
+	maxGbps int64
 }
 
 func (s *clusterBandwidthState) Clone() framework.StateData {
@@ -77,7 +77,8 @@ const bandwidthStateKey = "greenpay/bandwidthState"
 
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
 type MLWorkloadScore struct {
-	weights scoreWeights
+	handle        framework.Handle
+	weights       scoreWeights
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
 	fragThreshold float64
@@ -91,8 +92,9 @@ var _ framework.PreScorePlugin = &MLWorkloadScore{}
 func (s *MLWorkloadScore) Name() string { return MLWorkloadScoreName }
 
 // NewMLWorkloadScore is the plugin factory.
-func NewMLWorkloadScore(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func NewMLWorkloadScore(_ context.Context, _ runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 	return &MLWorkloadScore{
+		handle:        handle,
 		weights:       defaultWeights,
 		fragThreshold: 0.85,
 	}, nil
@@ -107,11 +109,15 @@ func (s *MLWorkloadScore) PreScore(
 	ctx context.Context,
 	state *framework.CycleState,
 	pod *corev1.Pod,
-	nodes []*corev1.Node,
+	nodes []*framework.NodeInfo,
 ) *framework.Status {
 	bwState := &clusterBandwidthState{}
 
-	for _, node := range nodes {
+	for _, nodeInfo := range nodes {
+		node := nodeInfo.Node()
+		if node == nil {
+			continue
+		}
 		hw := hardware.ParseNodeHardware(node)
 		bwState.mu.Lock()
 		if hw.NetworkBandwidthGbps > bwState.maxGbps {
@@ -148,18 +154,15 @@ func (s *MLWorkloadScore) Score(
 	}
 	bwState := raw.(*clusterBandwidthState)
 
-	// Fetch nodeInfo from CycleState — the framework stores it there.
-	nodeInfo, err2 := state.Read(framework.NodeInfoSnapshotKey)
-	_ = err2 // handled below
-
-	// The framework provides nodeInfo keyed by name; fall back gracefully.
-	var node *corev1.Node
-	if ni, ok := nodeInfo.(*framework.NodeInfo); ok && ni != nil {
-		node = ni.Node()
+	// Fetch nodeInfo using the framework handle.
+	nodeInfo, err := s.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
+	if err != nil {
+		klog.FromContext(ctx).V(3).Info("Score: could not retrieve node info", "node", nodeName, "err", err)
+		return framework.MaxNodeScore / 2, framework.NewStatus(framework.Success)
 	}
+	node := nodeInfo.Node()
 	if node == nil {
-		// If we can't get the node, return a neutral score rather than failing.
-		klog.FromContext(ctx).V(3).Info("Score: could not retrieve node info", "node", nodeName)
+		klog.FromContext(ctx).V(3).Info("Score: node object is missing from node info", "node", nodeName)
 		return framework.MaxNodeScore / 2, framework.NewStatus(framework.Success)
 	}
 
@@ -208,15 +211,15 @@ func (s *MLWorkloadScore) ScoreExtensions() framework.ScoreExtensions {
 // Interaction with KubeSchedulerProfile Plugin Weights:
 // In Kubernetes scheduling profiles, plugins are combined via a weighted sum across all scoring plugins:
 //
-//   TotalNodeScore = Sum(Plugin_i_Weight * NormalizedScore_i)
+//	TotalNodeScore = Sum(Plugin_i_Weight * NormalizedScore_i)
 //
 // By preserving absolute score magnitude rather than scaling the cycle's observed max to 100:
-// 1. Genuinely mediocre placements (e.g. all candidate nodes scoring ~40 due to poor packing/NUMA/bandwidth fit)
-//    retain their modest absolute scores, allowing other weighted plugins in the profile (such as NodeResourcesFit
-//    or ImageLocality) to drive placement decisions proportionally.
-// 2. An optimal node scoring near 100 exerts the full intended influence of this plugin's configured weight.
-// 3. Relative-max score stretching is avoided, preventing false confidence signals from dominating the multi-plugin
-//    profile evaluation.
+//  1. Genuinely mediocre placements (e.g. all candidate nodes scoring ~40 due to poor packing/NUMA/bandwidth fit)
+//     retain their modest absolute scores, allowing other weighted plugins in the profile (such as NodeResourcesFit
+//     or ImageLocality) to drive placement decisions proportionally.
+//  2. An optimal node scoring near 100 exerts the full intended influence of this plugin's configured weight.
+//  3. Relative-max score stretching is avoided, preventing false confidence signals from dominating the multi-plugin
+//     profile evaluation.
 func (s *MLWorkloadScore) NormalizeScore(
 	ctx context.Context,
 	state *framework.CycleState,

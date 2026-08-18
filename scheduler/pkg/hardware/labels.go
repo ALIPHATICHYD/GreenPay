@@ -6,25 +6,25 @@
 // ──────────────
 // Node labels (applied by the cluster operator or node-feature-discovery):
 //
-//   greenpay.io/gpu-vendor          = nvidia | amd | google (TPU) | none
-//   greenpay.io/gpu-model           = a100 | h100 | v100 | t4 | l4 | tpu-v4 | ...
-//   greenpay.io/gpu-count           = "8"         (integer string)
-//   greenpay.io/gpu-vram-mib        = "81920"     (MiB per GPU)
-//   greenpay.io/gpu-interconnect    = nvlink | pcie | none
-//   greenpay.io/numa-nodes          = "2"         (NUMA domains on the node)
-//   greenpay.io/network-zone        = zone-a | zone-b | ...
-//   greenpay.io/network-bandwidth   = "100"       (Gbps)
-//   greenpay.io/node-tier           = gpu-high | gpu-low | cpu-high | cpu-standard
+//	greenpay.io/gpu-vendor          = nvidia | amd | google (TPU) | none
+//	greenpay.io/gpu-model           = a100 | h100 | v100 | t4 | l4 | tpu-v4 | ...
+//	greenpay.io/gpu-count           = "8"         (integer string)
+//	greenpay.io/gpu-vram-mib        = "81920"     (MiB per GPU)
+//	greenpay.io/gpu-interconnect    = nvlink | pcie | none
+//	greenpay.io/numa-nodes          = "2"         (NUMA domains on the node)
+//	greenpay.io/network-zone        = zone-a | zone-b | ...
+//	greenpay.io/network-bandwidth   = "100"       (Gbps)
+//	greenpay.io/node-tier           = gpu-high | gpu-low | cpu-high | cpu-standard
 //
 // Pod annotations (set by workload authors):
 //
-//   greenpay.io/workload-type       = ml-training | ml-inference | ml-batch | api | db
-//   greenpay.io/gpu-vendor-req      = nvidia | amd | google | any
-//   greenpay.io/gpu-model-req       = a100 | h100 | any
-//   greenpay.io/gpu-vram-min-mib    = "40960"     (minimum VRAM required, MiB)
-//   greenpay.io/network-zone-req    = zone-a       (empty = no preference)
-//   greenpay.io/network-bw-min-gbps = "25"         (minimum network bandwidth)
-//   greenpay.io/bin-pack-weight     = "1.0"        (score weight multiplier 0–2)
+//	greenpay.io/workload-type       = ml-training | ml-inference | ml-batch | api | db
+//	greenpay.io/gpu-vendor-req      = nvidia | amd | google | any
+//	greenpay.io/gpu-model-req       = a100 | h100 | any
+//	greenpay.io/gpu-vram-min-mib    = "40960"     (minimum VRAM required, MiB)
+//	greenpay.io/network-zone-req    = zone-a       (empty = no preference)
+//	greenpay.io/network-bw-min-gbps = "25"         (minimum network bandwidth)
+//	greenpay.io/bin-pack-weight     = "1.0"        (score weight multiplier 0–2)
 package hardware
 
 // ── Node label keys ──────────────────────────────────────────────────────────
@@ -117,8 +117,8 @@ const (
 // ── Node tier constants ──────────────────────────────────────────────────────
 
 const (
-	NodeTierGPUHigh      = "gpu-high"
-	NodeTierGPULow       = "gpu-low"
-	NodeTierCPUHigh      = "cpu-high"
-	NodeTierCPUStandard  = "cpu-standard"
+	NodeTierGPUHigh     = "gpu-high"
+	NodeTierGPULow      = "gpu-low"
+	NodeTierCPUHigh     = "cpu-high"
+	NodeTierCPUStandard = "cpu-standard"
 )

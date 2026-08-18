@@ -16,15 +16,15 @@ func TestParseNodeHardware_FullLabels(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "gpu-node-1",
 			Labels: map[string]string{
-				hardware.LabelGPUVendor:          "nvidia",
-				hardware.LabelGPUModel:           "a100",
-				hardware.LabelGPUCount:           "8",
-				hardware.LabelGPUVRAMMiB:         "81920",
-				hardware.LabelGPUInterconnect:    "nvlink",
-				hardware.LabelNUMANodes:          "2",
-				hardware.LabelNetworkZone:        "zone-a",
+				hardware.LabelGPUVendor:            "nvidia",
+				hardware.LabelGPUModel:             "a100",
+				hardware.LabelGPUCount:             "8",
+				hardware.LabelGPUVRAMMiB:           "81920",
+				hardware.LabelGPUInterconnect:      "nvlink",
+				hardware.LabelNUMANodes:            "2",
+				hardware.LabelNetworkZone:          "zone-a",
 				hardware.LabelNetworkBandwidthGbps: "100",
-				hardware.LabelNodeTier:           "gpu-high",
+				hardware.LabelNodeTier:             "gpu-high",
 			},
 		},
 	}
@@ -80,8 +80,8 @@ func TestParseNodeHardware_NoLabels_Defaults(t *testing.T) {
 
 func TestNodeHardware_HasGPU(t *testing.T) {
 	cases := []struct {
-		name   string
-		hw     hardware.NodeHardware
+		name    string
+		hw      hardware.NodeHardware
 		wantGPU bool
 	}{
 		{"nvidia 8x A100", hardware.NodeHardware{GPUVendor: "nvidia", GPUCount: 8}, true},
@@ -189,8 +189,8 @@ func TestPodHardwareReqs_IsMLWorkload(t *testing.T) {
 
 func TestPodHardwareReqs_NeedsGPU(t *testing.T) {
 	cases := []struct {
-		name   string
-		reqs   hardware.PodHardwareReqs
+		name    string
+		reqs    hardware.PodHardwareReqs
 		wantGPU bool
 	}{
 		{"explicit nvidia req", hardware.PodHardwareReqs{GPUVendorReq: "nvidia"}, true},

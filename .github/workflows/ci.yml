@@ -110,6 +110,29 @@ jobs:
       - run: cargo test --workspace
       - run: cargo build --workspace --target wasm32-unknown-unknown --release
 
+  scheduler:
+    name: Go Scheduler
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scheduler
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: scheduler/go.sum
+      - name: Verify gofmt
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "gofmt formatting violations found:"
+            gofmt -d .
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -v ./...
+      - run: go build -v ./...
+
   zap_scan:
     name: DAST Security Scan (OWASP ZAP)
     runs-on: ubuntu-latest
