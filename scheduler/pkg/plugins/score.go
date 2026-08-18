@@ -15,10 +15,10 @@ package plugins
 //                          free GPU slice left, which would fragment capacity.
 //                          Score = 100 when fragmentation is low, 0 when high.
 //
-//  C. NUMA Topology      — prefer nodes whose NUMA domain count matches what
-//                          the workload signals.  Multi-NUMA training jobs
-//                          want many NUMA nodes; inference jobs prefer 1.
-//                          Score = 100 on exact match, 0 on worst mismatch.
+//  C. NUMA Topology      — prefer nodes where the pod's requested GPUs fit in
+//                          the fewest NUMA domains, using the declared
+//                          GPU-per-domain distribution.  Topology scoring is
+//                          only trusted when kubelet alignment is enforced.
 //
 //  D. Network Bandwidth  — normalise the node's bandwidth against the cluster
 //                          maximum and score proportionally (high-bandwidth
@@ -50,10 +50,10 @@ const MLWorkloadScoreName = "MLWorkloadScore"
 // scoreWeights holds the relative importance of each sub-score dimension.
 // They must sum to 1.0.
 type scoreWeights struct {
-	BinPacking   float64
+	BinPacking    float64
 	Fragmentation float64
-	NUMA         float64
-	Bandwidth    float64
+	NUMA          float64
+	Bandwidth     float64
 }
 
 var defaultWeights = scoreWeights{
@@ -66,8 +66,8 @@ var defaultWeights = scoreWeights{
 // clusterBandwidthState is a CycleState key for storing the max observed
 // bandwidth across the candidate node set (used for normalisation).
 type clusterBandwidthState struct {
-	mu         sync.Mutex
-	maxGbps    int64
+	mu      sync.Mutex
+	maxGbps int64
 }
 
 func (s *clusterBandwidthState) Clone() framework.StateData {
@@ -207,6 +207,8 @@ func (s *MLWorkloadScore) Score(
 		"binPacking", scoreA,
 		"fragmentation", scoreB,
 		"numa", scoreC,
+		"requestedGPUs", reqs.GPUCountReq,
+		"topologyManagerPolicy", hw.TopologyManagerPolicy,
 		"bandwidth", scoreD,
 		"composite", final,
 	)
@@ -393,38 +395,17 @@ func (s *MLWorkloadScore) fragmentationScore(ni *framework.NodeInfo, node *corev
 	return score
 }
 
-// numaScore scores a node based on how well its NUMA topology matches the
-// workload's expected access pattern.
+// numaScore scores a node by the minimum number of NUMA domains needed to
+// supply the pod's requested GPUs.
 //
 // Strategy:
-//   - ml-training: more NUMA nodes = better (distributed memory domains
-//     allow pinning workers to independent memory buses).
-//   - ml-inference / ml-batch: single NUMA preferred (low-latency, no
-//     cross-NUMA memory accesses on serving hot-path).
-//   - all others: neutral.
+//   - Missing, inconsistent, or non-enforced topology metadata is neutral.
+//   - restricted policy scores 100 / required NUMA domains.
+//   - single-numa-node scores 100 only when all requested GPUs fit in one
+//     domain, otherwise 0 because kubelet will not admit that alignment.
+//   - Non-ML or CPU-only workloads remain neutral.
 func (s *MLWorkloadScore) numaScore(reqs hardware.PodHardwareReqs, hw hardware.NodeHardware) float64 {
-	if hw.NUMANodes == 0 {
-		return 50.0 // no NUMA label — neutral
-	}
-
-	switch reqs.WorkloadType {
-	case hardware.WorkloadMLTraining:
-		// Prefer higher NUMA count (up to 4 = score 100).
-		score := float64(hw.NUMANodes) / 4.0 * 100.0
-		return math.Min(score, 100.0)
-
-	case hardware.WorkloadMLInference, hardware.WorkloadMLBatch:
-		// Prefer single NUMA for lowest latency.
-		if hw.NUMANodes == 1 {
-			return 100.0
-		}
-		// Penalise proportionally for each extra NUMA domain.
-		penalty := float64(hw.NUMANodes-1) * 20.0
-		return math.Max(100.0-penalty, 0.0)
-
-	default:
-		return 50.0 // API/DB workloads: neutral
-	}
+	return scoreNUMALocality(reqs, hw)
 }
 
 // bandwidthScore rewards nodes with higher network bandwidth, normalised
