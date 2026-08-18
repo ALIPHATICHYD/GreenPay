@@ -83,6 +83,7 @@ type MLWorkloadScoreArgs struct {
 
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
 type MLWorkloadScore struct {
+	handle framework.Handle
 	weights scoreWeights
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
@@ -107,22 +108,9 @@ var _ framework.PreScorePlugin = &MLWorkloadScore{}
 func (s *MLWorkloadScore) Name() string { return MLWorkloadScoreName }
 
 // NewMLWorkloadScore is the plugin factory.
-func NewMLWorkloadScore(obj runtime.Object, _ framework.Handle) (framework.Plugin, error) {
-	threshold := 0.85
-	if obj != nil {
-		if args, ok := obj.(*MLWorkloadScoreArgs); ok && args != nil {
-			if args.FragThreshold > 0 {
-				threshold = args.FragThreshold
-			}
-		} else if unk, ok := obj.(*runtime.Unknown); ok && unk != nil && len(unk.Raw) > 0 {
-			var args MLWorkloadScoreArgs
-			if err := json.Unmarshal(unk.Raw, &args); err == nil && args.FragThreshold > 0 {
-				threshold = args.FragThreshold
-			}
-		}
-	}
-
+func NewMLWorkloadScore(_ context.Context, _ runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 	return &MLWorkloadScore{
+		handle:        handle,
 		weights:       defaultWeights,
 		fragThreshold: threshold,
 	}, nil
@@ -137,12 +125,15 @@ func (s *MLWorkloadScore) PreScore(
 	ctx context.Context,
 	state *framework.CycleState,
 	pod *corev1.Pod,
-	nodes []*corev1.Node,
+	nodes []*framework.NodeInfo,
 ) *framework.Status {
 	bwState := &clusterBandwidthState{}
 
-	for _, node := range nodes {
-		hw := hardware.ParseNodeHardware(node)
+	for _, ni := range nodes {
+		if ni == nil || ni.Node() == nil {
+			continue
+		}
+		hw := hardware.ParseNodeHardware(ni.Node())
 		bwState.mu.Lock()
 		if hw.NetworkBandwidthGbps > bwState.maxGbps {
 			bwState.maxGbps = hw.NetworkBandwidthGbps
@@ -178,16 +169,11 @@ func (s *MLWorkloadScore) Score(
 	}
 	bwState := raw.(*clusterBandwidthState)
 
-	// Fetch nodeInfo from CycleState — the framework stores it there.
-	nodeInfo, err2 := state.Read(framework.NodeInfoSnapshotKey)
-	_ = err2 // handled below
-
-	// The framework provides nodeInfo keyed by name; fall back gracefully.
 	var node *corev1.Node
-	var ni *framework.NodeInfo
-	if nInfo, ok := nodeInfo.(*framework.NodeInfo); ok && nInfo != nil {
-		ni = nInfo
-		node = ni.Node()
+	if s.handle != nil && s.handle.SnapshotSharedLister() != nil {
+		if ni, err := s.handle.SnapshotSharedLister().NodeInfos().Get(nodeName); err == nil && ni != nil {
+			node = ni.Node()
+		}
 	}
 	if node == nil {
 		// If we can't get the node, return a neutral score rather than failing.

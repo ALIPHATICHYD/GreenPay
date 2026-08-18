@@ -12,7 +12,7 @@ import (
 
 func newScorePlugin(t *testing.T) *plugins.MLWorkloadScore {
 	t.Helper()
-	p, err := plugins.NewMLWorkloadScore(nil, nil)
+	p, err := plugins.NewMLWorkloadScore(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewMLWorkloadScore: %v", err)
 	}
