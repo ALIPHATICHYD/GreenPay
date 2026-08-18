@@ -81,6 +81,7 @@ type MLWorkloadScore struct {
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
 	fragThreshold float64
+	handle        framework.Handle
 }
 
 // Compile-time interface assertions.
@@ -91,10 +92,11 @@ var _ framework.PreScorePlugin = &MLWorkloadScore{}
 func (s *MLWorkloadScore) Name() string { return MLWorkloadScoreName }
 
 // NewMLWorkloadScore is the plugin factory.
-func NewMLWorkloadScore(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func NewMLWorkloadScore(_ context.Context, _ runtime.Object, h framework.Handle) (framework.Plugin, error) {
 	return &MLWorkloadScore{
 		weights:       defaultWeights,
 		fragThreshold: 0.85,
+		handle:        h,
 	}, nil
 }
 
@@ -148,14 +150,12 @@ func (s *MLWorkloadScore) Score(
 	}
 	bwState := raw.(*clusterBandwidthState)
 
-	// Fetch nodeInfo from CycleState — the framework stores it there.
-	nodeInfo, err2 := state.Read(framework.NodeInfoSnapshotKey)
-	_ = err2 // handled below
-
-	// The framework provides nodeInfo keyed by name; fall back gracefully.
+	// Fetch nodeInfo using the handle's snapshot shared lister
 	var node *corev1.Node
-	if ni, ok := nodeInfo.(*framework.NodeInfo); ok && ni != nil {
-		node = ni.Node()
+	if s.handle != nil && s.handle.SnapshotSharedLister() != nil {
+		if nodeInfo, err2 := s.handle.SnapshotSharedLister().NodeInfos().Get(nodeName); err2 == nil && nodeInfo != nil {
+			node = nodeInfo.Node()
+		}
 	}
 	if node == nil {
 		// If we can't get the node, return a neutral score rather than failing.

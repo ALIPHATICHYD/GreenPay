@@ -42,7 +42,7 @@ var _ framework.FilterPlugin = &GPUHardwareFilter{}
 func (f *GPUHardwareFilter) Name() string { return GPUHardwareFilterName }
 
 // NewGPUHardwareFilter is the plugin factory registered with the scheduler.
-func NewGPUHardwareFilter(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func NewGPUHardwareFilter(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 	return &GPUHardwareFilter{}, nil
 }
 
