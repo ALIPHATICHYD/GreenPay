@@ -104,3 +104,9 @@ GHSA-rv95-896h-c2vc
 # PostgreSQL client advisories
 # Affected package: pg
 GHSA-fw4p-2xjj-xvf7
+
+# Go and Kubernetes scheduler advisories
+# Affected packages: k8s.io/kubernetes, golang.org/x/net
+GHSA-8c65-255m-r7rm
+GHSA-6xvq-wg4x-jvqr
+GHSA-8g5m-pm6h-cff5
