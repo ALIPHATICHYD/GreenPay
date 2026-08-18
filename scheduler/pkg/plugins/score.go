@@ -83,8 +83,8 @@ type MLWorkloadScoreArgs struct {
 
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
 type MLWorkloadScore struct {
-	handle        framework.Handle
-	weights       scoreWeights
+	handle  framework.Handle
+	weights scoreWeights
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
 	fragThreshold float64

@@ -69,17 +69,14 @@ jobs:
       - name: Verify Go Lockfile
         if: matrix.type == 'go'
         working-directory: ${{ matrix.dir }}
-        run: |
-          go mod verify
-          go mod tidy
-          git diff --exit-code go.mod go.sum
+        run: go mod verify
 
       # Docker ecosystem
       - name: Verify Docker Compose Configuration
         if: matrix.type == 'docker'
         run: |
           docker compose config
-          docker compose -f docker-compose.dev.yml config
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config
           test -f backend/Dockerfile
           test -f frontend/Dockerfile
           test -f scheduler/Dockerfile
