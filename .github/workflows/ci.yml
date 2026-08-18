@@ -204,12 +204,15 @@ jobs:
 
       - name: Run Trivy Vulnerability Scanner
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${{ github.workspace }}/.trivyignore:/.trivyignore" \
             aquasec/trivy:latest image \
             --exit-code 1 \
             --severity CRITICAL,HIGH \
             --ignore-unfixed \
-            --vuln-type os,library \
+            --pkg-types os,library \
+            --ignorefile /.trivyignore \
             --format table \
             ${{ matrix.image }}:local-scan
 
