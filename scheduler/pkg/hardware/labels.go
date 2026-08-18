@@ -51,6 +51,19 @@ const (
 	// LabelNUMANodes is the number of NUMA domains on the node.
 	LabelNUMANodes = "greenpay.io/numa-nodes"
 
+	// LabelGPUNUMADistribution is a dot-separated GPU count for each NUMA
+	// domain in ascending domain-ID order. Example: "4.4" means four GPUs on
+	// NUMA domain 0 and four on NUMA domain 1.
+	LabelGPUNUMADistribution = "greenpay.io/gpu-numa-distribution"
+
+	// LabelTopologyManagerPolicy mirrors the kubelet Topology Manager policy
+	// verified by the cluster operator.
+	LabelTopologyManagerPolicy = "greenpay.io/topology-manager-policy"
+
+	// LabelTopologyManagerScope mirrors the kubelet Topology Manager scope
+	// verified by the cluster operator.
+	LabelTopologyManagerScope = "greenpay.io/topology-manager-scope"
+
 	// LabelNetworkZone is the availability zone / rack for topology-aware scheduling.
 	LabelNetworkZone = "greenpay.io/network-zone"
 
@@ -112,6 +125,18 @@ const (
 	GPUVendorGoogle = "google"
 	GPUVendorNone   = "none"
 	GPUVendorAny    = "any"
+)
+
+// ── Topology Manager constants ──────────────────────────────────────────────
+
+const (
+	TopologyManagerPolicyNone           = "none"
+	TopologyManagerPolicyBestEffort     = "best-effort"
+	TopologyManagerPolicyRestricted     = "restricted"
+	TopologyManagerPolicySingleNUMANode = "single-numa-node"
+
+	TopologyManagerScopeContainer = "container"
+	TopologyManagerScopePod       = "pod"
 )
 
 // ── Node tier constants ──────────────────────────────────────────────────────

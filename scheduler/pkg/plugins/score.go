@@ -15,10 +15,10 @@ package plugins
 //                          free GPU slice left, which would fragment capacity.
 //                          Score = 100 when fragmentation is low, 0 when high.
 //
-//  C. NUMA Topology      — prefer nodes whose NUMA domain count matches what
-//                          the workload signals.  Multi-NUMA training jobs
-//                          want many NUMA nodes; inference jobs prefer 1.
-//                          Score = 100 on exact match, 0 on worst mismatch.
+//  C. NUMA Topology      — prefer nodes where the pod's requested GPUs fit in
+//                          the fewest NUMA domains, using the declared
+//                          GPU-per-domain distribution.  Topology scoring is
+//                          only trusted when kubelet alignment is enforced.
 //
 //  D. Network Bandwidth  — normalise the node's bandwidth against the cluster
 //                          maximum and score proportionally (high-bandwidth
@@ -32,6 +32,7 @@ package plugins
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"sync"
 
@@ -75,6 +76,11 @@ func (s *clusterBandwidthState) Clone() framework.StateData {
 
 const bandwidthStateKey = "greenpay/bandwidthState"
 
+// MLWorkloadScoreArgs holds configuration parameters for the MLWorkloadScore plugin.
+type MLWorkloadScoreArgs struct {
+	FragThreshold float64 `json:"fragThreshold,omitempty"`
+}
+
 // MLWorkloadScore implements framework.ScorePlugin and framework.PreScorePlugin.
 type MLWorkloadScore struct {
 	handle        framework.Handle
@@ -82,6 +88,16 @@ type MLWorkloadScore struct {
 	// fragThreshold is the GPU-allocation fraction above which a node is
 	// considered fragmented.  Default: 0.85 (85 %).
 	fragThreshold float64
+}
+
+// FragThreshold returns the configured fragmentation threshold.
+func (s *MLWorkloadScore) FragThreshold() float64 {
+	return s.fragThreshold
+}
+
+// SetFragThreshold sets the fragmentation threshold.
+func (s *MLWorkloadScore) SetFragThreshold(t float64) {
+	s.fragThreshold = t
 }
 
 // Compile-time interface assertions.
@@ -96,7 +112,7 @@ func NewMLWorkloadScore(_ context.Context, _ runtime.Object, handle framework.Ha
 	return &MLWorkloadScore{
 		handle:        handle,
 		weights:       defaultWeights,
-		fragThreshold: 0.85,
+		fragThreshold: threshold,
 	}, nil
 }
 
@@ -170,7 +186,7 @@ func (s *MLWorkloadScore) Score(
 	hw := hardware.ParseNodeHardware(node)
 
 	scoreA := s.binPackingScore(node, hw)
-	scoreB := s.fragmentationScore(node, hw)
+	scoreB := s.fragmentationScore(ni, node, hw)
 	scoreC := s.numaScore(reqs, hw)
 	scoreD := s.bandwidthScore(hw, bwState)
 
@@ -192,6 +208,8 @@ func (s *MLWorkloadScore) Score(
 		"binPacking", scoreA,
 		"fragmentation", scoreB,
 		"numa", scoreC,
+		"requestedGPUs", reqs.GPUCountReq,
+		"topologyManagerPolicy", hw.TopologyManagerPolicy,
 		"bandwidth", scoreD,
 		"composite", final,
 	)
@@ -278,71 +296,117 @@ func (s *MLWorkloadScore) binPackingScore(node *corev1.Node, hw hardware.NodeHar
 	return fraction * 100.0
 }
 
-// fragmentationScore penalises nodes where GPU allocation is dangerously close
-// to full.  A node at 95 % GPU allocation is likely to waste the last 5 %
-// (too small for a new training job), so we prefer nodes that are either
-// lightly loaded OR fully packed — the "bimodal" bin-packing distribution
-// that minimises wasted GPU capacity.
+// fragmentationScore computes the allocated GPU fraction for a node and
+// applies a V-shaped scoring curve centered at fragThreshold.
 //
 // Score:
-//   - 0 → maxFrag:     100 (plenty of room OR fully packed)
-//   - fragThreshold:   0   (fragmented zone)
+//   - 0% or 100% allocation: 100 (plenty of room OR fully packed)
+//   - fragThreshold allocation: 0 (fragmented zone)
 //
-// The score function is a "V" shaped curve centred at fragThreshold.
-func (s *MLWorkloadScore) fragmentationScore(_ *corev1.Node, hw hardware.NodeHardware) float64 {
+// The score function is a "V" shaped curve centered at s.fragThreshold.
+func (s *MLWorkloadScore) fragmentationScore(ni *framework.NodeInfo, node *corev1.Node, hw hardware.NodeHardware) float64 {
 	if !hw.HasGPU() {
 		// Non-GPU nodes — skip GPU fragmentation logic.
 		return 100.0
 	}
 
-	// Without real-time GPU utilisation from metrics-server we use a
-	// heuristic: nodes with GPU interconnect=nvlink are high-value and more
-	// likely to be filling up with training jobs.  Give them a bonus to keep
-	// consolidating onto them.
-	if hw.GPUInterconnect == "nvlink" {
-		return 85.0 // slightly prefer NVLink nodes for large training
+	var totalGPUs int64 = hw.GPUCount
+	var allocatedGPUs int64 = 0
+
+	gpuResourceNames := []corev1.ResourceName{
+		"nvidia.com/gpu",
+		"amd.com/gpu",
+		"google.com/tpu",
 	}
 
-	// PCIe nodes are less desirable for large training but fine for inference.
-	if hw.GPUInterconnect == "pcie" {
-		return 70.0
+	if ni != nil {
+		if totalGPUs == 0 {
+			if ni.Allocatable != nil && ni.Allocatable.ScalarResources != nil {
+				for _, resName := range gpuResourceNames {
+					if qty, ok := ni.Allocatable.ScalarResources[resName]; ok && qty > 0 {
+						totalGPUs += qty
+					}
+				}
+			}
+			if totalGPUs == 0 && node != nil && node.Status.Allocatable != nil {
+				for _, resName := range gpuResourceNames {
+					if q, ok := node.Status.Allocatable[resName]; ok {
+						totalGPUs += q.Value()
+					}
+				}
+			}
+		}
+
+		if ni.Requested != nil && ni.Requested.ScalarResources != nil {
+			for _, resName := range gpuResourceNames {
+				if qty, ok := ni.Requested.ScalarResources[resName]; ok {
+					allocatedGPUs += qty
+				}
+			}
+		} else if len(ni.Pods) > 0 {
+			for _, podInfo := range ni.Pods {
+				if podInfo == nil || podInfo.Pod == nil {
+					continue
+				}
+				for _, container := range podInfo.Pod.Spec.Containers {
+					for _, resName := range gpuResourceNames {
+						if q, ok := container.Resources.Requests[resName]; ok {
+							allocatedGPUs += q.Value()
+						}
+					}
+				}
+			}
+		}
+	} else if node != nil && totalGPUs == 0 {
+		if node.Status.Allocatable != nil {
+			for _, resName := range gpuResourceNames {
+				if q, ok := node.Status.Allocatable[resName]; ok {
+					totalGPUs += q.Value()
+				}
+			}
+		}
 	}
 
-	return 50.0
+	if totalGPUs <= 0 {
+		return 100.0
+	}
+
+	fraction := float64(allocatedGPUs) / float64(totalGPUs)
+	if fraction < 0.0 {
+		fraction = 0.0
+	} else if fraction > 1.0 {
+		fraction = 1.0
+	}
+
+	threshold := s.fragThreshold
+	if threshold <= 0.0 {
+		return fraction * 100.0
+	}
+	if threshold >= 1.0 {
+		return (1.0 - fraction) * 100.0
+	}
+
+	var score float64
+	if fraction <= threshold {
+		score = 100.0 * (threshold - fraction) / threshold
+	} else {
+		score = 100.0 * (fraction - threshold) / (1.0 - threshold)
+	}
+
+	return score
 }
 
-// numaScore scores a node based on how well its NUMA topology matches the
-// workload's expected access pattern.
+// numaScore scores a node by the minimum number of NUMA domains needed to
+// supply the pod's requested GPUs.
 //
 // Strategy:
-//   - ml-training: more NUMA nodes = better (distributed memory domains
-//     allow pinning workers to independent memory buses).
-//   - ml-inference / ml-batch: single NUMA preferred (low-latency, no
-//     cross-NUMA memory accesses on serving hot-path).
-//   - all others: neutral.
+//   - Missing, inconsistent, or non-enforced topology metadata is neutral.
+//   - restricted policy scores 100 / required NUMA domains.
+//   - single-numa-node scores 100 only when all requested GPUs fit in one
+//     domain, otherwise 0 because kubelet will not admit that alignment.
+//   - Non-ML or CPU-only workloads remain neutral.
 func (s *MLWorkloadScore) numaScore(reqs hardware.PodHardwareReqs, hw hardware.NodeHardware) float64 {
-	if hw.NUMANodes == 0 {
-		return 50.0 // no NUMA label — neutral
-	}
-
-	switch reqs.WorkloadType {
-	case hardware.WorkloadMLTraining:
-		// Prefer higher NUMA count (up to 4 = score 100).
-		score := float64(hw.NUMANodes) / 4.0 * 100.0
-		return math.Min(score, 100.0)
-
-	case hardware.WorkloadMLInference, hardware.WorkloadMLBatch:
-		// Prefer single NUMA for lowest latency.
-		if hw.NUMANodes == 1 {
-			return 100.0
-		}
-		// Penalise proportionally for each extra NUMA domain.
-		penalty := float64(hw.NUMANodes-1) * 20.0
-		return math.Max(100.0-penalty, 0.0)
-
-	default:
-		return 50.0 // API/DB workloads: neutral
-	}
+	return scoreNUMALocality(reqs, hw)
 }
 
 // bandwidthScore rewards nodes with higher network bandwidth, normalised

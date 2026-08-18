@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/greenpay/scheduler/pkg/hardware"
@@ -48,6 +49,25 @@ func TestParseNodeHardware_FullLabels(t *testing.T) {
 	}
 	if hw.NUMANodes != 2 {
 		t.Errorf("NUMANodes: got %d, want 2", hw.NUMANodes)
+	}
+	if len(hw.GPUNUMADistribution) != 2 ||
+		hw.GPUNUMADistribution[0] != 4 ||
+		hw.GPUNUMADistribution[1] != 4 {
+		t.Errorf("GPUNUMADistribution: got %v, want [4 4]", hw.GPUNUMADistribution)
+	}
+	if hw.TopologyManagerPolicy != hardware.TopologyManagerPolicyRestricted {
+		t.Errorf(
+			"TopologyManagerPolicy: got %q, want %q",
+			hw.TopologyManagerPolicy,
+			hardware.TopologyManagerPolicyRestricted,
+		)
+	}
+	if hw.TopologyManagerScope != hardware.TopologyManagerScopePod {
+		t.Errorf(
+			"TopologyManagerScope: got %q, want %q",
+			hw.TopologyManagerScope,
+			hardware.TopologyManagerScopePod,
+		)
 	}
 	if hw.NetworkZone != "zone-a" {
 		t.Errorf("NetworkZone: got %q, want %q", hw.NetworkZone, "zone-a")
@@ -116,6 +136,71 @@ func TestNodeHardware_IsHighBandwidth(t *testing.T) {
 	}
 }
 
+func TestNodeHardware_GPUNUMATopology(t *testing.T) {
+	hw := hardware.NodeHardware{
+		GPUCount:              8,
+		NUMANodes:             4,
+		GPUNUMADistribution:   []int64{4, 2, 2, 0},
+		TopologyManagerPolicy: hardware.TopologyManagerPolicyRestricted,
+		TopologyManagerScope:  hardware.TopologyManagerScopePod,
+	}
+
+	if !hw.HasValidGPUNUMATopology() {
+		t.Fatal("expected GPU NUMA topology to be valid")
+	}
+	if !hw.EnforcesPodNUMAAlignment() {
+		t.Fatal("expected restricted pod-scope policy to enforce alignment")
+	}
+
+	domains, fits := hw.MinimumNUMADomainsForGPUs(6)
+	if !fits || domains != 2 {
+		t.Errorf("MinimumNUMADomainsForGPUs(6) = (%d, %v), want (2, true)", domains, fits)
+	}
+	if _, fits := hw.MinimumNUMADomainsForGPUs(9); fits {
+		t.Fatal("expected nine requested GPUs not to fit an eight-GPU topology")
+	}
+}
+
+func TestNodeHardware_InvalidGPUNUMATopologyIsRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		node *corev1.Node
+	}{
+		{
+			name: "malformed distribution",
+			node: &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+				hardware.LabelGPUCount:            "8",
+				hardware.LabelNUMANodes:           "2",
+				hardware.LabelGPUNUMADistribution: "four.four",
+			}}},
+		},
+		{
+			name: "domain count mismatch",
+			node: &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+				hardware.LabelGPUCount:            "8",
+				hardware.LabelNUMANodes:           "4",
+				hardware.LabelGPUNUMADistribution: "4.4",
+			}}},
+		},
+		{
+			name: "gpu total mismatch",
+			node: &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+				hardware.LabelGPUCount:            "8",
+				hardware.LabelNUMANodes:           "2",
+				hardware.LabelGPUNUMADistribution: "4.2",
+			}}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if hw := hardware.ParseNodeHardware(tc.node); hw.HasValidGPUNUMATopology() {
+				t.Errorf("expected invalid topology, got %v", hw.GPUNUMADistribution)
+			}
+		})
+	}
+}
+
 // ── PodHardwareReqs parsing tests ────────────────────────────────────────────
 
 func TestParsePodHardwareReqs_FullAnnotations(t *testing.T) {
@@ -167,6 +252,47 @@ func TestParsePodHardwareReqs_Defaults(t *testing.T) {
 	}
 }
 
+func TestParsePodHardwareReqs_GPUCountFromResources(t *testing.T) {
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+					},
+				},
+				{
+					Resources: corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{
+							corev1.ResourceName("amd.com/gpu"):      resource.MustParse("2"),
+							corev1.ResourceName("example.com/fpga"): resource.MustParse("8"),
+						},
+					},
+				},
+			},
+			InitContainers: []corev1.Container{
+				{
+					Resources: corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{
+							corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("4"),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	reqs := hardware.ParsePodHardwareReqs(pod)
+	if reqs.GPUCountReq != 4 {
+		t.Errorf("GPUCountReq: got %d, want 4", reqs.GPUCountReq)
+	}
+	if !reqs.NeedsGPU() {
+		t.Fatal("expected GPU resource request to require a GPU")
+	}
+}
+
 func TestPodHardwareReqs_IsMLWorkload(t *testing.T) {
 	cases := []struct {
 		workload string
@@ -195,6 +321,7 @@ func TestPodHardwareReqs_NeedsGPU(t *testing.T) {
 	}{
 		{"explicit nvidia req", hardware.PodHardwareReqs{GPUVendorReq: "nvidia"}, true},
 		{"vram req", hardware.PodHardwareReqs{GPUVRAMMinMiB: 40960}, true},
+		{"resource req", hardware.PodHardwareReqs{GPUCountReq: 2}, true},
 		{"any vendor", hardware.PodHardwareReqs{GPUVendorReq: "any"}, false},
 		{"no req", hardware.PodHardwareReqs{}, false},
 	}
