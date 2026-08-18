@@ -130,3 +130,112 @@ func TestScoreExtensions_ReturnsSelf(t *testing.T) {
 		t.Fatal("expected ScoreExtensions to return the plugin itself")
 	}
 }
+
+func TestMLWorkloadScore_ConfigurableFragThreshold(t *testing.T) {
+	// Default fragThreshold is 0.85.
+	pluginDefault := newScorePlugin(t)
+	if pluginDefault.FragThreshold() != 0.85 {
+		t.Errorf("expected default fragThreshold 0.85, got %f", pluginDefault.FragThreshold())
+	}
+
+	// Configured via args.
+	p, err := plugins.NewMLWorkloadScore(&plugins.MLWorkloadScoreArgs{FragThreshold: 0.60}, nil)
+	if err != nil {
+		t.Fatalf("NewMLWorkloadScore: %v", err)
+	}
+	pluginArgs := p.(*plugins.MLWorkloadScore)
+	if pluginArgs.FragThreshold() != 0.60 {
+		t.Errorf("expected fragThreshold 0.60, got %f", pluginArgs.FragThreshold())
+	}
+
+	// Configured via setter.
+	pluginDefault.SetFragThreshold(0.75)
+	if pluginDefault.FragThreshold() != 0.75 {
+		t.Errorf("expected fragThreshold 0.75 after SetFragThreshold, got %f", pluginDefault.FragThreshold())
+	}
+}
+
+func TestFragmentationScore_VCurve(t *testing.T) {
+	ctx := context.Background()
+
+	// Helper to create a NodeInfo snapshot with given requested and allocatable GPUs
+	makeNodeInfoSnapshot := func(nodeName string, totalGPUs, requestedGPUs int64) (*framework.CycleState, *corev1.Node) {
+		node := &corev1.Node{
+			ObjectMeta: framework.NodeInfo{}.Node().ObjectMeta,
+		}
+		node.Name = nodeName
+		node.Labels = map[string]string{
+			"greenpay.io/gpu-vendor": "nvidia",
+			"greenpay.io/gpu-count":  "8",
+		}
+
+		ni := framework.NewNodeInfo()
+		ni.SetNode(node)
+		if ni.Allocatable == nil {
+			ni.Allocatable = &framework.Resource{}
+		}
+		if ni.Allocatable.ScalarResources == nil {
+			ni.Allocatable.ScalarResources = make(map[corev1.ResourceName]int64)
+		}
+		ni.Allocatable.ScalarResources["nvidia.com/gpu"] = totalGPUs
+
+		if ni.Requested == nil {
+			ni.Requested = &framework.Resource{}
+		}
+		if ni.Requested.ScalarResources == nil {
+			ni.Requested.ScalarResources = make(map[corev1.ResourceName]int64)
+		}
+		ni.Requested.ScalarResources["nvidia.com/gpu"] = requestedGPUs
+
+		state := framework.NewCycleState()
+		state.Write(framework.NodeInfoSnapshotKey, ni)
+		return state, node
+	}
+
+	pod := &corev1.Pod{}
+	plugin := newScorePlugin(t) // default threshold 0.85
+
+	// 0% allocation (0 of 8 GPUs): score near 0% should be high
+	state0, _ := makeNodeInfoSnapshot("node-0", 8, 0)
+	score0, status := plugin.Score(ctx, state0, pod, "node-0")
+	if !status.IsSuccess() {
+		t.Fatalf("Score failed: %v", status.Message())
+	}
+
+	// 100% allocation (8 of 8 GPUs): score near 100% should be high
+	state100, _ := makeNodeInfoSnapshot("node-100", 8, 8)
+	score100, status := plugin.Score(ctx, state100, pod, "node-100")
+	if !status.IsSuccess() {
+		t.Fatalf("Score failed: %v", status.Message())
+	}
+
+	// 87.5% allocation (7 of 8 GPUs, close to 85% threshold): score should be low
+	state85, _ := makeNodeInfoSnapshot("node-85", 8, 7)
+	score85, status := plugin.Score(ctx, state85, pod, "node-85")
+	if !status.IsSuccess() {
+		t.Fatalf("Score failed: %v", status.Message())
+	}
+
+	// Scores near 0% and 100% allocation score high, near fragThreshold scores low.
+	if score0 <= score85 {
+		t.Errorf("expected 0%% allocation score (%d) to be higher than near-fragThreshold score (%d)", score0, score85)
+	}
+	if score100 <= score85 {
+		t.Errorf("expected 100%% allocation score (%d) to be higher than near-fragThreshold score (%d)", score100, score85)
+	}
+
+	// Verify custom fragThreshold shift (e.g. fragThreshold = 0.50)
+	plugin.SetFragThreshold(0.50)
+
+	// 50% allocation (4 of 8 GPUs): should score low under threshold 0.50
+	state50, _ := makeNodeInfoSnapshot("node-50", 8, 4)
+	score50, status := plugin.Score(ctx, state50, pod, "node-50")
+	if !status.IsSuccess() {
+		t.Fatalf("Score failed: %v", status.Message())
+	}
+
+	if score0 <= score50 {
+		t.Errorf("with fragThreshold=0.50, expected 0%% allocation score (%d) > 50%% allocation score (%d)", score0, score50)
+	}
+}
+
