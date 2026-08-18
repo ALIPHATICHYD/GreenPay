@@ -50,7 +50,7 @@ jobs:
       - uses: ./.github/actions/setup-node-install
         with:
           working-directory: frontend
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium
       - run: npm run build
         env:
           NEXT_PUBLIC_STELLAR_NETWORK: testnet
