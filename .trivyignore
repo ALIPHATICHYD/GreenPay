@@ -86,4 +86,10 @@ CVE-2026-26960
 CVE-2026-29786
 CVE-2026-31802
 CVE-2026-59874
+
+# WebSocket libraries - DoS vulnerability
+# See: https://avd.aquasec.com/nvd/cve-2026-48779
+# Impact: Denial of Service via memory exhaustion from small WebSocket fragments
+# Affected package: ws
+# Mitigation: ws package upgraded to 8.21.0 or later
 CVE-2026-48779
