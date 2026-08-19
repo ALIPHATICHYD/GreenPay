@@ -11,6 +11,7 @@ import { authenticate } from '../../hooks/useBiometricAuth';
 import { Keypair, Server, TransactionBuilder, Networks, Operation, Asset, Memo } from '@stellar/stellar-sdk';
 import { useTheme } from '../theme';
 import { enqueueDonation } from '../../utils/donationQueue';
+import { useWallet } from '../../src/hooks/useWallet';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const HORIZON_URL = process.env.EXPO_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';
@@ -31,7 +32,7 @@ export default function DonateScreen() {
   const [amount, setAmount] = useState('1');
   const [message, setMessage] = useState('');
   const [secretKey, setSecretKey] = useState('');
-  const [publicKey, setPublicKey] = useState('');
+  const { publicKey, loading: walletLoading, connect: connectWalletKey } = useWallet();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -184,7 +185,7 @@ export default function DonateScreen() {
     }
   };
 
-  const connectWallet = async () => {
+  const connectWallet = () => {
     Alert.alert(
       'Connect Wallet',
       'Enter your Stellar public key:',
@@ -192,11 +193,10 @@ export default function DonateScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'OK',
-          onPress: (input: any) => {
+          onPress: async (input: any) => {
             const trimmed = String(input || '').trim();
-            if (/^G[A-Z0-9]{55}$/.test(trimmed)) {
-              setPublicKey(trimmed);
-            } else {
+            const ok = await connectWalletKey(trimmed);
+            if (!ok) {
               Alert.alert('Invalid Key', 'Please enter a valid Stellar public key');
             }
           },
@@ -247,7 +247,9 @@ export default function DonateScreen() {
         </ScrollView>
       </View>
 
-      {!publicKey ? (
+      {walletLoading ? (
+        <ActivityIndicator size="small" color={colors.buttonBackground} style={styles.walletLoading} />
+      ) : !publicKey ? (
         <TouchableOpacity style={[styles.connectButton, { backgroundColor: colors.buttonBackground }]}
           onPress={connectWallet}
         >
@@ -388,6 +390,9 @@ const styles = StyleSheet.create({
   connectButtonText: {
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  walletLoading: {
+    marginVertical: 16,
   },
   walletCard: {
     margin: 16,
