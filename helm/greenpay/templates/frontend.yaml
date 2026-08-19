@@ -161,9 +161,9 @@ spec:
           address: http://prometheus.{{ .Values.monitoring.namespace | default "monitoring" }}.svc.cluster.local:9090
           query: |
             sum(rate(http_requests_total{
-              service="{{args.service}}",
+              service="{{`{{args.service}}`}}",
               code=~"5.*"
             }[2m])) /
             sum(rate(http_requests_total{
-              service="{{args.service}}"
+              service="{{`{{args.service}}`}}"
             }[2m]))

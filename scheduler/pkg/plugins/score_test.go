@@ -642,6 +642,3 @@ func TestBandwidthScore_Isolation(t *testing.T) {
 		t.Errorf("expected 100G node score (%d) > 10G node score (%d)", score100G, score10G)
 	}
 }
-
-
-
