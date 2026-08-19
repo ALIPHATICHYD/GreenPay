@@ -185,7 +185,13 @@ func (s *MLWorkloadScore) Score(
 	}
 	bwState := raw.(*clusterBandwidthState)
 
-	// Fetch nodeInfo using the framework handle.
+	// Resolve the candidate node through the framework handle's snapshot.  The
+	// neutral fallback below is reserved for a node that genuinely cannot be
+	// resolved; it must not become the path every scheduling cycle takes.
+	if s.handle == nil || s.handle.SnapshotSharedLister() == nil {
+		klog.FromContext(ctx).V(3).Info("Score: no shared lister available", "node", nodeName)
+		return framework.MaxNodeScore / 2, framework.NewStatus(framework.Success)
+	}
 	nodeInfo, err := s.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
 	if err != nil {
 		klog.FromContext(ctx).V(3).Info("Score: could not retrieve node info", "node", nodeName, "err", err)
@@ -200,7 +206,7 @@ func (s *MLWorkloadScore) Score(
 	reqs := hardware.ParsePodHardwareReqs(pod)
 	hw := hardware.ParseNodeHardware(node)
 
-	scoreA := s.binPackingScore(node, hw)
+	scoreA := s.binPackingScore(nodeInfo, node, hw)
 	scoreB := s.fragmentationScore(nodeInfo, node, hw)
 	scoreC := s.numaScore(reqs, hw)
 	scoreD := s.bandwidthScore(hw, bwState)
@@ -276,13 +282,38 @@ func (s *MLWorkloadScore) NormalizeScore(
 // binPackingScore rewards nodes that are already hosting ML workloads,
 // promoting dense GPU utilisation.
 //
-// Score = (allocatedMilliCPU / allocatableMilliCPU) × 100
+// Score = (requestedMilliCPU / allocatableMilliCPU) × 100
 //
-// We use CPU as a proxy here because GPU-request accounting via the device
-// plugin model is exposed through extended resources on node allocatable.
-// Operators should also label GPU extended resources on nodes; this gives a
-// robust fallback for clusters where GPU device plugins are not deployed.
-func (s *MLWorkloadScore) binPackingScore(node *corev1.Node, hw hardware.NodeHardware) float64 {
+// The requested figure comes from the scheduler snapshot's NodeInfo, which
+// accumulates the resource requests of the pods actually placed on the node.
+// That is the quantity that has to move as ML pods land — scoring off
+// capacity − allocatable instead would only measure kubelet's static system
+// reservation and would return the same number for a node no matter what is
+// running on it.
+//
+// We use CPU as a proxy because GPU-request accounting via the device plugin
+// model is exposed through extended resources on node allocatable.  Operators
+// should also label GPU extended resources on nodes; the capacity − allocatable
+// path below remains as a fallback for callers that have no snapshot data.
+func (s *MLWorkloadScore) binPackingScore(ni *framework.NodeInfo, node *corev1.Node, hw hardware.NodeHardware) float64 {
+	if ni != nil && ni.Allocatable != nil && ni.Allocatable.MilliCPU > 0 {
+		var requested int64
+		if ni.Requested != nil {
+			requested = ni.Requested.MilliCPU
+		}
+		if requested < 0 {
+			requested = 0
+		}
+
+		fraction := float64(requested) / float64(ni.Allocatable.MilliCPU)
+		if fraction > 1.0 {
+			fraction = 1.0
+		}
+		return fraction * 100.0
+	}
+
+	// Fallback: no snapshot accounting available, approximate utilisation from
+	// the node object alone.
 	allocatable := node.Status.Allocatable
 	if allocatable == nil {
 		return 50.0 // neutral
@@ -293,10 +324,6 @@ func (s *MLWorkloadScore) binPackingScore(node *corev1.Node, hw hardware.NodeHar
 		return 50.0
 	}
 
-	// Sum requested CPU across all pods already on the node.
-	// We approximate this by walking node.Status.Capacity - Allocatable difference
-	// as a proxy for used resources.  A production deployment would use the
-	// NodeInfo.Requested field from the framework handle instead.
 	capacity := node.Status.Capacity
 	if capacity == nil {
 		return 50.0

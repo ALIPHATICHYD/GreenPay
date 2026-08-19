@@ -9,3 +9,4 @@ backend code and `k8s/` manifests when either changes (see
 |---|---|---|
 | [Matcher hot wallet key compromised](matcher-key-compromise.md) | The donation-matching account's secret key (`MATCHER_SECRET_KEY`) may be exposed or misused. | Critical — live funds |
 | [Indexer behind / missed donations](indexer-lag.md) | The indexer is lagging Horizon's latest ledger, stopped, or missed a downtime window. | High — data loss |
+| [Canary deployment rollback](canary-deployment-rollback.md) | A canary deploy fails analysis (error rate / latency regression) or needs manual rollback. | High — automated safety net |
