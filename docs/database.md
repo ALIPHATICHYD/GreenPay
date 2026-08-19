@@ -375,7 +375,7 @@ psql -h localhost -U postgres greenpay \
 2. **Encryption at Rest:** Enable S3/GCS encryption
 3. **Access Control:** Use IAM roles and service accounts with least privilege
 4. **Audit Logging:** Enable CloudTrail (AWS) or Cloud Audit Logs (GCP)
-5. **Retention Policy:** Set appropriate backup retention based on compliance requirements
+5. **Retention Policy:** Set appropriate backup retention based on compliance requirements (see [Data Retention Policy](data-retention-policy.md))
 6. **Sensitive Data:** Consider PII redaction in backups for non-production environments
 
 ## Related Files
