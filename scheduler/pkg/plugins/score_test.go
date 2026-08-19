@@ -182,13 +182,12 @@ func TestFragmentationScore_VCurve(t *testing.T) {
 
 		ni := framework.NewNodeInfo()
 		ni.SetNode(node)
-		if ni.Allocatable == nil {
-			ni.Allocatable = &framework.Resource{}
-		}
-		if ni.Allocatable.ScalarResources == nil {
-			ni.Allocatable.ScalarResources = make(map[corev1.ResourceName]int64)
-		}
-		ni.Allocatable.ScalarResources["nvidia.com/gpu"] = totalGPUs
+		// Deliberately do NOT set ni.Allocatable.ScalarResources["nvidia.com/gpu"]:
+		// fragmentationScore already gets totalGPUs from the greenpay.io/gpu-count
+		// label above. Setting it here would also feed binPackingScore's GPU
+		// fraction (same underlying allocated/allocatable ratio), letting its
+		// monotonically-increasing signal swamp fragmentationScore's V-shaped
+		// one in the composite Score() this test asserts on.
 
 		if ni.Requested == nil {
 			ni.Requested = &framework.Resource{}
@@ -566,15 +565,22 @@ func TestBinPackingScore_Isolation(t *testing.T) {
 	}
 	plugin := p.(*plugins.MLWorkloadScore)
 
+	// binPackingScore reads ni.Requested — the resources actual pods on the
+	// node have asked for — not the node's static capacity/allocatable split
+	// (that only reflects kubelet's fixed system reservation and is the same
+	// for a node no matter what is scheduled on it; see the doc comment on
+	// binPackingScore). Both nodes get identical allocatable CPU; only the
+	// simulated already-running pod requests differ.
 	node80 := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "node-80"},
 		Status: corev1.NodeStatus{
 			Capacity:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
-			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
 		},
 	}
 	ni80 := framework.NewNodeInfo()
 	ni80.SetNode(node80)
+	ni80.Requested = &framework.Resource{MilliCPU: 8000} // 8 of 10 CPU already requested — 80% packed
 
 	node0 := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "node-0"},
@@ -585,6 +591,7 @@ func TestBinPackingScore_Isolation(t *testing.T) {
 	}
 	ni0 := framework.NewNodeInfo()
 	ni0.SetNode(node0)
+	ni0.Requested = &framework.Resource{MilliCPU: 0} // nothing requested — 0% packed
 
 	lister.nodes = []*framework.NodeInfo{ni80, ni0}
 	cycleState := framework.NewCycleState()
