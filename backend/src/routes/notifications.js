@@ -34,7 +34,7 @@ router.post("/register", async (req, res, next) => {
       // Update existing token
       await pool.query(
         `UPDATE device_tokens 
-         SET platform = $1, wallet_address = $2, updated_at = NOW()
+         SET platform = $1, wallet_address = $2, last_seen_at = NOW(), updated_at = NOW()
          WHERE token = $3`,
         [platform, walletAddress || null, token]
       );
