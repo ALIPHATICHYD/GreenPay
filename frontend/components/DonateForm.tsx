@@ -103,6 +103,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
     return () => { mounted = false; };
   }, [publicKey, currency, balanceRefresh]);
 
+  const amountNum = Number.parseFloat(amount);
   const amountStroops = parseToStroops(amount);
   const isValid = isValidDonationAmount(amount) && parseToStroops(amount) >= parseToStroops("1");
 
@@ -264,7 +265,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
       await recordDonation({
         projectId: project.id,
         donorAddress: publicKey,
-        amount: amountNum.toString(),
+        amount: currency === "XLM" ? stroopsToXLM(amountStroops) : amountNum.toFixed(2),
         currency: currency,
         message: message.trim() || undefined,
         transactionHash: hash,

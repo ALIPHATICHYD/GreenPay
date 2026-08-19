@@ -20,11 +20,6 @@ const notificationLimiter = createRateLimiter(10, 1); // 10 follows/unfollows pe
 
 // POST /api/notifications/register
 // Register or update a device token
-// (No specific rate limiter — registration is low-frequency)
-router.post("/register", async (req, res, next) => {
-
-// POST /api/notifications/register
-// Register or update a device token
 router.post("/register", async (req, res, next) => {
   try {
     const { token, platform, walletAddress } = req.body;
