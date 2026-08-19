@@ -4,11 +4,42 @@ backend:
   image: greenpay/backend:latest
   replicas: 2
   port: 4000
+  canary:
+    steps:
+      initialWeight: 10
+      initialPause: 2m
+      midWeight: 30
+      midPause: 2m
+      highWeight: 60
+      highPause: 2m
+    analysis:
+      errorRateThreshold: 0.05
+      latencyP99Threshold: 500
+      interval: 1m
+      count: 5
+      failureLimit: 3
 
 frontend:
   image: greenpay/frontend:latest
   replicas: 2
   port: 3000
+  canary:
+    steps:
+      initialWeight: 10
+      initialPause: 2m
+      midWeight: 30
+      midPause: 2m
+      highWeight: 60
+      highPause: 2m
+    analysis:
+      errorRateThreshold: 0.05
+      interval: 1m
+      count: 5
+      failureLimit: 3
+
+monitoring:
+  namespace: monitoring
+  prometheusAddress: http://prometheus.monitoring.svc.cluster.local:9090
 
 postgres:
   image: postgres:16-alpine
