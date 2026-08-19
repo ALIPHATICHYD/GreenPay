@@ -35,10 +35,11 @@ spec:
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: {{ .Values.backend.port }}
-            initialDelaySeconds: 15
+            initialDelaySeconds: 30
             periodSeconds: 20
+            failureThreshold: 3
           resources:
             requests:
               cpu: "100m"
