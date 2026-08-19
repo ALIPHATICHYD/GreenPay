@@ -8,6 +8,7 @@ import { signTransactionWithWallet } from "@/lib/wallet";
 import { recordDonation } from "@/lib/api";
 import { formatXLM, formatCO2 } from "@/utils/format";
 import { useI18n } from "@/lib/i18n";
+import { parseToStroops, stroopsToXLM, isValidDonationAmount, hasSufficientBalance, multiply } from "@/utils/amount";
 import type { ClimateProject } from "@/utils/types";
 
 interface DonateFormProps {
@@ -102,12 +103,12 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
     return () => { mounted = false; };
   }, [publicKey, currency, balanceRefresh]);
 
-  const amountNum = parseFloat(amount);
-  const isValid   = !isNaN(amountNum) && amountNum >= 1;
+  const amountStroops = parseToStroops(amount);
+  const isValid = isValidDonationAmount(amount) && parseToStroops(amount) >= parseToStroops("1");
 
   // Calculate CO₂ impact for XLM donations
-  const co2Impact = currency === "XLM" && amount && !isNaN(amountNum) && project.co2_per_xlm
-    ? (amountNum * project.co2_per_xlm) / 1000 // Convert to kg
+  const co2Impact = currency === "XLM" && amount && isValid && project.co2_per_xlm
+    ? (parseFloat(stroopsToXLM(amountStroops)) * project.co2_per_xlm) / 1000 // Convert to kg
     : 0;
 
   // Calculate tree equivalent (rough estimate: 1 tree absorbs ~22kg CO₂ per year)
@@ -198,7 +199,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           tokenAddress: nativeTokenAddress,
           donor: publicKey,
           projectId: project.id,
-          amount: amountNum.toFixed(7),
+          amount: stroopsToXLM(amountStroops),
           msgHash,
         });
       } else {
@@ -216,7 +217,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
         tx = await buildDonationTransaction({
           fromPublicKey: publicKey,
           toPublicKey: project.walletAddress,
-          amount: currency === "XLM" ? amountNum.toFixed(7) : amountNum.toFixed(2),
+          amount: currency === "XLM" ? stroopsToXLM(amountStroops) : parseFloat(amount).toFixed(2),
           memo: `GreenPay:${project.id.slice(0, 16)}`,
           asset,
         });
@@ -302,7 +303,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
         <div className="text-4xl mb-3">🌱</div>
         <h3 className="font-display text-xl font-semibold text-forest-900 mb-2">Thank you!</h3>
         <p className="text-[#4b654b] text-sm mb-4 font-body">
-          Your donation of <span className="font-semibold text-forest-700">{currency === "XLM" ? formatXLM(amountNum, 2, localeTag) : `${amountNum.toFixed(2)} ${currency}`}</span> has been sent to <span className="font-semibold">{project.name}</span>.
+          Your donation of <span className="font-semibold text-forest-700">{currency === "XLM" ? formatXLM(parseFloat(stroopsToXLM(amountStroops)), 2, localeTag) : `${parseFloat(amount).toFixed(2)} ${currency}`}</span> has been sent to <span className="font-semibold">{project.name}</span>.
         </p>
         {donorBadge && (
           <div className="mb-4 p-3 bg-forest-50 border border-forest-200 rounded-xl">
@@ -471,7 +472,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           {step === "signing"    && <><Spinner />Sign in Freighter...</>}
           {step === "submitting" && <><Spinner />Submitting &amp; confirming...</>}
           {step === "recording"  && <>Done</>}
-          {step === "idle"       && <>🌱 Donate {amount ? (currency === "XLM" ? formatXLM(amountNum, 2, localeTag) : `$${amountNum.toFixed(2)} ${currency}`) : currency}</>}
+          {step === "idle"       && <>🌱 Donate {amount ? (currency === "XLM" ? formatXLM(parseFloat(stroopsToXLM(amountStroops)), 2, localeTag) : `$${parseFloat(amount).toFixed(2)} ${currency}`) : currency}</>}
           {step === "error"      && "Retry"}
         </button>
 

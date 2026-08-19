@@ -8,7 +8,6 @@ const cookieParser = require("cookie-parser");
 const csurf     = require("csurf");
 const helmet    = require("helmet");
 const morgan    = require("morgan");
-const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 const { runMigrations } = require("./db/migrate");
 const { startTurretsServer } = require("./services/turrets");
@@ -64,7 +63,8 @@ const io = new Server(server, {
   }
 });
 app.set("io", io);
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 150, standardHeaders: true, legacyHeaders: false }));
+// Removed generic app-wide rate limiter — each mutating endpoint now has
+// a dedicated limiter appropriate to its abuse profile (see individual route files).
 
 // ── API versioning ───────────────────────────────────────────────────────────
 // All routes are served under the `/api/v1` prefix. Legacy unversioned `/api/*`

@@ -4,12 +4,24 @@
  * POST /api/notifications/follow        — follow a project
  * POST /api/notifications/unfollow      — unfollow a project
  * GET  /api/notifications/follows       — get user's followed projects
+ *
+ * Rate limiters per donor address to prevent enumeration/spam.
  */
 "use strict";
 const express = require("express");
 const router = express.Router();
 const { v4: uuidv4 } = require("uuid");
 const pool = require("../db/pool");
+const { createRateLimiter } = require("../middleware/rateLimiter");
+
+// Rate limiter for follow/unfollow operations per donor address
+// Prevents enumeration and follow/unfollow spam
+const notificationLimiter = createRateLimiter(10, 1); // 10 follows/unfollows per donor per hour
+
+// POST /api/notifications/register
+// Register or update a device token
+// (No specific rate limiter — registration is low-frequency)
+router.post("/register", async (req, res, next) => {
 
 // POST /api/notifications/register
 // Register or update a device token
@@ -56,7 +68,8 @@ router.post("/register", async (req, res, next) => {
 
 // POST /api/notifications/follow
 // Follow a project for push notifications
-router.post("/follow", async (req, res, next) => {
+// Rate-limited per donor address to prevent enumeration/spam
+router.post("/follow", notificationLimiter, async (req, res, next) => {
   try {
     const { projectId, token, walletAddress } = req.body;
 
@@ -115,7 +128,8 @@ router.post("/follow", async (req, res, next) => {
 
 // POST /api/notifications/unfollow
 // Unfollow a project
-router.post("/unfollow", async (req, res, next) => {
+// Rate-limited per donor address to prevent enumeration/spam
+router.post("/unfollow", notificationLimiter, async (req, res, next) => {
   try {
     const { projectId, token } = req.body;
 

@@ -2,6 +2,7 @@
  * lib/stellar.ts — Stellar SDK helpers for GreenPay
  */
 import { Horizon, Networks, Asset, Operation, TransactionBuilder, Transaction, Memo, rpc, Contract, scValToNative, Address, nativeToScVal, Account, xdr } from "@stellar/stellar-sdk";
+import { parseToStroops, stroopsToXLM } from "@/utils/amount";
 
 export const NETWORK = (process.env.NEXT_PUBLIC_STELLAR_NETWORK || "testnet") as "testnet" | "mainnet";
 const HORIZON_URL = process.env.NEXT_PUBLIC_HORIZON_URL || "https://horizon-testnet.stellar.org";
@@ -137,7 +138,7 @@ export async function buildContractDonationTransaction({
   // Convert parameters to Soroban types
   const donorAddress = new Address(donor);
   const tokenAddr = new Address(tokenAddress);
-  const amountInStroops = Math.floor(parseFloat(amount) * 10_000_000);
+  const amountInStroops = parseToStroops(amount);
 
   // Build the contract invocation transaction
   const builder = new TransactionBuilder(source, {
@@ -614,7 +615,7 @@ export function streamGlobalProjectDonations(
           id: String(record.id),
           projectId: project.id,
           projectName: project.name,
-          amountXLM: amount.toFixed(7),
+          amountXLM: stroopsToXLM(parseToStroops(amountRaw)),
           from: record.from || record.funder || record.source_account || "Unknown",
           createdAt: record.created_at || new Date().toISOString(),
           transactionHash: record.transaction_hash || "",
