@@ -79,6 +79,12 @@ spec:
               command: ["pg_isready", "-U", "postgres", "-d", "greenpay"]
             initialDelaySeconds: 5
             periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "greenpay"]
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
       volumes:
         - name: postgres-config
           configMap:
