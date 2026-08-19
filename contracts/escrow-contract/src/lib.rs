@@ -36,6 +36,7 @@ pub struct Job {
 pub enum DataKey {
     Admin,
     Job(String),
+    AllowedToken(Address),
 }
 
 #[contract]
@@ -49,6 +50,38 @@ impl EscrowContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    /// Allows a specific token to be used for jobs.
+    pub fn allow_token(env: Env, admin: Address, token: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if stored_admin != admin {
+            panic!("Only admin can manage tokens");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(token), &true);
+    }
+
+    /// Removes a token from the allowed list.
+    pub fn remove_token(env: Env, admin: Address, token: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if stored_admin != admin {
+            panic!("Only admin can manage tokens");
+        }
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedToken(token));
     }
 
     /// Client funds escrow: transfers `amount` of `token` from client into this
@@ -73,6 +106,9 @@ impl EscrowContract {
         }
         if env.storage().instance().has(&DataKey::Job(job_id.clone())) {
             panic!("Job already exists");
+        }
+        if !env.storage().instance().has(&DataKey::AllowedToken(token.clone())) {
+            panic!("Token is not supported");
         }
 
         let token_client = token::Client::new(&env, &token);
@@ -291,6 +327,8 @@ mod tests {
         let amount = 100_i128;
         token_client.mint(&client, &amount);
 
+        client_handle.allow_token(&admin, &token);
+
         let job_id = String::from_str(&env, "job-1");
         let expiry_ledger = env.ledger().sequence() + EXPIRY_WINDOW;
         client_handle.create_job(
@@ -344,6 +382,8 @@ mod tests {
             .address();
         StellarAssetClient::new(&env, &token).mint(&client, &100);
 
+        contract.allow_token(&admin, &token);
+
         let current = env.ledger().sequence();
         contract.create_job(
             &client,
@@ -352,6 +392,34 @@ mod tests {
             &token,
             &100,
             &current,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Token is not supported")]
+    fn create_job_with_unsupported_token_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, EscrowContract);
+        let contract = EscrowContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        contract.initialize(&admin);
+
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+
+        let current = env.ledger().sequence();
+        contract.create_job(
+            &client,
+            &freelancer,
+            &String::from_str(&env, "job-unsupported"),
+            &token,
+            &100,
+            &(current + 1000),
         );
     }
 
