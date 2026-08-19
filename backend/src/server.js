@@ -76,6 +76,7 @@ app.get(`${API_V1}/csrf-token`, (req, res) => {
   res.json({ success: true, csrfToken: req.csrfToken() });
 });
 
+app.get("/livez", (req, res) => res.json({ status: "ok" }));
 app.use("/health",                  require("./routes/health"));
 app.use(`${API_V1}/projects`,       require("./routes/projects"));
 app.use(`${API_V1}/donations`,      require("./routes/donations"));
