@@ -62,6 +62,43 @@ export async function getAssetBalance(publicKey: string, assetCode: string, asse
   }
 }
 
+/**
+ * Builds a changeTrust transaction to add (or remove) a trustline for a
+ * Stellar asset.  Used by DonateForm to let donors add a USDC trustline
+ * in-app instead of forcing them to leave the app.
+ *
+ * Passing `limit = "0"` removes the trustline (standard Stellar behaviour).
+ * Omitting `limit` sets the default (max) trust limit.
+ */
+export async function buildChangeTrustTransaction({
+  publicKey,
+  assetCode,
+  assetIssuer,
+  limit,
+}: {
+  publicKey: string;
+  assetCode: string;
+  assetIssuer: string;
+  limit?: string;
+}) {
+  const source = await server.loadAccount(publicKey);
+  const asset = new Asset(assetCode, assetIssuer);
+
+  const builder = new TransactionBuilder(source, {
+    fee: "100",
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      Operation.changeTrust({
+        asset,
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    )
+    .setTimeout(60);
+
+  return builder.build();
+}
+
 export async function buildDonationTransaction({
   fromPublicKey, toPublicKey, amount, memo, asset,
 }: { fromPublicKey: string; toPublicKey: string; amount: string; memo?: string; asset?: { code: string; issuer?: string } }) {
