@@ -38,6 +38,7 @@ export default defineConfig({
         STELLAR_NETWORK: "testnet",
         HORIZON_URL: "https://horizon-testnet.stellar.org",
         ALLOWED_ORIGINS: "http://localhost:3000",
+        CORS_ALLOW_CREDENTIALS: "true",
       },
     },
     {
