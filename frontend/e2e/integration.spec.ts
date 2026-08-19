@@ -1,8 +1,15 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const SEEDED_PROJECT_ID = "8d9ac19b-52eb-42f7-80d9-19a88ba59e43";
-const OWNER_WALLET = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
-const DONOR_WALLET = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGLEWZE5BGYTG2XTGQBC3VP";
+// Must be checksum-valid Stellar addresses: this suite ("No API Mocking")
+// builds real transactions via @stellar/stellar-sdk (only Horizon/Soroban
+// network calls are mocked), and the SDK validates every account id/
+// destination locally before any request goes out. OWNER_WALLET matches the
+// seeded project's own walletAddress (see backend/src/services/store.js),
+// mirroring the app's convention that a project's admin authenticates with
+// the same wallet that owns the project.
+const OWNER_WALLET = "GDYO6GEXKXPU3UH5SWGTAVHMBBZZEKUHWHXUJ33PL2TJJVHZB7CG6BI5";
+const DONOR_WALLET = "GCXHYSEGSNPZF7WLHFZFWEAUUIPHTPEL55HI5RMLZ4WCKU2TLFYHHZWN";
 const DUMMY_TX_HASH = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 
 // Mock Freighter
@@ -12,6 +19,11 @@ async function mockFreighter(page: Page, publicKey: string) {
     (window as unknown as Record<string, unknown>).freighter = {
       isConnected: () => Promise.resolve({ isConnected: true }),
     };
+    // Test seam (see lib/wallet.ts signTransactionWithWallet): without this,
+    // signing falls through to the real Freighter extension postMessage
+    // handshake, which doesn't exist in a headless browser and never resolves.
+    (window as unknown as Record<string, unknown>).__test_signTransaction__ = (xdr: string) =>
+      Promise.resolve({ signedXDR: xdr, error: null });
   }, publicKey);
 }
 
@@ -98,10 +110,24 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     await expect(page.getByText("Amazon Reforestation Initiative").first()).toBeVisible();
     await expect(page.getByText("Untitled Project")).not.toBeVisible();
 
-    // Connect wallet as donor
+    // Connect wallet as donor. The wallet-connected donation form (DonateForm)
+    // lives on the project detail page, not on /donate/[id] — that route is
+    // the SEP-7 QR-code flow checked above and has no amount input or submit
+    // button of its own.
     await mockFreighter(page, DONOR_WALLET);
     await mockHorizon(page);
-    await page.reload();
+    await page.goto(`/projects/${SEEDED_PROJECT_ID}`);
+
+    // Baseline raised total, fetched directly from the API rather than
+    // parsed off the page — the "Recent Donations" feed is populated only by
+    // the backend's own Horizon indexer watching the real chain (see
+    // backend/src/services/turrets.js), which a Horizon-mocked donation can
+    // never reach. What a mocked donation *does* guarantee synchronously is
+    // the project's raised total, updated by the command bus while
+    // recording the donation (see storeProjectAggregate in
+    // backend/src/eventSourcing/commandBus.js) — that's what we verify.
+    const beforeRes = await page.request.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${SEEDED_PROJECT_ID}`);
+    const raisedBefore = parseFloat((await beforeRes.json()).data.raisedXLM);
 
     // Fill donation form
     const form = page.locator(".card", { hasText: /make a donation/i });
@@ -116,10 +142,12 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     // Verify success state (indicates recorded in Postgres)
     await expect(page.getByText("Thank you!")).toBeVisible();
 
-    // Go back to the project page and verify our donation is listed in the feed
-    await page.goto(`/projects/${SEEDED_PROJECT_ID}`);
-    const feed = page.locator(".card", { hasText: /recent donations/i });
-    await expect(feed.getByText(/GCEZW.*BC3VP/)).toBeVisible();
+    // The project's raised total reflects the donation immediately.
+    await expect(async () => {
+      const afterRes = await page.request.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${SEEDED_PROJECT_ID}`);
+      const raisedAfter = parseFloat((await afterRes.json()).data.raisedXLM);
+      expect(raisedAfter).toBeCloseTo(raisedBefore + 25, 5);
+    }).toPass({ timeout: 5000 });
   });
 
   test("3. Admin Status Flow", async ({ page }) => {
@@ -129,7 +157,7 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
 
     // Verify page title and active status
     await expect(page.getByText("Project Admin")).toBeVisible();
-    await expect(page.getByText("active")).toBeVisible();
+    await expect(page.getByText("active", { exact: true })).toBeVisible();
 
     // Reject the project
     await page.getByPlaceholder("Provide a reason for this decision...").fill("Testing reject integration flow");
@@ -138,7 +166,7 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     await rejectBtn.click();
 
     // Verify status changed to rejected
-    await expect(page.getByText("rejected")).toBeVisible();
+    await expect(page.getByText("rejected", { exact: true })).toBeVisible();
     await expect(page.getByText("Testing reject integration flow")).toBeVisible();
 
     // Approve it back to active
@@ -147,6 +175,6 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     await approveBtn.click();
 
     // Verify status is back to active
-    await expect(page.getByText("active")).toBeVisible();
+    await expect(page.getByText("active", { exact: true })).toBeVisible();
   });
 });

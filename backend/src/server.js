@@ -45,8 +45,11 @@ app.use(cookieParser());
 app.use(csurf({
   cookie: {
     httpOnly: true,
+    // SameSite=None requires Secure, or browsers drop the cookie outright.
+    // Only production serves over HTTPS, so keep them tied together —
+    // otherwise every CSRF-protected request silently fails everywhere else.
     secure: process.env.NODE_ENV === "production",
-    sameSite: "none",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     path: "/",
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
