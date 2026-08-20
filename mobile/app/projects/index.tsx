@@ -157,12 +157,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 40,
   },
-  offlineBanner: {
-    textAlign: 'center',
-    marginTop: 12,
-    fontSize: 13,
-    fontWeight: '600',
-  },
   card: {
     borderRadius: 12,
     padding: 16,

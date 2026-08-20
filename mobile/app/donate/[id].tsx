@@ -8,7 +8,9 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import NetInfo from '@react-native-community/netinfo';
 import { authenticate } from '../../hooks/useBiometricAuth';
-import { Keypair, Horizon, Server, TransactionBuilder, Networks, Operation, Asset, Memo } from '@stellar/stellar-sdk';
+import { Keypair, Horizon, TransactionBuilder, Networks, Operation, Asset, Memo } from '@stellar/stellar-sdk';
+
+const StellarServer = (require('@stellar/stellar-sdk') as any).Server || Horizon.Server;
 import { useTheme } from '../theme';
 import { parseAmountToStroops, formatStroopsToXLM, STROOPS_PER_XLM } from '../../utils/amount';
 import {
@@ -18,8 +20,6 @@ import {
   updateQueuedDonation,
   QueuedDonation,
 } from '../../utils/donationQueue';
-
-const StellarServer = Horizon.Server;
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const HORIZON_URL = process.env.EXPO_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';

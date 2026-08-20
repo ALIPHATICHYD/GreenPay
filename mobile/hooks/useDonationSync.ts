@@ -31,8 +31,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import axios from 'axios';
 import NetInfo from '@react-native-community/netinfo';
-import { Horizon, Server } from '@stellar/stellar-sdk';
-const StellarServer = Server || Horizon?.Server;
+import { Horizon } from '@stellar/stellar-sdk';
+const StellarServer = (require('@stellar/stellar-sdk') as any).Server || Horizon.Server;
 import {
   QueuedDonation,
   listQueuedDonations,
