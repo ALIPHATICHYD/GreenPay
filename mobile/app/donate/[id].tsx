@@ -57,12 +57,16 @@ export default function DonateScreen() {
   useEffect(() => {
     if (!queueId) return;
     (async () => {
-      const all = await getQueuedDonation(queueId as string);
-      if (all) {
-        setQueueEntry(all);
-        setSelectedProjectId(all.projectId);
-        setAmount(all.amountXLM);
-        if (all.message) setMessage(all.message);
+      const entry = await getQueuedDonation(queueId as string);
+      if (!entry) return;
+      setQueueEntry(entry);
+      setAmount(entry.amountXLM);
+      setMessage(entry.message || '');
+      if (entry.horizonTransactionHash) {
+        setStatusType('info');
+        setStatusMessage(
+          `This donation already reached the blockchain (tx ${entry.horizonTransactionHash}) but we couldn't confirm it with our server yet. Tap Donate to retry confirming it — it will not be submitted again.`
+        );
       }
     })();
   }, [queueId]);
@@ -88,12 +92,15 @@ export default function DonateScreen() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0] || null;
 
-  const retryBackendConfirmation = async (
-    entry: QueuedDonation & { horizonTransactionHash: string }
-  ) => {
+  /**
+   * A prior attempt for this queued donation already reached Horizon but the
+   * backend confirmation failed afterward. Never re-sign or re-submit the
+   * payment — only retry reporting the existing transaction hash.
+   */
+  const retryBackendConfirmation = async (entry: QueuedDonation & { horizonTransactionHash: string }) => {
     setSubmitting(true);
     setStatusType('info');
-    setStatusMessage('Confirming donation with backend...');
+    setStatusMessage('Confirming your donation with the server...');
     try {
       await axios.post(`${API_URL}/api/donations`, {
         projectId: entry.projectId,
@@ -104,18 +111,17 @@ export default function DonateScreen() {
         message: entry.message,
         transactionHash: entry.horizonTransactionHash,
       });
-
       await removeQueuedDonation(entry.id);
+      setQueueEntry(null);
       setStatusType('success');
-      setStatusMessage(`Donation confirmed! Hash: ${entry.horizonTransactionHash}`);
+      setStatusMessage(`Donation successful! Transaction hash: ${entry.horizonTransactionHash}`);
       setAmount('1');
       setMessage('');
-      setSecretKey('');
-    } catch (error: any) {
-      console.error('Backend confirmation failed:', error);
-      setStatusType('error');
+    } catch (error) {
+      console.error('Donation confirmation retry failed:', error);
+      setStatusType('info');
       setStatusMessage(
-        error?.response?.data?.message || error?.message || 'Confirmation failed. Please try again.'
+        `Your donation already reached the blockchain (tx ${entry.horizonTransactionHash}) but we still can't confirm it with our server. It's saved and won't be submitted twice — try again shortly.`
       );
     } finally {
       setSubmitting(false);
@@ -203,6 +209,7 @@ export default function DonateScreen() {
     setStatusType('info');
     setStatusMessage('Signing and submitting your donation...');
 
+    let transactionHash: string;
     try {
       const server = new StellarServer(HORIZON_URL);
       const sourceAccount = await server.loadAccount(publicKey);
@@ -224,56 +231,54 @@ export default function DonateScreen() {
 
       transaction.sign(keypair);
 
-      let horizonResult;
-      try {
-        horizonResult = await server.submitTransaction(transaction);
-      } catch (submitError: any) {
-        // If Horizon accepted the transaction but dropped connection before
-        // responding, or if the submission throws after hitting network, keep
-        // track of hash if available so the user doesn't double-pay.
-        const hash = submitError?.response?.data?.hash || transaction.hash().toString('hex');
-        if (queueEntry) {
-          await updateQueuedDonation(queueEntry.id, { horizonTransactionHash: hash });
-        }
-        throw submitError;
-      }
-
-      const transactionHash = horizonResult.hash;
-
-      try {
-        await axios.post(`${API_URL}/api/donations`, {
-          projectId: selectedProject.id,
-          donorAddress: publicKey,
-          amountXLM: formattedAmount,
-          amount: formattedAmount,
-          currency: 'XLM',
-          message: message.trim() || undefined,
-          transactionHash,
-        });
-
-        if (queueEntry) {
-          await removeQueuedDonation(queueEntry.id);
-        }
-
-        setStatusType('success');
-        setStatusMessage(`Donation successful! Transaction hash: ${transactionHash}`);
-        setAmount('1');
-        setMessage('');
-        setSecretKey('');
-      } catch (backendError: any) {
-        // Horizon accepted payment, but backend confirmation failed. Store the
-        // hash on the queue entry so retryBackendConfirmation() can safely retry.
-        if (queueEntry) {
-          await updateQueuedDonation(queueEntry.id, { horizonTransactionHash: transactionHash });
-        }
-        throw backendError;
-      }
+      const horizonResult = await server.submitTransaction(transaction);
+      transactionHash = horizonResult.hash;
     } catch (error: any) {
       console.error('Donation failed:', error);
       setStatusType('error');
       setStatusMessage(
         error?.response?.data?.message || error?.message || 'Donation failed. Please try again.'
       );
+      setSubmitting(false);
+      return;
+    }
+
+    // Horizon has already accepted the payment at this point — it must never
+    // be resubmitted, even if the backend confirmation below fails.
+    try {
+      await axios.post(`${API_URL}/api/donations`, {
+        projectId: selectedProject.id,
+        donorAddress: publicKey,
+        amountXLM: formattedAmount,
+        amount: formattedAmount,
+        currency: 'XLM',
+        message: message.trim() || undefined,
+        transactionHash,
+      });
+
+      if (queueEntry) {
+        await removeQueuedDonation(queueEntry.id);
+        setQueueEntry(null);
+      }
+
+      setStatusType('success');
+      setStatusMessage(`Donation successful! Transaction hash: ${transactionHash}`);
+      setAmount('1');
+      setMessage('');
+      setSecretKey('');
+    } catch (error) {
+      console.error('Donation backend confirmation failed:', error);
+      if (queueEntry) {
+        await updateQueuedDonation(queueEntry.id, { horizonTransactionHash: transactionHash });
+        setQueueEntry({ ...queueEntry, horizonTransactionHash: transactionHash });
+      }
+      setStatusType('info');
+      setStatusMessage(
+        `Your donation reached the blockchain (tx ${transactionHash}) but we couldn't confirm it with our server yet. It's saved and won't be submitted twice${
+          queueEntry ? ' — tap Donate again to retry confirming it' : ''
+        }.`
+      );
+      setSecretKey('');
     } finally {
       setSubmitting(false);
     }
