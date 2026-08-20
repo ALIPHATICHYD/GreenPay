@@ -33,12 +33,15 @@ import {
   removeQueuedDonation,
   updateQueuedDonation,
 } from '../utils/donationQueue';
+import {
+  parseAmountToStroops,
+  formatStroopsToDisplay,
+  FEE_BUFFER_STROOPS,
+  isBalanceSufficient,
+} from '../utils/amount';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const HORIZON_URL = process.env.EXPO_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';
-
-/** Small reserve added on top of the donation amount to account for network fees. */
-const FEE_BUFFER_XLM = 0.5;
 
 export type ResolveAction = 'remove' | 'edit-amount';
 
@@ -65,15 +68,26 @@ async function preflightCheck(entry: QueuedDonation): Promise<QueuedDonation> {
     const server = new Server(HORIZON_URL);
     const account = await server.loadAccount(entry.donorAddress);
     const nativeBalance = account.balances.find((b: any) => b.asset_type === 'native');
-    const available = nativeBalance ? parseFloat(nativeBalance.balance) : 0;
-    const required = parseFloat(entry.amountXLM) + FEE_BUFFER_XLM;
+    const availableStroops = nativeBalance ? parseAmountToStroops(nativeBalance.balance) : null;
+    const entryStroops = parseAmountToStroops(entry.amountXLM);
 
-    if (Number.isNaN(available) || available < required) {
+    if (availableStroops === null || entryStroops === null) {
       return {
         ...entry,
         status: 'conflict',
         conflictReason: 'insufficient-balance',
-        conflictDetail: `Available: ${Number.isNaN(available) ? '0' : available.toFixed(2)} XLM, required: ${required.toFixed(2)} XLM`,
+        conflictDetail: `Available: ${nativeBalance?.balance ? formatStroopsToDisplay(parseAmountToStroops(nativeBalance.balance) ?? 0n, 2) : '0'} XLM, required: ${entry.amountXLM} XLM`,
+      };
+    }
+
+    const requiredStroops = entryStroops + FEE_BUFFER_STROOPS;
+
+    if (!isBalanceSufficient(availableStroops, requiredStroops)) {
+      return {
+        ...entry,
+        status: 'conflict',
+        conflictReason: 'insufficient-balance',
+        conflictDetail: `Available: ${formatStroopsToDisplay(availableStroops, 2)} XLM, required: ${formatStroopsToDisplay(requiredStroops, 2)} XLM`,
       };
     }
 

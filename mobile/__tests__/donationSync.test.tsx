@@ -138,6 +138,28 @@ describe('useDonationSync — reconnect conflict resolution', () => {
     expect(result.current.queue).toHaveLength(1);
   });
 
+  it('correctly validates balance at 7-decimal precision boundaries (9.5000007 + 0.5 fee buffer vs 10.0000007 balance)', async () => {
+    await enqueueDonation({
+      projectId: ACTIVE_PROJECT.id,
+      projectName: ACTIVE_PROJECT.name,
+      donorAddress: DONOR_ADDRESS,
+      amountXLM: '9.5000007',
+    });
+
+    const { result } = renderHook(() => useDonationSync());
+    await waitFor(() => expect(result.current.queue).toHaveLength(1));
+
+    // Balance is exactly 10.0000007 (which matches 9.5000007 donation + 0.5 fee buffer)
+    (Server as jest.Mock).mockImplementation(() => ({
+      loadAccount: jest.fn().mockResolvedValue(mockHorizonAccount('10.0000007')),
+    }));
+
+    await goOfflineThenOnline();
+
+    await waitFor(() => expect(result.current.queue[0].status).toBe('ready'));
+    expect(result.current.queue[0].conflictReason).toBeUndefined();
+  });
+
   it('treats an entry with a recorded Horizon hash as already completed, removes it, and tells the user', async () => {
     const entry = await enqueueDonation({
       projectId: ACTIVE_PROJECT.id,

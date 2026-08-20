@@ -8,9 +8,12 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import NetInfo from '@react-native-community/netinfo';
 import { authenticate } from '../../hooks/useBiometricAuth';
-import { Keypair, Server, TransactionBuilder, Networks, Operation, Asset, Memo } from '@stellar/stellar-sdk';
+import { Keypair, Horizon, TransactionBuilder, Networks, Operation, Asset, Memo } from '@stellar/stellar-sdk';
+
+const StellarServer = Horizon.Server;
 import { useTheme } from '../theme';
 import { enqueueDonation } from '../../utils/donationQueue';
+import { parseAmountToStroops, formatStroopsToXLM, STROOPS_PER_XLM } from '../../utils/amount';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const HORIZON_URL = process.env.EXPO_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';
@@ -68,11 +71,14 @@ export default function DonateScreen() {
       return;
     }
 
-    const donationAmount = parseFloat(amount);
-    if (!amount || Number.isNaN(donationAmount) || donationAmount < 1) {
+    const donationStroops = parseAmountToStroops(amount);
+    const minStroops = STROOPS_PER_XLM;
+    if (donationStroops === null || donationStroops < minStroops) {
       Alert.alert('Error', 'Please enter a valid amount (minimum 1 XLM).');
       return;
     }
+
+    const formattedAmount = formatStroopsToXLM(donationStroops);
 
     if (!publicKey) {
       Alert.alert('Wallet Required', 'Please connect your Stellar wallet first.');
@@ -90,7 +96,7 @@ export default function DonateScreen() {
         projectId: selectedProject.id,
         projectName: selectedProject.name,
         donorAddress: publicKey,
-        amountXLM: donationAmount.toFixed(7),
+        amountXLM: formattedAmount,
         message: message.trim() || undefined,
       });
 
@@ -136,7 +142,7 @@ export default function DonateScreen() {
     setStatusMessage('Signing and submitting your donation...');
 
     try {
-      const server = new Server(HORIZON_URL);
+      const server = new StellarServer(HORIZON_URL);
       const sourceAccount = await server.loadAccount(publicKey);
 
       const transaction = new TransactionBuilder(sourceAccount, {
@@ -147,7 +153,7 @@ export default function DonateScreen() {
           Operation.payment({
             destination: selectedProject.walletAddress,
             asset: Asset.native(),
-            amount: donationAmount.toFixed(7),
+            amount: formattedAmount,
           })
         )
         .addMemo(Memo.text(`GreenPay:${selectedProject.id.slice(0, 16)}`))
@@ -161,8 +167,8 @@ export default function DonateScreen() {
       await axios.post(`${API_URL}/api/donations`, {
         projectId: selectedProject.id,
         donorAddress: publicKey,
-        amountXLM: donationAmount.toFixed(7),
-        amount: donationAmount.toFixed(7),
+        amountXLM: formattedAmount,
+        amount: formattedAmount,
         currency: 'XLM',
         message: message.trim() || undefined,
         transactionHash,
@@ -202,7 +208,7 @@ export default function DonateScreen() {
           },
         },
       ],
-      'plain-text-input'
+      { cancelable: true }
     );
   };
 

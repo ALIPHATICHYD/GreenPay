@@ -6,6 +6,7 @@ import React from 'react';
 import { render, waitFor } from '@testing-library/react-native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ThemeProvider } from '../app/theme';
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn() }),
@@ -14,6 +15,14 @@ jest.mock('expo-router', () => ({
 jest.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 import ProjectsScreen from '../app/projects/index';
+
+function renderProjectsScreen() {
+  return render(
+    <ThemeProvider>
+      <ProjectsScreen />
+    </ThemeProvider>
+  );
+}
 
 const MOCK_PROJECTS = [
   {
@@ -40,7 +49,7 @@ describe('ProjectsScreen — offline support', () => {
     (AsyncStorage.getItem as jest.Mock).mockResolvedValue(entry);
     (axios.get as jest.Mock).mockRejectedValue(new Error('Network Error'));
 
-    const { getByText } = render(<ProjectsScreen />);
+    const { getByText } = renderProjectsScreen();
 
     await waitFor(() => {
       expect(getByText('Amazon Reforestation')).toBeTruthy();
@@ -51,7 +60,7 @@ describe('ProjectsScreen — offline support', () => {
   it('does not show Offline banner when network succeeds', async () => {
     (axios.get as jest.Mock).mockResolvedValue({ data: { data: MOCK_PROJECTS } });
 
-    const { queryByText } = render(<ProjectsScreen />);
+    const { queryByText } = renderProjectsScreen();
 
     await waitFor(() => {
       expect(queryByText('Offline — showing cached data')).toBeNull();
@@ -62,7 +71,7 @@ describe('ProjectsScreen — offline support', () => {
   it('writes fresh data to cache on successful load', async () => {
     (axios.get as jest.Mock).mockResolvedValue({ data: { data: MOCK_PROJECTS } });
 
-    render(<ProjectsScreen />);
+    renderProjectsScreen();
 
     await waitFor(() => {
       expect(AsyncStorage.setItem).toHaveBeenCalledWith(
