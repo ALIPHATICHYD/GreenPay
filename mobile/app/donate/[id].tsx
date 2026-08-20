@@ -14,6 +14,13 @@ const StellarServer = Horizon.Server;
 import { useTheme } from '../theme';
 import { enqueueDonation } from '../../utils/donationQueue';
 import { parseAmountToStroops, formatStroopsToXLM, STROOPS_PER_XLM } from '../../utils/amount';
+import {
+  enqueueDonation,
+  getQueuedDonation,
+  removeQueuedDonation,
+  updateQueuedDonation,
+  QueuedDonation,
+} from '../../utils/donationQueue';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const HORIZON_URL = process.env.EXPO_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';
@@ -28,13 +35,14 @@ interface ClimateProject {
 export default function DonateScreen() {
   const { colors } = useTheme();
   const router = useRouter();
-  const { id } = useLocalSearchParams();
+  const { id, queueId } = useLocalSearchParams();
   const [projects, setProjects] = useState<ClimateProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(id as string | undefined);
   const [amount, setAmount] = useState('1');
   const [message, setMessage] = useState('');
+  const [queueEntry, setQueueEntry] = useState<QueuedDonation | null>(null);
   const [secretKey, setSecretKey] = useState('');
-  const [publicKey, setPublicKey] = useState('');
+  const { publicKey, loading: walletLoading, connect: connectWalletKey } = useWallet();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -43,6 +51,26 @@ export default function DonateScreen() {
   useEffect(() => {
     loadProjects();
   }, [id]);
+
+  // Arriving from the offline queue ("Complete now") — prefill the amount
+  // and message from the queued intent, and check whether a prior attempt
+  // already reached Horizon before the backend confirmation failed.
+  useEffect(() => {
+    if (!queueId) return;
+    (async () => {
+      const entry = await getQueuedDonation(queueId as string);
+      if (!entry) return;
+      setQueueEntry(entry);
+      setAmount(entry.amountXLM);
+      setMessage(entry.message || '');
+      if (entry.horizonTransactionHash) {
+        setStatusType('info');
+        setStatusMessage(
+          `This donation already reached the blockchain (tx ${entry.horizonTransactionHash}) but we couldn't confirm it with our server yet. Tap Donate to retry confirming it — it will not be submitted again.`
+        );
+      }
+    })();
+  }, [queueId]);
 
   const loadProjects = async () => {
     setLoading(true);
@@ -65,15 +93,57 @@ export default function DonateScreen() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0] || null;
 
+  /**
+   * A prior attempt for this queued donation already reached Horizon but the
+   * backend confirmation failed afterward. Never re-sign or re-submit the
+   * payment — only retry reporting the existing transaction hash.
+   */
+  const retryBackendConfirmation = async (entry: QueuedDonation & { horizonTransactionHash: string }) => {
+    setSubmitting(true);
+    setStatusType('info');
+    setStatusMessage('Confirming your donation with the server...');
+    try {
+      await axios.post(`${API_URL}/api/donations`, {
+        projectId: entry.projectId,
+        donorAddress: entry.donorAddress,
+        amountXLM: entry.amountXLM,
+        amount: entry.amountXLM,
+        currency: 'XLM',
+        message: entry.message,
+        transactionHash: entry.horizonTransactionHash,
+      });
+      await removeQueuedDonation(entry.id);
+      setQueueEntry(null);
+      setStatusType('success');
+      setStatusMessage(`Donation successful! Transaction hash: ${entry.horizonTransactionHash}`);
+      setAmount('1');
+      setMessage('');
+    } catch (error) {
+      console.error('Donation confirmation retry failed:', error);
+      setStatusType('info');
+      setStatusMessage(
+        `Your donation already reached the blockchain (tx ${entry.horizonTransactionHash}) but we still can't confirm it with our server. It's saved and won't be submitted twice — try again shortly.`
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleDonate = async () => {
     if (!selectedProject) {
       Alert.alert('Error', 'Please choose a project to donate to.');
       return;
     }
-
     const donationStroops = parseAmountToStroops(amount);
     const minStroops = STROOPS_PER_XLM;
     if (donationStroops === null || donationStroops < minStroops) {
+    if (queueEntry?.horizonTransactionHash) {
+      await retryBackendConfirmation(queueEntry as QueuedDonation & { horizonTransactionHash: string });
+      return;
+    }
+
+    const donationAmount = parseFloat(amount);
+    if (!amount || Number.isNaN(donationAmount) || donationAmount < 1) {
       Alert.alert('Error', 'Please enter a valid amount (minimum 1 XLM).');
       return;
     }
@@ -141,6 +211,7 @@ export default function DonateScreen() {
     setStatusType('info');
     setStatusMessage('Signing and submitting your donation...');
 
+    let transactionHash: string;
     try {
       const server = new StellarServer(HORIZON_URL);
       const sourceAccount = await server.loadAccount(publicKey);
@@ -162,8 +233,20 @@ export default function DonateScreen() {
 
       transaction.sign(keypair);
       const horizonResult = await server.submitTransaction(transaction);
-      const transactionHash = horizonResult.hash;
+      transactionHash = horizonResult.hash;
+    } catch (error: any) {
+      console.error('Donation failed:', error);
+      setStatusType('error');
+      setStatusMessage(
+        error?.response?.data?.message || error?.message || 'Donation failed. Please try again.'
+      );
+      setSubmitting(false);
+      return;
+    }
 
+    // Horizon has already accepted the payment at this point — it must never
+    // be resubmitted, even if the backend confirmation below fails.
+    try {
       await axios.post(`${API_URL}/api/donations`, {
         projectId: selectedProject.id,
         donorAddress: publicKey,
@@ -174,23 +257,35 @@ export default function DonateScreen() {
         transactionHash,
       });
 
+      if (queueEntry) {
+        await removeQueuedDonation(queueEntry.id);
+        setQueueEntry(null);
+      }
+
       setStatusType('success');
       setStatusMessage(`Donation successful! Transaction hash: ${transactionHash}`);
       setAmount('1');
       setMessage('');
       setSecretKey('');
-    } catch (error: any) {
-      console.error('Donation failed:', error);
-      setStatusType('error');
+    } catch (error) {
+      console.error('Donation backend confirmation failed:', error);
+      if (queueEntry) {
+        await updateQueuedDonation(queueEntry.id, { horizonTransactionHash: transactionHash });
+        setQueueEntry({ ...queueEntry, horizonTransactionHash: transactionHash });
+      }
+      setStatusType('info');
       setStatusMessage(
-        error?.response?.data?.message || error?.message || 'Donation failed. Please try again.'
+        `Your donation reached the blockchain (tx ${transactionHash}) but we couldn't confirm it with our server yet. It's saved and won't be submitted twice${
+          queueEntry ? ' — tap Donate again to retry confirming it' : ''
+        }.`
       );
+      setSecretKey('');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const connectWallet = async () => {
+  const connectWallet = () => {
     Alert.alert(
       'Connect Wallet',
       'Enter your Stellar public key:',
@@ -198,11 +293,10 @@ export default function DonateScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'OK',
-          onPress: (input: any) => {
+          onPress: async (input: any) => {
             const trimmed = String(input || '').trim();
-            if (/^G[A-Z0-9]{55}$/.test(trimmed)) {
-              setPublicKey(trimmed);
-            } else {
+            const ok = await connectWalletKey(trimmed);
+            if (!ok) {
               Alert.alert('Invalid Key', 'Please enter a valid Stellar public key');
             }
           },
@@ -253,7 +347,9 @@ export default function DonateScreen() {
         </ScrollView>
       </View>
 
-      {!publicKey ? (
+      {walletLoading ? (
+        <ActivityIndicator size="small" color={colors.buttonBackground} style={styles.walletLoading} />
+      ) : !publicKey ? (
         <TouchableOpacity style={[styles.connectButton, { backgroundColor: colors.buttonBackground }]}
           onPress={connectWallet}
         >
@@ -324,7 +420,11 @@ export default function DonateScreen() {
         disabled={submitting}
       >
         <Text style={styles.donateButtonText}>
-          {submitting ? 'Sending donation...' : `🌱 Donate ${amount || '1'} XLM`}
+          {submitting
+            ? 'Sending donation...'
+            : queueEntry?.horizonTransactionHash
+            ? '🌱 Confirm with server'
+            : `🌱 Donate ${amount || '1'} XLM`}
         </Text>
       </TouchableOpacity>
     </ScrollView>
@@ -394,6 +494,9 @@ const styles = StyleSheet.create({
   connectButtonText: {
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  walletLoading: {
+    marginVertical: 16,
   },
   walletCard: {
     margin: 16,

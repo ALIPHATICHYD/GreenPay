@@ -98,6 +98,22 @@ function QueueCard({
         </>
       )}
 
+      {entry.status === 'conflict' && entry.conflictReason === 'duplicate' && (
+        <>
+          <Text style={styles.conflictText}>
+            {entry.conflictDetail || 'A similar donation already exists in the queue.'}
+          </Text>
+          <View style={styles.actionRow}>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={() => onEditAmount(entry)}>
+              <Text style={styles.secondaryBtnText}>Edit amount</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.dangerBtn} onPress={() => onRemove(entry)}>
+              <Text style={styles.dangerBtnText}>Remove</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+
       {entry.status === 'completed' && (
         <Text style={styles.readyText}>
           This donation already went through — it will be removed from the queue.
@@ -133,7 +149,7 @@ export default function SyncConflictsScreen() {
   };
 
   const handleCompleteNow = (entry: QueuedDonation) => {
-    router.push(`/donate/${entry.projectId}`);
+    router.push(`/donate/${entry.projectId}?queueId=${entry.id}`);
   };
 
   const handleEditAmount = (entry: QueuedDonation) => {

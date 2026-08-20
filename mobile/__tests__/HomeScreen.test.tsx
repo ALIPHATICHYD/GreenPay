@@ -17,6 +17,17 @@ jest.mock('expo-router', () => ({
 jest.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 import HomeScreen from '../app/index';
+import { ThemeProvider } from '../app/theme';
+
+// app/index.tsx reads theme colors via useTheme(), which requires a
+// ThemeProvider ancestor.
+function renderHomeScreen() {
+  return render(
+    <ThemeProvider>
+      <HomeScreen />
+    </ThemeProvider>
+  );
+}
 
 function renderHomeScreen() {
   return render(
@@ -54,10 +65,11 @@ describe('HomeScreen', () => {
 
   it('renders the app title', async () => {
     (axios.get as jest.Mock).mockResolvedValue({ data: { data: [MOCK_PROJECT] } });
+  it('renders the app title', async () => {
+    (axios.get as jest.Mock).mockResolvedValue({ data: { data: [MOCK_PROJECT] } });
     const { getByText } = renderHomeScreen();
     await waitFor(() => expect(getByText('Stellar GreenPay')).toBeTruthy());
   });
-
   it('renders global stats after data loads', async () => {
     (axios.get as jest.Mock).mockResolvedValue({ data: { data: [MOCK_PROJECT] } });
 
@@ -66,7 +78,6 @@ describe('HomeScreen', () => {
       expect(getByText('Stellar GreenPay')).toBeTruthy();
     });
   });
-
   it('renders the featured project name after data loads', async () => {
     (axios.get as jest.Mock).mockResolvedValue({ data: { data: [MOCK_PROJECT] } });
 
