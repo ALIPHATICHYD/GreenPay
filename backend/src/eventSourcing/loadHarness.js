@@ -76,6 +76,12 @@ class SimulatedPool {
     this.queryCount = { worker: 0, ingest: 0 };
     this.busyMs = { worker: 0, ingest: 0 };
     this.onProcessed = null;
+    // Running donor_stats totals, keyed by public_key. Modelling this matters
+    // for capacity: upsertDonorStats only has to write the profiles FK guard
+    // row on a donor's *first* donation, so a stub that always reports "no
+    // such donor" makes every event look like a first-time donation and
+    // overstates steady-state statements per event.
+    this.donorStats = new Map();
   }
 
   /**
@@ -118,7 +124,14 @@ class SimulatedPool {
       return this.markProcessed(params[0]);
     }
     if (/FROM donor_stats/i.test(text)) {
-      return { rows: [], rowCount: 0 };
+      const existing = this.donorStats.get(params[0]);
+      if (existing === undefined) return { rows: [], rowCount: 0 };
+      return { rows: [{ total_donated_xlm: existing }], rowCount: 1 };
+    }
+    if (/INTO donor_stats/i.test(text)) {
+      // params: [public_key, total_donated_xlm, badges, projection_cursor]
+      this.donorStats.set(params[0], params[1]);
+      return { rows: [], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };
   }
