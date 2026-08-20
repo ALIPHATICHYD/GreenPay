@@ -303,7 +303,8 @@ impl EscrowContract {
         if stored_admin != admin {
             panic!("Only admin can upgrade");
         }
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
         env.events()
             .publish((symbol_short!("upgraded"), admin), new_wasm_hash);
     }
@@ -655,7 +656,9 @@ mod tests {
         assert_eq!(new_cid, cid);
 
         let contract_v2 = EscrowContractClient::new(&env, &cid);
-        let job = contract_v2.get_job(&job_id).expect("job must survive upgrade");
+        let job = contract_v2
+            .get_job(&job_id)
+            .expect("job must survive upgrade");
         assert_eq!(job.amount, amount);
         let token_client = token::Client::new(&env, &token);
         // contract still holds the escrowed funds

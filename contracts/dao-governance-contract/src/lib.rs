@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, vec, Address, Bytes, BytesN, Env, IntoVal,
-    String, Symbol,
+    contract, contractimpl, contracttype, token, vec, Address, Bytes, BytesN, Env, IntoVal, String,
+    Symbol,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -533,7 +533,8 @@ impl DaoGovernanceContract {
         if caller != config.dao_admin {
             panic!("only dao_admin can upgrade");
         }
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
         env.events()
             .publish((Symbol::new(&env, "upgraded"), caller), new_wasm_hash);
     }

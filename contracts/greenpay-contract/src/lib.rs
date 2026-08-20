@@ -733,7 +733,8 @@ impl GreenPayContract {
         if stored_admin != admin {
             panic!("Only admin can upgrade");
         }
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
         env.events()
             .publish((symbol_short!("upgraded"), admin), new_wasm_hash);
     }
