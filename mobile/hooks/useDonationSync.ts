@@ -127,22 +127,6 @@ async function preflightCheck(
         conflictDetail: 'This project is no longer accepting donations.',
       };
     }
-    const server = new Server(HORIZON_URL);
-    const account = await server.loadAccount(entry.donorAddress);
-    const nativeBalance = account.balances.find((b: any) => b.asset_type === 'native');
-    const availableStroops = nativeBalance ? parseAmountToStroops(nativeBalance.balance) : null;
-    const entryStroops = parseAmountToStroops(entry.amountXLM);
-
-    if (availableStroops === null || entryStroops === null) {
-      return {
-        ...entry,
-        status: 'conflict',
-        conflictReason: 'insufficient-balance',
-        conflictDetail: `Available: ${nativeBalance?.balance ? formatStroopsToDisplay(parseAmountToStroops(nativeBalance.balance) ?? 0n, 2) : '0'} XLM, required: ${entry.amountXLM} XLM`,
-      };
-    }
-
-    const requiredStroops = entryStroops + FEE_BUFFER_STROOPS;
     // Use cached loadAccount result when available for this donor address.
     let cacheEntry = accountCache.get(entry.donorAddress);
     if (!cacheEntry) {
@@ -169,8 +153,19 @@ async function preflightCheck(
     }
 
     const nativeBalance = cacheEntry.account.balances.find((b: any) => b.asset_type === 'native');
-    const available = nativeBalance ? parseFloat(nativeBalance.balance) : 0;
-    const required = parseFloat(entry.amountXLM) + FEE_BUFFER_XLM;
+    const availableStroops = nativeBalance ? parseAmountToStroops(nativeBalance.balance) : null;
+    const entryStroops = parseAmountToStroops(entry.amountXLM);
+
+    if (availableStroops === null || entryStroops === null) {
+      return {
+        ...entry,
+        status: 'conflict',
+        conflictReason: 'insufficient-balance',
+        conflictDetail: `Available: ${nativeBalance?.balance ? formatStroopsToDisplay(parseAmountToStroops(nativeBalance.balance) ?? 0n, 2) : '0'} XLM, required: ${entry.amountXLM} XLM`,
+      };
+    }
+
+    const requiredStroops = entryStroops + FEE_BUFFER_STROOPS;
 
     if (!isBalanceSufficient(availableStroops, requiredStroops)) {
       return {
