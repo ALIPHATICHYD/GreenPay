@@ -94,10 +94,6 @@ export default function ProjectsScreen() {
           <Text style={styles.offlineBannerText}>Offline — showing cached data</Text>
         </View>
       )}
-    <View style={[styles.container, { backgroundColor: colors.background }]}> 
-      {isOffline ? (
-        <Text style={[styles.offlineBanner, { color: colors.secondaryText }]}>Offline — showing cached data</Text>
-      ) : null}
       <TextInput
         style={[styles.searchInput, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder, color: colors.primaryText }]}
         placeholder="Search projects..."
