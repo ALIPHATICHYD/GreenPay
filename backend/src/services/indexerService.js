@@ -15,6 +15,10 @@ let io = null;
 let projectWallets = new Map(); // wallet_address -> project_id
 let refreshIntervalId = null;
 let closeStream = null;
+let cursorFlushIntervalId = null;
+
+const CURSOR_KEY = "horizon_operations_cursor";
+const CURSOR_FLUSH_INTERVAL_MS = 30_000;
 
 /**
  * Fetch all active project wallets and cache them.
@@ -40,6 +44,43 @@ async function updateProjectWallets() {
 // internal helper
 
 /**
+ * Load the last successfully processed ledger cursor from the database.
+ * Returns null on the very first start (no row yet).
+ */
+async function loadCursor() {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM indexer_state WHERE key = $1",
+      [CURSOR_KEY]
+    );
+    if (result.rows.length > 0) {
+      return result.rows[0].value;
+    }
+  } catch (err) {
+    console.error("[Indexer] Failed to load cursor:", err.message);
+  }
+  return null;
+}
+
+/**
+ * Persist the current processing cursor so the stream can resume after
+ * a restart. Uses UPSERT so concurrent calls are safe.
+ */
+async function persistCursor(cursor) {
+  if (!cursor) return;
+  try {
+    await pool.query(
+      `INSERT INTO indexer_state (key, value, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+      [CURSOR_KEY, String(cursor)]
+    );
+  } catch (err) {
+    console.error("[Indexer] Failed to persist cursor:", err.message);
+  }
+}
+
+/**
  * Start the Stellar indexer service.
  * @param {Object} socketIo - The Socket.io server instance.
  */
@@ -52,11 +93,21 @@ async function startIndexer(socketIo) {
   // Refresh cache every 10 minutes
   refreshIntervalId = setInterval(updateProjectWallets, 10 * 60 * 1000);
 
+  const persistedCursor = await loadCursor();
+
+  if (persistedCursor) {
+    console.log(`[Indexer] Resuming from persisted cursor: ${persistedCursor}`);
+    lastProcessedLedger = Number(persistedCursor);
+  } else {
+    lastProcessedLedger = 0;
+    console.log("[Indexer] No persisted cursor found, starting from now");
+  }
+
   console.log("[Indexer] Starting Horizon operations stream...");
 
-  // Start streaming operations from 'now'
+  // Start streaming operations from the persisted cursor (or "now" on first start)
   closeStream = stellarServer.operations()
-    .cursor("now")
+    .cursor(persistedCursor || "now")
     .stream({
       onmessage: async (op) => {
         try {
@@ -77,6 +128,12 @@ async function startIndexer(socketIo) {
         console.error("[Indexer] Stream error:", err);
       }
     });
+
+  cursorFlushIntervalId = setInterval(() => {
+    if (lastProcessedLedger) {
+      persistCursor(lastProcessedLedger);
+    }
+  }, CURSOR_FLUSH_INTERVAL_MS);
 }
 
 /**
@@ -193,9 +250,17 @@ function stopIndexer() {
     clearInterval(refreshIntervalId);
     refreshIntervalId = null;
   }
+  if (cursorFlushIntervalId) {
+    clearInterval(cursorFlushIntervalId);
+    cursorFlushIntervalId = null;
+  }
   if (typeof closeStream === "function") {
     closeStream();
     closeStream = null;
+  }
+
+  if (lastProcessedLedger) {
+    persistCursor(lastProcessedLedger);
   }
 
   isRunning = false;

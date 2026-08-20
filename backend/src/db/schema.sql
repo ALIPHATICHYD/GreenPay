@@ -266,3 +266,11 @@ CREATE INDEX IF NOT EXISTS idx_ai_summary_job_failures_status
 
 CREATE INDEX IF NOT EXISTS idx_ai_summary_job_failures_created_at
   ON ai_summary_job_failures (created_at);
+
+-- Indexer cursor: durable resume point so the Horizon operations stream
+-- can pick up where it left off after a deploy, crash, or restart.
+CREATE TABLE IF NOT EXISTS indexer_state (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
