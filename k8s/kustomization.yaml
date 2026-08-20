@@ -17,6 +17,7 @@ resources:
   - ml-workloads/summary-worker.yaml
   - ml-workloads/ml-inference.yaml
   - ml-workloads/ml-training.yaml
+  - network-policy.yaml
 
 components:
   # Deploy the custom scheduler infrastructure.
