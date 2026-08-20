@@ -31,8 +31,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import axios from 'axios';
 import NetInfo from '@react-native-community/netinfo';
-import { Horizon } from '@stellar/stellar-sdk';
-const Server = Horizon.Server;
+import { Horizon, Server } from '@stellar/stellar-sdk';
+const StellarServer = Server || Horizon?.Server;
 import {
   QueuedDonation,
   listQueuedDonations,
@@ -132,7 +132,7 @@ async function preflightCheck(
     let cacheEntry = accountCache.get(entry.donorAddress);
     if (!cacheEntry) {
       try {
-        const server = new Server(HORIZON_URL);
+        const server = new StellarServer(HORIZON_URL);
         const account = await server.loadAccount(entry.donorAddress);
         cacheEntry = { account, error: null };
       } catch (error) {
