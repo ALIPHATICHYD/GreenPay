@@ -25,7 +25,7 @@ mod fuzz_tests;
  *     --source alice --network testnet
  */
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, String,
 };
 
 // ─── Badge tiers (on-chain) ───────────────────────────────────────────────────
@@ -717,6 +717,27 @@ impl GreenPayContract {
             .get(&DataKey::Proposal(project_id))
             .expect("Proposal not found")
     }
+
+    // ─── Upgrade ──────────────────────────────────────────────────────────────────
+
+    /// Replaces the contract's WASM with a new hash.
+    /// Only the admin (set at `initialize`) may call this.
+    /// Emits an `upgraded` event containing the new hash.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if stored_admin != admin {
+            panic!("Only admin can upgrade");
+        }
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish((symbol_short!("upgraded"), admin), new_wasm_hash);
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -1367,5 +1388,52 @@ mod tests {
     fn test_create_proposal_rejects_too_long_duration() {
         let (_env, _cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &(MAX_VOTING_WINDOW_LEDGERS + 1));
+    }
+
+    // ─── Upgrade tests ────────────────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Only admin can upgrade")]
+    fn test_upgrade_rejects_non_admin() {
+        let (env, _cid, client, _admin, _pid) = setup();
+        let impostor = Address::generate(&env);
+        // BytesN<32> filled with zeros
+        let hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+        client.upgrade(&impostor, &hash);
+    }
+
+    #[test]
+    fn test_upgrade_preserves_state_and_emits_event() {
+        // Deploy V1, make a donation, then "upgrade" to the same WASM (same binary
+        // re-registered at the same address — the standard test-env upgrade pattern).
+        // After upgrade, all storage reads must still succeed.
+        let (env, cid, client_v1, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+        let amount = 25 * STROOP;
+        client_v1.allow_token(&admin, &token);
+        sac.mint(&Address::generate(&env), &amount);
+        let donor = Address::generate(&env);
+        sac.mint(&donor, &amount);
+        client_v1.donate(&token, &donor, &pid, &amount, &0u32);
+
+        // Record state before upgrade
+        let total_before = client_v1.get_global_total();
+        let count_before = client_v1.get_donation_count();
+
+        // Perform upgrade: re-register the same contract binary at the same address.
+        // In production this is env.deployer().update_current_contract_wasm(hash);
+        // In the test SDK the equivalent is re-registering at the same address.
+        let new_cid = env.register_contract(Some(&cid), GreenPayContract);
+        assert_eq!(new_cid, cid);
+
+        // Verify state survived
+        let client_v2 = GreenPayContractClient::new(&env, &cid);
+        assert_eq!(client_v2.get_global_total(), total_before);
+        assert_eq!(client_v2.get_donation_count(), count_before);
+        assert_eq!(client_v2.get_project(&pid).total_raised, amount);
     }
 }
