@@ -168,14 +168,18 @@ impl EscrowContract {
             panic!("Job is not in escrow");
         }
 
-        let token_client = token::Client::new(&env, &job.token);
-        let contract_addr = env.current_contract_address();
+        // Effects: all state writes BEFORE the external token transfer
+        // (Checks-Effects-Interactions to defend against reentrancy from a
+        // malicious token contract passed via `token` in `create_job`).
         let release_amount = job.remaining_amount;
-        token_client.transfer(&contract_addr, &job.freelancer, &release_amount);
-
         job.remaining_amount = 0;
         job.status = JobStatus::Released;
         env.storage().instance().set(&DataKey::Job(job_id), &job);
+
+        // Interaction: external call last.
+        let token_client = token::Client::new(&env, &job.token);
+        let contract_addr = env.current_contract_address();
+        token_client.transfer(&contract_addr, &job.freelancer, &release_amount);
     }
 
     /// Client authorizes a partial payment release to the freelancer.
@@ -261,20 +265,26 @@ impl EscrowContract {
             panic!("Job is not disputed");
         }
 
-        let token_client = token::Client::new(&env, &job.token);
-        let contract_addr = env.current_contract_address();
+        // Effects: all state writes BEFORE the external token transfer
+        // (Checks-Effects-Interactions to defend against reentrancy from a
+        // malicious token contract passed via `token` in `create_job`).
         let remaining = job.remaining_amount;
-        if release_to_freelancer {
-            token_client.transfer(&contract_addr, &job.freelancer, &remaining);
+        let recipient = if release_to_freelancer {
             job.status = JobStatus::Released;
+            job.freelancer.clone()
         } else {
-            token_client.transfer(&contract_addr, &job.client, &remaining);
             job.status = JobStatus::Refunded;
-        }
+            job.client.clone()
+        };
         job.remaining_amount = 0;
         env.storage()
             .instance()
             .set(&DataKey::Job(job_id.clone()), &job);
+
+        // Interaction: external call last.
+        let token_client = token::Client::new(&env, &job.token);
+        let contract_addr = env.current_contract_address();
+        token_client.transfer(&contract_addr, &recipient, &remaining);
         env.events().publish(
             (symbol_short!("resolved"), admin),
             (job_id, release_to_freelancer),
@@ -359,14 +369,18 @@ impl EscrowContract {
             panic!("Job has not expired yet");
         }
 
-        let token_client = token::Client::new(&env, &job.token);
-        let contract_addr = env.current_contract_address();
+        // Effects: all state writes BEFORE the external token transfer
+        // (Checks-Effects-Interactions to defend against reentrancy from a
+        // malicious token contract passed via `token` in `create_job`).
         let remaining = job.remaining_amount;
-        token_client.transfer(&contract_addr, &job.client, &remaining);
-
         job.remaining_amount = 0;
         job.status = JobStatus::Refunded;
         env.storage().instance().set(&DataKey::Job(job_id), &job);
+
+        // Interaction: external call last.
+        let token_client = token::Client::new(&env, &job.token);
+        let contract_addr = env.current_contract_address();
+        token_client.transfer(&contract_addr, &job.client, &remaining);
     }
 
     pub fn get_job(env: Env, job_id: String) -> Option<Job> {
