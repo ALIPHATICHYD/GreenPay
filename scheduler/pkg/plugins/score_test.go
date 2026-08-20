@@ -7,7 +7,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
 	"github.com/greenpay/scheduler/pkg/hardware"
@@ -576,6 +575,19 @@ func TestBinPackingScore_Isolation(t *testing.T) {
 	}
 	ni80 := framework.NewNodeInfo()
 	ni80.SetNode(node80)
+	// binPackingScore is defined over requested/allocatable, not capacity/allocatable
+	// (see its doc comment), so isolating an "80% utilized" node means actually
+	// placing a pod requesting 80% of what's allocatable here.
+	ni80.AddPod(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "existing-workload", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1600m")},
+				}},
+			},
+		},
+	})
 
 	node0 := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "node-0"},

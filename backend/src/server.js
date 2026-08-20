@@ -42,18 +42,26 @@ app.use(helmet());
 app.use(morgan("dev"));
 app.use(express.json({ limit: "20kb" }));
 app.use(cookieParser());
+
+// CORS must run before CSRF validation so that a CSRF rejection still carries
+// Access-Control-Allow-Origin — otherwise browsers report a same-origin-looking
+// 403 as an opaque "blocked by CORS policy" failure instead of the real error.
+const origins = getAllowedOrigins();
+app.use(...createCorsMiddleware(origins));
+
 app.use(csurf({
   cookie: {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "none",
+    // SameSite=None is only valid on a Secure cookie; browsers silently drop
+    // it otherwise. Outside production (plain HTTP dev/test/CI) fall back to
+    // Lax, which still covers same-site cross-port requests like
+    // localhost:3000 -> localhost:4000.
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     path: "/",
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
 }));
-
-const origins = getAllowedOrigins();
-app.use(...createCorsMiddleware(origins));
 
 const io = new Server(server, {
   cors: {
