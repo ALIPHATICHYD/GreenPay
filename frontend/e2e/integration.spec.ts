@@ -89,6 +89,8 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     await page.goto("/projects");
     await expect(page.getByText("Amazon Reforestation Initiative")).toBeVisible();
 
+113
+
     // Navigate to details page
     await page.getByText("Amazon Reforestation Initiative").click();
     await expect(page).toHaveURL(new RegExp(`/projects/${SEEDED_PROJECT_ID}`));
@@ -104,29 +106,19 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     // If the bug were present, it would display "Untitled Project"
     await expect(page.getByText("Amazon Reforestation Initiative").first()).toBeVisible();
     await expect(page.getByText("Untitled Project")).not.toBeVisible();
+    await expect(page).toHaveTitle(/Donate to Amazon Reforestation Initiative/i);
 
-    // Connect wallet as donor
-    await mockFreighter(page, DONOR_WALLET);
-    await mockHorizon(page);
-    await page.reload();
+    // The current donation experience is QR/URI based rather than an inline submit form.
+    const donateCard = page.locator(".donate-card");
+    await expect(donateCard).toBeVisible();
+    await expect(donateCard.getByText("Preset donation:")).toContainText("25 XLM");
+    await expect(donateCard.getByText(/Scan to donate with Freighter/i)).toBeVisible();
+    await expect(donateCard.getByLabel("Copy Stellar URI")).toBeVisible();
+    await expect(donateCard.getByRole("button", { name: /Download QR/i })).toBeVisible();
+    await expect(donateCard.getByRole("button", { name: /Print/i })).toBeVisible();
 
-    // Fill donation form
-    const form = page.locator(".card", { hasText: /make a donation/i });
-    await expect(form.getByRole("heading", { name: /make a donation/i })).toBeVisible();
-    await form.getByPlaceholder(/or enter custom amount/i).fill("25");
-
-    // Click submit
-    const donateBtn = form.getByRole("button", { name: /Donate/i });
-    await expect(donateBtn).toBeEnabled();
-    await donateBtn.click();
-
-    // Verify success state (indicates recorded in Postgres)
-    await expect(page.getByText("Thank you!")).toBeVisible();
-
-    // Go back to the project page and verify our donation is listed in the feed
-    await page.goto(`/projects/${SEEDED_PROJECT_ID}`);
-    const feed = page.locator(".card", { hasText: /recent donations/i });
-    await expect(feed.getByText(/GCEZW.*BC3VP/)).toBeVisible();
+    // Verify the generated Stellar URI is rendered with the seeded wallet and preset amount.
+    await expect(donateCard.getByText(/web\+stellar:pay\?/)).toContainText("amount=25");
   });
 
   test("3. Admin Status Flow", async ({ page }) => {
