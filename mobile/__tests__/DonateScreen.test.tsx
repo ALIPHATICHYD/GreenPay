@@ -15,7 +15,15 @@ import { DONATION_QUEUE_KEY, enqueueDonation, listQueuedDonations } from '../uti
 
 jest.mock('@stellar/stellar-sdk', () => {
   const actual = jest.requireActual('@stellar/stellar-sdk');
-  return { ...actual, Server: jest.fn() };
+  const mockServer = jest.fn();
+  return {
+    ...actual,
+    Server: mockServer,
+    Horizon: {
+      ...actual.Horizon,
+      Server: mockServer,
+    },
+  };
 });
 
 let mockSearchParams: { id?: string; queueId?: string } = { id: 'proj-1' };
