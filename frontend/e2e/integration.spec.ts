@@ -102,8 +102,8 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
   });
 
   test("2. Core Donation Flow", async ({ page }) => {
-    // Navigate to donate page directly
-    await page.goto(`/donate/${SEEDED_PROJECT_ID}`);
+    // Navigate to donate page directly with a preset amount
+    await page.goto(`/donate/${SEEDED_PROJECT_ID}?amount=25`);
 
     // Verify project name displays correctly (indicates that getServerSideProps unwrapped the envelope)
     // If the bug were present, it would display "Untitled Project"

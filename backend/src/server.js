@@ -42,6 +42,18 @@ app.use(helmet());
 app.use(morgan("dev"));
 app.use(express.json({ limit: "20kb" }));
 app.use(cookieParser());
+
+// CORS must be registered BEFORE csurf. csurf rejects a bad/missing token by
+// throwing straight to the error handler, so anything mounted after it never
+// runs for that response — including the CORS headers. A cross-origin client
+// would then see an opaque "No 'Access-Control-Allow-Origin' header" network
+// error instead of the actual 403, making a CSRF failure impossible to
+// diagnose from the browser (and impossible for the client to handle).
+const origins = getAllowedOrigins();
+app.use(...createCorsMiddleware(origins));
+
+const isProduction = process.env.NODE_ENV === "production";
+
 app.use(csurf({
   cookie: {
     httpOnly: true,
@@ -54,9 +66,6 @@ app.use(csurf({
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
 }));
-
-const origins = getAllowedOrigins();
-app.use(...createCorsMiddleware(origins));
 
 const io = new Server(server, {
   cors: {
