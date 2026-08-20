@@ -7,7 +7,7 @@
 //! dispute, the client can reclaim funds with `cancel_job`.
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, String,
 };
 
 #[contracttype]
@@ -286,6 +286,26 @@ impl EscrowContract {
 
     pub fn get_job(env: Env, job_id: String) -> Option<Job> {
         env.storage().instance().get(&DataKey::Job(job_id))
+    }
+
+    // ─── Upgrade ──────────────────────────────────────────────────────────────────
+
+    /// Replaces the contract's WASM with a new hash.
+    /// Only the admin (set at `initialize`) may call this.
+    /// Emits an `upgraded` event containing the new hash.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if stored_admin != admin {
+            panic!("Only admin can upgrade");
+        }
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish((symbol_short!("upgraded"), admin), new_wasm_hash);
     }
 }
 
@@ -609,5 +629,36 @@ mod tests {
         assert_eq!(job.status, JobStatus::Refunded);
         assert_eq!(job.remaining_amount, 0);
         assert_eq!(token_client.balance(&client), 60);
+    }
+
+    // ─── Upgrade tests ────────────────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Only admin can upgrade")]
+    fn upgrade_rejects_non_admin() {
+        let (env, contract, _admin, _client, _freelancer, _token, _job_id, _amount, _expiry) =
+            setup();
+        let impostor = Address::generate(&env);
+        let hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+        contract.upgrade(&impostor, &hash);
+    }
+
+    #[test]
+    fn upgrade_preserves_job_state() {
+        // After re-registering same binary at same address, job data must survive.
+        let (env, contract, _admin, _client_addr, _freelancer, token, job_id, amount, _expiry) =
+            setup();
+        let cid = contract.address.clone();
+
+        // Re-register same binary at same address (test-env equivalent of update_current_contract_wasm)
+        let new_cid = env.register_contract(Some(&cid), EscrowContract);
+        assert_eq!(new_cid, cid);
+
+        let contract_v2 = EscrowContractClient::new(&env, &cid);
+        let job = contract_v2.get_job(&job_id).expect("job must survive upgrade");
+        assert_eq!(job.amount, amount);
+        let token_client = token::Client::new(&env, &token);
+        // contract still holds the escrowed funds
+        assert_eq!(token_client.balance(&cid), amount);
     }
 }

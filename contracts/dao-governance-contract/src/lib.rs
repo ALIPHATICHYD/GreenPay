@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, vec, Address, Bytes, Env, IntoVal, String, Symbol,
+    contract, contractimpl, contracttype, token, vec, Address, Bytes, BytesN, Env, IntoVal,
+    String, Symbol,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -514,6 +515,27 @@ impl DaoGovernanceContract {
         extend_persistent_ttl(&env, &key);
         env.events()
             .publish((Symbol::new(&env, "executed"), proposal_id), ());
+    }
+
+    // ─── Requirement 11: On-Chain Upgrade ──────────────────────────────────────
+
+    /// Replaces the contract's WASM with a new hash.
+    /// Only the `dao_admin` (set at `initialize`) may call this.
+    /// For on-chain governance, route calls through `execute_proposal`.
+    /// Emits an `upgraded` event containing the new hash.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        caller.require_auth();
+        let config: Config = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized");
+        if caller != config.dao_admin {
+            panic!("only dao_admin can upgrade");
+        }
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish((Symbol::new(&env, "upgraded"), caller), new_wasm_hash);
     }
 }
 
@@ -1544,5 +1566,42 @@ mod tests {
         env.ledger().set_sequence_number(p.executable_from_ledger);
         client.execute_proposal(&pid);
         assert_eq!(client.get_proposal(&pid).stage, ProposalStage::Executed);
+    }
+
+    // ─── R11: Upgrade ─────────────────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "only dao_admin can upgrade")]
+    fn test_upgrade_rejects_non_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, _cfg, client) = deploy(&env);
+        let impostor = Address::generate(&env);
+        let hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+        client.upgrade(&impostor, &hash);
+    }
+
+    #[test]
+    fn test_upgrade_preserves_lock_and_proposal_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (cid, cfg, client) = deploy(&env);
+
+        // Lock tokens and create a proposal so there is real state to survive.
+        let voter = Address::generate(&env);
+        let sac = StellarAssetClient::new(&env, &cfg.gp_token);
+        sac.mint(&voter, &500_000i128);
+        client.lock_tokens(&voter, &500_000i128, &MAX_LOCK_LEDGERS);
+        let pid = mk_proposal(&env, &client, &voter);
+
+        // Re-register same binary at same address.
+        let new_cid = env.register_contract(Some(&cid), DaoGovernanceContract);
+        assert_eq!(new_cid, cid);
+
+        let client_v2 = DaoGovernanceContractClient::new(&env, &cid);
+        let lock = client_v2.get_lock(&voter);
+        assert_eq!(lock.amount, 500_000);
+        let proposal = client_v2.get_proposal(&pid);
+        assert_eq!(proposal.stage, ProposalStage::Discussion);
     }
 }
