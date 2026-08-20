@@ -95,6 +95,8 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     await page.goto("/projects");
     await expect(page.getByText("Amazon Reforestation Initiative")).toBeVisible();
 
+113
+
     // Navigate to details page
     await page.getByText("Amazon Reforestation Initiative").click();
     await expect(page).toHaveURL(new RegExp(`/projects/${SEEDED_PROJECT_ID}`));
@@ -102,10 +104,11 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
   });
 
   test("2. Core Donation Flow", async ({ page }) => {
-    // Navigate to donate page directly with a preset amount
-    await page.goto(`/donate/${SEEDED_PROJECT_ID}?amount=25`);
+    // Navigate to the project detail page — this is where the donation form
+    // actually lives (the /donate/[id] route is a QR-code share link only).
+    await page.goto(`/projects/${SEEDED_PROJECT_ID}`);
 
-    // Verify project name displays correctly (indicates that getServerSideProps unwrapped the envelope)
+    // Verify project name displays correctly (indicates the API envelope was unwrapped).
     // If the bug were present, it would display "Untitled Project"
     await expect(page.getByText("Amazon Reforestation Initiative").first()).toBeVisible();
     await expect(page.getByText("Untitled Project")).not.toBeVisible();

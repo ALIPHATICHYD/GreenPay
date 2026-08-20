@@ -108,10 +108,10 @@ describe('DonateScreen – biometric auth gate', () => {
   });
 });
 
-// A syntactically valid-shaped Stellar public key (G + 55 base32 chars) —
-// matches the `/^G[A-Z0-9]{55}$/` check in connectWallet(), independent of
-// the real MOCK_PROJECT.walletAddress above.
-const DONOR_PUBLIC_KEY = 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW';
+// A real, checksum-valid Stellar public key (validated via useWallet()'s
+// StrKey check, not a shape-only regex), independent of the real
+// MOCK_PROJECT.walletAddress above.
+const DONOR_PUBLIC_KEY = 'GA4JHZX455IELW533547WFB5LV57LLSUJURFFIIYG7AV4HTQNW4W4FUD';
 
 /** Drives the "Connect Wallet" Alert.alert prompt exactly like a user would. */
 async function connectWallet(getByText: any, alertSpy: jest.SpyInstance, publicKey: string) {
@@ -120,7 +120,7 @@ async function connectWallet(getByText: any, alertSpy: jest.SpyInstance, publicK
   const buttons = call?.[2] as Array<{ text: string; onPress?: (input: any) => void }>;
   const okButton = buttons.find((b) => b.text === 'OK');
   await act(async () => {
-    okButton?.onPress?.(publicKey);
+    await okButton?.onPress?.(publicKey);
   });
 }
 
