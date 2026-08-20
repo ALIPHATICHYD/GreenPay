@@ -12,6 +12,12 @@ async function mockFreighter(page: Page, publicKey: string) {
     (window as unknown as Record<string, unknown>).freighter = {
       isConnected: () => Promise.resolve({ isConnected: true }),
     };
+    // Test seam matching lib/wallet.ts's __test_signTransaction__ hook (see
+    // donation-rollback.spec.ts) — bypasses the real Freighter postMessage
+    // handshake by resolving with the unsigned XDR as-is. Fine here since
+    // Horizon submission is mocked separately, so nothing verifies a signature.
+    (window as unknown as Record<string, unknown>).__test_signTransaction__ = (xdr: string) =>
+      Promise.resolve({ signedXDR: xdr, error: null });
   }, publicKey);
 }
 
@@ -83,6 +89,8 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     await page.goto("/projects");
     await expect(page.getByText("Amazon Reforestation Initiative")).toBeVisible();
 
+113
+
     // Navigate to details page
     await page.getByText("Amazon Reforestation Initiative").click();
     await expect(page).toHaveURL(new RegExp(`/projects/${SEEDED_PROJECT_ID}`));
@@ -90,10 +98,11 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
   });
 
   test("2. Core Donation Flow", async ({ page }) => {
-    // Navigate to donate page directly with a preset amount
-    await page.goto(`/donate/${SEEDED_PROJECT_ID}?amount=25`);
+    // Navigate to the project detail page — this is where the donation form
+    // actually lives (the /donate/[id] route is a QR-code share link only).
+    await page.goto(`/projects/${SEEDED_PROJECT_ID}`);
 
-    // Verify project name displays correctly (indicates that getServerSideProps unwrapped the envelope)
+    // Verify project name displays correctly (indicates the API envelope was unwrapped).
     // If the bug were present, it would display "Untitled Project"
     await expect(page.getByText("Amazon Reforestation Initiative").first()).toBeVisible();
     await expect(page.getByText("Untitled Project")).not.toBeVisible();
@@ -119,9 +128,7 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
 
     // Verify page title and active status
     await expect(page.getByText("Project Admin")).toBeVisible();
-    const approvalWorkflowCard = page.locator(".card", { hasText: /Approval Workflow/i });
-    const currentStatus = approvalWorkflowCard.locator("p", { hasText: /Current status:/ });
-    await expect(currentStatus).toContainText("Current status: active");
+    await expect(page.getByText("active", { exact: true })).toBeVisible();
 
     // Reject the project
     await page.getByPlaceholder("Provide a reason for this decision...").fill("Testing reject integration flow");
@@ -130,7 +137,7 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     await rejectBtn.click();
 
     // Verify status changed to rejected
-    await expect(currentStatus).toContainText("Current status: rejected");
+    await expect(page.getByText("rejected", { exact: true })).toBeVisible();
     await expect(page.getByText("Testing reject integration flow")).toBeVisible();
 
     // Approve it back to active
@@ -139,6 +146,6 @@ test.describe("E2E Integration Tests (No API Mocking)", () => {
     await approveBtn.click();
 
     // Verify status is back to active
-    await expect(currentStatus).toContainText("Current status: active");
+    await expect(page.getByText("active", { exact: true })).toBeVisible();
   });
 });

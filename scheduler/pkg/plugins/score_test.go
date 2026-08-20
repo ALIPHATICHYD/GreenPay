@@ -526,7 +526,52 @@ func TestMLWorkloadScore_Score_NodeLookupCycleStateRegression(t *testing.T) {
 
 func TestBinPackingScore_Isolation(t *testing.T) {
 	ctx := context.Background()
-	plugin := newScorePlugin(t)
+	lister := &mockNodeInfoLister{}
+	handle := &mockHandle{
+		sharedLister: &mockSharedLister{nodeLister: lister},
+	}
+	p, err := plugins.NewMLWorkloadScore(ctx, nil, handle)
+	if err != nil {
+		t.Fatalf("NewMLWorkloadScore: %v", err)
+	}
+	plugin := p.(*plugins.MLWorkloadScore)
+
+	node80 := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-80"},
+		Status: corev1.NodeStatus{
+			Capacity:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
+			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+		},
+	}
+	ni80 := framework.NewNodeInfo()
+	ni80.SetNode(node80)
+	// binPackingScore is defined over requested/allocatable, not capacity/allocatable
+	// (see its doc comment), so isolating an "80% utilized" node means actually
+	// placing a pod requesting 80% of what's allocatable here.
+	ni80.AddPod(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "existing-workload", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1600m")},
+				}},
+			},
+		},
+	})
+
+	node0 := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-0"},
+		Status: corev1.NodeStatus{
+			Capacity:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
+			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
+		},
+	}
+	ni0 := framework.NewNodeInfo()
+	ni0.SetNode(node0)
+
+	lister.nodes = []*framework.NodeInfo{ni80, ni0}
+	cycleState := framework.NewCycleState()
+	pod := &corev1.Pod{}
 
 	// Utilisation has to be expressed as pods actually requesting resources.
 	// Capacity-minus-allocatable does not work: both are static kubelet-reported
