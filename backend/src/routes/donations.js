@@ -7,34 +7,30 @@ const router  = express.Router();
 const { v4: uuid } = require("uuid");
 const pool = require("../db/pool");
 const { createRateLimiter } = require("../middleware/rateLimiter");
+const { z } = require("zod");
+const { validateBody, validate } = require("../middleware/validate");
+const { DonationCreateSchema } = require("../schemas/donations");
+const { stellarPublicKey } = require("../schemas/common");
+const donorKeyParamsSchema = z.object({ publicKey: stellarPublicKey });
 const { computeBadges, mapDonationRow } = require("../services/store");
 const donationLimiter = createRateLimiter(10, 1);
 const { execute } = require("../eventSourcing/commandBus");
 const { DonationRecordedEvent, MatchAppliedEvent } = require("../eventSourcing/events"); // 10 requests per minute
 
-function validateKey(k) {
-  if (!k || !/^G[A-Z0-9]{55}$/.test(k)) { const e = new Error("Invalid Stellar public key"); e.status = 400; throw e; }
-}
-
-function validateTxHash(h) {
-  if (!h || !/^[a-fA-F0-9]{64}$/.test(h)) { const e = new Error("Invalid transaction hash"); e.status = 400; throw e; }
-}
-
 // POST /api/donations — record a donation after on-chain tx via Event Sourcing CQRS
 async function recordDonation(req, res, next) {
   try {
-    const { projectId, donorAddress, amountXLM, amount, currency = "XLM", message, transactionHash } = req.body;
-
-    if (!donorAddress || !/^G[A-Z0-9]{55}$/.test(donorAddress)) {
-      const e = new Error("Invalid Stellar public key");
-      e.status = 400;
-      throw e;
-    }
-    if (!transactionHash || !/^[a-fA-F0-9]{64}$/.test(transactionHash)) {
-      const e = new Error("Invalid transaction hash");
-      e.status = 400;
-      throw e;
-    }
+    // Declarative, centrally-reviewed validation (src/schemas/donations.js).
+    const {
+      projectId,
+      donorAddress,
+      amountXLM,
+      amount,
+      // currency defaults to "XLM" inside the schema
+      currency = "XLM",
+      message,
+      transactionHash,
+    } = validateBody(DonationCreateSchema, req.body || {});
 
     const projectResult = await pool.query("SELECT id FROM projects WHERE id = $1", [projectId]);
     if (!projectResult.rows[0]) {
@@ -154,9 +150,8 @@ router.get("/project/:projectId", async (req, res, next) => {
 });
 
 // GET /api/donations/donor/:publicKey
-router.get("/donor/:publicKey", async (req, res, next) => {
+router.get("/donor/:publicKey", validate(donorKeyParamsSchema, { source: "params" }), async (req, res, next) => {
   try {
-    validateKey(req.params.publicKey);
     const result = await pool.query(
       `SELECT * FROM donations
        WHERE donor_address = $1

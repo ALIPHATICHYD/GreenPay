@@ -25,9 +25,9 @@ describe("POST /api/admin/login", () => {
     app = buildApp();
   });
 
-  it("returns 401 when no credentials are sent", async () => {
+  it("returns 400 when no credentials are sent (schema validation)", async () => {
     const res = await request(app).post("/api/admin/login").send({});
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
   });
 
   it("returns 401 for wrong username", async () => {

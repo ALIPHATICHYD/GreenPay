@@ -4,13 +4,15 @@ const router = express.Router();
 const pool = require("../db/pool");
 const { signToken, adminRequired } = require("../middleware/auth");
 const { createRateLimiter } = require("../middleware/rateLimiter");
+const { validate } = require("../middleware/validate");
+const { AdminLoginSchema, AdminRefreshSchema, AdminAuditQuerySchema } = require("../schemas/admin");
 
 const loginLimiter = createRateLimiter(10, 15);
 
 const TOKEN_EXPIRY = "1h";
 const REFRESH_EXPIRY = "24h";
 
-router.post("/login", loginLimiter, (req, res) => {
+router.post("/login", loginLimiter, validate(AdminLoginSchema), (req, res) => {
   const { username, password } = req.body || {};
   const adminUser = process.env.ADMIN_USERNAME || "admin";
   const adminPass = process.env.ADMIN_PASSWORD;
@@ -36,7 +38,7 @@ router.post("/login", loginLimiter, (req, res) => {
   });
 });
 
-router.get("/audit", adminRequired, async (req, res, next) => {
+router.get("/audit", adminRequired, validate(AdminAuditQuerySchema, { source: "query" }), async (req, res, next) => {
   try {
     const { actor, action, limit = 50, offset = 0 } = req.query;
     const where = [];
@@ -93,7 +95,7 @@ router.get("/audit", adminRequired, async (req, res, next) => {
   }
 });
 
-router.post("/refresh", (req, res) => {
+router.post("/refresh", validate(AdminRefreshSchema), (req, res) => {
   const { refreshToken } = req.body || {};
   if (!refreshToken) {
     return res.status(400).json({ error: "refreshToken is required" });
