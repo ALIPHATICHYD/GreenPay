@@ -52,11 +52,10 @@ app.use(...createCorsMiddleware(origins));
 app.use(csurf({
   cookie: {
     httpOnly: true,
+    // SameSite=None requires Secure, or browsers drop the cookie outright.
+    // Only production serves over HTTPS, so keep them tied together —
+    // otherwise every CSRF-protected request silently fails everywhere else.
     secure: process.env.NODE_ENV === "production",
-    // SameSite=None is only valid on a Secure cookie; browsers silently drop
-    // it otherwise. Outside production (plain HTTP dev/test/CI) fall back to
-    // Lax, which still covers same-site cross-port requests like
-    // localhost:3000 -> localhost:4000.
     sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     path: "/",
   },

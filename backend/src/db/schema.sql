@@ -27,8 +27,9 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_summary_generated_at TIMESTAMPT
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_summary_model        TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_summary_source_hash  TEXT;
 
--- Reason an admin gave when rejecting a project via PATCH /api/projects/:id/status.
-ALTER TABLE projects ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+-- Set by PATCH /api/projects/:id/status when an admin rejects a project;
+-- read back by store.js's mapProjectRow as rejectionReason.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS rejection_reason        TEXT;
 
 CREATE TABLE IF NOT EXISTS donations (
   id UUID PRIMARY KEY,

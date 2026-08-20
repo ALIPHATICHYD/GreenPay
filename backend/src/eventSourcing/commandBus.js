@@ -301,6 +301,15 @@ async function storeProjectAggregate(pool, projectId, aggregate) {
 
 async function storeDonorAggregate(pool, donorAddress, aggregate) {
   const state = aggregate.getState();
+  // donor_stats.public_key references profiles(public_key) — a donor's very
+  // first donation has no profile row yet, so ensure one exists first rather
+  // than let the insert below fail its foreign key constraint.
+  await pool.query(
+    `INSERT INTO profiles (public_key, total_donated_xlm, projects_supported, badges, created_at)
+     VALUES ($1, 0, 0, '[]'::jsonb, NOW())
+     ON CONFLICT (public_key) DO NOTHING`,
+    [donorAddress]
+  );
   await pool.query(
     `INSERT INTO donor_stats (public_key, total_donated_xlm, projects_supported, badges, projection_cursor)
      VALUES ($1, $2::numeric, $3, $4::jsonb, 0)

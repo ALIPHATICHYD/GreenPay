@@ -95,6 +95,19 @@ router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) =>
   }
 });
 
+// GET /api/updates/:projectId — list updates for a project, most recent first
+router.get("/:projectId", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM project_updates WHERE project_id = $1 ORDER BY created_at DESC",
+      [req.params.projectId],
+    );
+    res.json({ success: true, data: result.rows.map(mapProjectUpdateRow) });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // POST /api/updates/:updateId/like — toggle like
 // Rate-limited per donor to prevent like enumeration/spam
 router.post("/:updateId/like", likeLimiter, async (req, res, next) => {
