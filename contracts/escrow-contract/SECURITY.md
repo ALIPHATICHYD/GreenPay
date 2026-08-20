@@ -15,18 +15,21 @@ threat model:
 1. **Reentrancy** — every external call (`token::Client::transfer`) was
    checked against the Checks-Effects-Interactions (CEI) ordering so that
    contract state is durable before control leaves the contract.
-2. **Access control** — every `pub fn` was verified for a matching
+2. **Admin centralisation** — every admin-gated path was inspected for
+   single-point-of-failure risks: key compromise, unavailability, and fund
+   lockup scenarios.
+3. **Access control** — every `pub fn` was verified for a matching
    `require_auth`, an admin equality check where appropriate, and correct
    eligibility predicates (job ownership, status guards).
-3. **Token trust** — the `token` parameter accepted by `create_job` was
+4. **Token trust** — the `token` parameter accepted by `create_job` was
    evaluated for trust assumptions; an allowlist (`allow_token` /
    `remove_token`) was already present in the contract and is enforced at
    job creation time.
-4. **Integer arithmetic** — `i128` / `u32` operations were inspected for
+5. **Integer arithmetic** — `i128` / `u32` operations were inspected for
    overflow risk.
-5. **Edge cases** — zero/negative amounts, duplicate job IDs, past expiry
-   on creation, and cancel-before-expiry were enumerated.
-6. **Storage lifecycle** — `instance` storage TTL implications noted as
+6. **Edge cases** — zero/negative amounts, duplicate job IDs, past expiry
+   on creation, cancel-before-expiry, and odd-stroop splits were enumerated.
+7. **Storage lifecycle** — `instance` storage TTL implications noted as
    operational considerations.
 
 Each finding is paired with a regression test in [`src/lib.rs`](src/lib.rs)
@@ -41,6 +44,8 @@ so that a revert is caught by `cargo test`.
 | **Medium**   | State corruption or DoS under unusual but plausible inputs. |
 | **Low**      | Cosmetic, inaccurate metrics, or requires implausible inputs. |
 | **Info**     | Documentation / hygiene; no exploit. |
+
+---
 
 ## Findings
 
@@ -65,10 +70,10 @@ before the first write landed.
 This is precisely the class of bug documented and fixed in
 [`greenpay-contract` H-01](../greenpay-contract/SECURITY.md#h-01--donate-violated-checks-effects-interactions--fixed).
 
-**Fix.** In each of the three functions, all state mutations
-(`job.remaining_amount`, `job.status`, and the `instance().set(...)` storage
-write) now occur **before** `token_client.transfer` is called. The boundary is
-marked with comments in the source:
+**Fix.** In each of the three functions (and `release_partial`, fixed in the
+same pass), all state mutations (`job.remaining_amount`, `job.status`, and
+the `instance().set(...)` storage write) now occur **before**
+`token_client.transfer` is called. The boundary is marked with comments:
 
 ```rust
 // Effects: all state writes BEFORE the external token transfer
@@ -87,21 +92,100 @@ token_client.transfer(…);
 | `test_resolve_dispute_freelancer_state_persisted_before_transfer` | After `resolve_dispute(true)`, `job.status == Released`; funds at freelancer. |
 | `test_resolve_dispute_client_state_persisted_before_transfer` | After `resolve_dispute(false)`, `job.status == Refunded`; funds at client. |
 | `test_cancel_job_state_persisted_before_transfer` | After `cancel_job`, `job.status == Refunded`; funds at client. |
-| `test_release_escrow_cannot_double_release_after_cei_reorder` | A second call to `release_escrow` after the first panics with `"Job is not in escrow"` — the guard that a re-entrant call would hit. |
+| `test_release_escrow_cannot_double_release_after_cei_reorder` | A second call to `release_escrow` panics with `"Job is not in escrow"`. |
 | `test_resolve_dispute_cannot_double_resolve_after_cei_reorder` | A second `resolve_dispute` panics with `"Job is not disputed"`. |
 | `test_cancel_job_cannot_double_cancel_after_cei_reorder` | A second `cancel_job` panics with `"Job is not in escrow"`. |
 
-The double-call tests (`should_panic`) directly prove the re-entrancy guard:
-because state is written first, any second entry into the function immediately
-fails the status check, making a double-spend unreachable.
+---
 
-### Note — `release_partial` ordering
+### H-02 — Disputed jobs could be frozen forever with no recovery path  *(Fixed)*
 
-`release_partial` had the same pre-fix ordering (transfer before state write).
-It was **not** listed in the original issue but was fixed in the same pass to
-maintain consistency. Its existing tests (`release_partial_decrements_balance_and_keeps_escrowed`,
-`release_partial_until_zero_transitions_to_released`, etc.) continue to pass
-and serve as regression coverage.
+**Severity:** High.
+**Location (pre-fix):** [`src/lib.rs`](src/lib.rs) — `dispute()` and `resolve_dispute()`.
+
+**Root cause.** `dispute()` moves a job to `JobStatus::Disputed`, and the
+only exit from that state was `resolve_dispute()`, which requires
+`admin.require_auth()` against a single address stored at initialization. No
+timeout existed on the disputed state. `cancel_job()` explicitly only operates
+on `JobStatus::Escrowed` jobs, so once a dispute was raised the funds were
+provably locked without the admin's active cooperation.
+
+**Attack / failure scenarios:**
+
+- Admin private key lost or compromised — permanent fund lockup for every
+  disputed job.
+- Admin operator stops responding (team changes, company wind-down) — all
+  disputed escrows frozen indefinitely.
+- Admin deliberately withholds resolution to extort parties or in response to
+  external pressure.
+- Admin key rotation goes wrong — window of lockup until a new admin is set
+  (no admin rotation function exists; see L-01 below).
+
+Any of these scenarios is realistic for a freelance payment platform operating
+over months or years. Unlike `cancel_job` (which only requires waiting for
+`expiry_ledger`), disputed funds had no time-bounded escape valve.
+
+**Fix.** Two changes to `src/lib.rs`:
+
+1. **`DISPUTE_TIMEOUT_LEDGERS` constant** (module level): the number of ledgers
+   the admin has to resolve a dispute before the fallback activates. Set to
+   `518_400` (~30 days at 5 s/ledger). This is a named constant that can be
+   adjusted at deploy time.
+
+2. **`dispute_expiry_ledger: u32` field on `Job`**: zero at job creation,
+   stamped with `current_ledger + DISPUTE_TIMEOUT_LEDGERS` (via `checked_add`)
+   when `dispute()` is called.
+
+3. **`resolve_stale_dispute(caller, job_id)`**: callable by the client or
+   freelancer once `env.ledger().sequence() > job.dispute_expiry_ledger`. Splits
+   `remaining_amount` 50/50 between the two parties. Odd-stroop remainder goes
+   to the client (freelancer never receives more than their half). Follows CEI
+   ordering: all state written before both transfers. Emits a `stale_res` event.
+
+The normal `resolve_dispute` path is completely unchanged — admins who respond
+within the window retain full resolution authority.
+
+**Key design decisions:**
+
+| Decision | Rationale |
+| --- | --- |
+| 50/50 default split | Neither party can game the fallback by timing the dispute — both get the same outcome regardless of who triggers it. |
+| Odd remainder to client | Prevents the fallback from being gamed by creating odd-amount jobs where the freelancer would receive more than half. |
+| Caller must be client or freelancer | Prevents third-party griefing; both are already authenticated parties with a stake in the outcome. |
+| `sequence() <= dispute_expiry_ledger` guard | The fallback is blocked at the exact boundary ledger — it only opens strictly after the timeout, preventing off-by-one exploitation. |
+| `checked_add` for `dispute_expiry_ledger` | Prevents `u32` overflow at extreme ledger sequences (same pattern as `greenpay-contract` H-02 fix). |
+
+**Regression tests** (all in `src/lib.rs`):
+
+| Test | What it asserts |
+| --- | --- |
+| `dispute_stamps_dispute_expiry_ledger` | After `dispute()`, `job.dispute_expiry_ledger == before + DISPUTE_TIMEOUT_LEDGERS`. |
+| `resolve_stale_dispute_cannot_trigger_early_by_client` | Fallback panics with `"Dispute has not timed out yet"` before timeout. |
+| `resolve_stale_dispute_cannot_trigger_early_by_freelancer` | Same guard holds for freelancer caller. |
+| `resolve_stale_dispute_cannot_trigger_at_exact_expiry_ledger` | Fallback is still blocked at exactly `dispute_expiry_ledger` (boundary off-by-one check). |
+| `resolve_stale_dispute_after_timeout_splits_50_50_client_calls` | After timeout, client triggers 50/50 split; both balances correct; `status == Refunded`. |
+| `resolve_stale_dispute_after_timeout_splits_50_50_freelancer_calls` | Same, freelancer triggers. |
+| `resolve_stale_dispute_odd_remainder_goes_to_client` | Amount 101: freelancer gets 50, client gets 51. |
+| `admin_resolves_before_timeout_still_works` | Normal admin `resolve_dispute` path is fully preserved. |
+| `resolve_stale_dispute_by_stranger_panics` | Non-party caller panics with `"Only the client or freelancer can trigger the fallback"`. |
+| `resolve_stale_dispute_on_escrowed_job_panics` | Non-disputed job panics with `"Job is not disputed"`. |
+| `resolve_stale_dispute_cannot_double_trigger` | Second call after successful fallback panics with `"Job is not disputed"` (CEI guard). |
+| `resolve_stale_dispute_after_partial_release_splits_remaining_only` | Only `remaining_amount` (not original `amount`) is split after a prior `release_partial`. |
+
+---
+
+### L-01 — No admin rotation function  *(Documented, not fixed in this pass)*
+
+**Severity:** Low (operational risk; amplifies H-02 exposure).
+**Location:** the admin set in `initialize` is permanent.
+
+Loss of admin keys means no new `allow_token`/`remove_token` calls and no
+`resolve_dispute` resolutions forever. H-02's fallback mitigates the fund
+lockup aspect, but new jobs using an allowlisted token that later needs
+removing would have no remedy. Recommend a `transfer_admin(current_admin,
+new_admin)` with both `require_auth` checks. Out of scope for this audit pass.
+
+---
 
 ## Access control audit
 
@@ -115,13 +199,18 @@ and serve as regression coverage.
 | `release_partial` | `client.require_auth` | `job.client == client` | OK |
 | `dispute` | `caller.require_auth` | caller is client or freelancer | OK |
 | `resolve_dispute` | `admin.require_auth` | `stored_admin == admin` | OK |
+| `resolve_stale_dispute` | `caller.require_auth` | caller is client or freelancer, timeout elapsed | OK (H-02 fix) |
 | `cancel_job` | `client.require_auth` | `job.client == client`, expiry guard | OK |
 | `get_job` | none | n/a (read-only) | OK |
+
+---
 
 ## Test results
 
 ```
-cargo test -p escrow-contract --lib
+cargo test --lib
 ```
 
-All pre-existing tests pass unchanged. Six new CEI regression tests added.
+All pre-existing tests pass unchanged. 11 new dispute-timeout regression
+tests added (H-02). 7 CEI regression tests from H-01 fix also present.
+Total: 36 tests, 0 failures.

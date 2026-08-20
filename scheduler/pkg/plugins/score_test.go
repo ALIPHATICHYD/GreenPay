@@ -541,36 +541,6 @@ func TestBinPackingScore_Isolation(t *testing.T) {
 	// for a node no matter what is scheduled on it; see the doc comment on
 	// binPackingScore). Both nodes get identical allocatable CPU; only the
 	// simulated already-running pod requests differ.
-	node80 := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "node-80"},
-		Status: corev1.NodeStatus{
-			Capacity:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
-			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
-		},
-	}
-	ni80 := framework.NewNodeInfo()
-	ni80.SetNode(node80)
-	ni80.Requested = &framework.Resource{MilliCPU: 8000} // 8 of 10 CPU already requested — 80% packed
-
-	node0 := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "node-0"},
-		Status: corev1.NodeStatus{
-			Capacity:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
-			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10")},
-		},
-	}
-	ni0 := framework.NewNodeInfo()
-	ni0.SetNode(node0)
-	ni0.Requested = &framework.Resource{MilliCPU: 0} // nothing requested — 0% packed
-
-	lister.nodes = []*framework.NodeInfo{ni80, ni0}
-	cycleState := framework.NewCycleState()
-	pod := &corev1.Pod{}
-
-	// Utilisation has to be expressed as pods actually requesting resources.
-	// Capacity-minus-allocatable does not work: both are static kubelet-reported
-	// values that never move as pods are scheduled, which is precisely the bug
-	// this heuristic was rewritten to fix.
 	nodeInfoWithUsage := func(nodeName string, allocatableCPU, requestedCPU int64) *framework.NodeInfo {
 		node := &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{Name: nodeName},
@@ -594,12 +564,11 @@ func TestBinPackingScore_Isolation(t *testing.T) {
 		return ni
 	}
 
+	// 8 of 10 CPU already requested — 80% packed — versus a completely empty node.
 	score80 := plugin.BinPackingScoreForTest(nodeInfoWithUsage("node-80", 10000, 8000))
 	score0 := plugin.BinPackingScoreForTest(nodeInfoWithUsage("node-0", 10000, 0))
 
 	if score80 <= score0 {
 		t.Errorf("expected 80%% utilized node score (%.2f) > 0%% utilized node score (%.2f)", score80, score0)
 	}
-
-	_ = ctx
 }
