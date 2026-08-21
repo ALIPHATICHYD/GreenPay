@@ -13,6 +13,10 @@ WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci
 
+# Create a symlink to the shared module in node_modules
+RUN mkdir -p node_modules/@greenpay && \
+    ln -sf /app/shared node_modules/@greenpay/i18n
+
 # Copy the rest of the frontend
 COPY frontend/. .
 
@@ -38,6 +42,10 @@ RUN npm install --production
 WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci --only=production
+
+# Create symlink in production
+RUN mkdir -p node_modules/@greenpay && \
+    ln -sf /app/shared node_modules/@greenpay/i18n
 
 # Copy built assets
 COPY --from=builder --chown=node:node /app/next.config.mjs ./
