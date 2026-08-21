@@ -3,10 +3,17 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
+# Copy shared module first (needed for build)
+COPY shared /app/shared
+
+# Copy frontend files
+COPY frontend/package*.json ./
 RUN npm ci
 
-COPY . .
+# Copy the rest of the frontend
+COPY frontend/. .
+
+# Build the app
 RUN mkdir -p public
 RUN npm run build
 
@@ -19,8 +26,11 @@ ENV NODE_ENV production
 ENV HOSTNAME 0.0.0.0
 ENV PORT 3000
 
+# Copy shared module
+COPY shared /app/shared
+
 # Copy package files and install only production dependencies
-COPY package*.json ./
+COPY frontend/package*.json ./
 RUN npm ci --only=production
 
 # Copy built assets and configuration from builder with non-root ownership

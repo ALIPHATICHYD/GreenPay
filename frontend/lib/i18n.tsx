@@ -3,24 +3,16 @@
  *
  * Interpolation/pluralization is backed by `intl-messageformat`, which
  * implements the ICU MessageFormat spec on top of the native
- * `Intl.PluralRules` API. That means locale strings can use real ICU
- * plural syntax:
- *
- *   "{count, plural, one {# donor} other {# donors}}"
- *
- * and the correct plural category (`zero` / `one` / `two` / `few` / `many`
- * / `other`) is selected per-locale — not just the English one/other
- * split you'd get from a naive `count === 1 ? ... : ...` ternary. This
- * matters for locales like Arabic, which has 6 plural categories.
+ * `Intl.PluralRules` API.
  */
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
-import { getMessage, createT, getDir, LOCALE_TAGS, RTL_LOCALES, type Locale, type InterpolationValues } from "@greenpay/i18n";
+import { createT, getDir, LOCALE_TAGS, RTL_LOCALES } from "../../shared/i18n";
+import type { Locale, InterpolationValues } from "../../shared/i18n";
 
 export type { Locale, InterpolationValues };
 
 export const LOCALES: Locale[] = ["en", "es", "ar"];
 
-/** Locales that are read/written right-to-left. */
 export const RTL_LOCALES_SET = RTL_LOCALES;
 
 export function isRtl(locale: Locale): boolean {
@@ -34,10 +26,8 @@ export function getLocaleDir(locale: Locale): "ltr" | "rtl" {
 interface I18nContextValue {
   locale: Locale;
   setLocale: (l: Locale) => void;
-  /** BCP-47 tag for the active locale, e.g. "ar-EG". Feed to Intl.NumberFormat etc. */
   localeTag: string;
   dir: "ltr" | "rtl";
-  /** Look up a raw or ICU-interpolated string by dotted key path. */
   t: (key: string, values?: InterpolationValues) => string;
 }
 
@@ -48,7 +38,6 @@ const STORAGE_KEY = "greenpay-locale";
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>("en");
 
-  // Load saved locale on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
