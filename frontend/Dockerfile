@@ -3,10 +3,13 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy shared module from root context
+# Copy shared module and install its dependencies
 COPY shared /app/shared
+WORKDIR /app/shared
+RUN npm install
 
-# Copy frontend package files
+# Copy frontend and install dependencies
+WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci
 
@@ -28,12 +31,15 @@ ENV PORT 3000
 
 # Copy shared module
 COPY shared /app/shared
+WORKDIR /app/shared
+RUN npm install --production
 
-# Copy package files and install only production dependencies
+# Copy frontend and install production dependencies
+WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci --only=production
 
-# Copy built assets and configuration from builder with non-root ownership
+# Copy built assets
 COPY --from=builder --chown=node:node /app/next.config.mjs ./
 COPY --from=builder --chown=node:node /app/.next ./.next
 COPY --from=builder --chown=node:node /app/public ./public
