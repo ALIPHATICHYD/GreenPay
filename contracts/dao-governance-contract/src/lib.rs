@@ -71,6 +71,36 @@ pub struct Snapshot {
     pub voting_power: i128,
 }
 
+/// Immutable record of a voter's lock state at a specific ledger, written on
+/// every `lock_tokens` and `extend_lock` call.  `get_voting_power` resolves
+/// historical queries against these checkpoints rather than the live, mutable
+/// `Lock` record — preventing retroactive inflation via `extend_lock` after a
+/// proposal's snapshot has already been taken.
+///
+/// # `effective_from_ledger` semantics
+///
+/// * `lock_tokens` sets `effective_from_ledger = checkpoint_ledger`:
+///   the lock is valid starting at the ledger it was created, so a snapshot
+///   taken in the same ledger correctly sees the initial power.
+///
+/// * `extend_lock` sets `effective_from_ledger = checkpoint_ledger + 1`:
+///   an extension called within the same ledger as a snapshot must NOT
+///   retroactively inflate the power counted for that snapshot.  The extended
+///   unlock_ledger only takes effect from the following ledger onward.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LockCheckpoint {
+    /// First ledger at which this checkpoint's lock state is canonical.
+    /// See struct-level docs for the difference between lock and extend paths.
+    pub effective_from_ledger: u32,
+    /// Token amount locked (unchanged by extension).
+    pub amount: i128,
+    /// `unlock_ledger` as it stood when this checkpoint was written.
+    pub unlock_ledger: u32,
+    /// `created_ledger` of the original lock (unchanged by extension).
+    pub created_ledger: u32,
+}
+
 #[contracttype]
 pub enum DataKey {
     Config,
@@ -79,6 +109,11 @@ pub enum DataKey {
     Snapshot(u64, Address),
     ProposalCount,
     AllowedTarget(Address, Symbol),
+    /// Monotonically-increasing count of checkpoints recorded for a voter.
+    /// Stored in instance storage so it shares the contract's TTL.
+    LockCheckpointCount(Address),
+    /// The n-th checkpoint for a voter (0-indexed).
+    LockCheckpoint(Address, u32),
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -167,6 +202,10 @@ impl DaoGovernanceContract {
         env.storage().persistent().set(&lock_key, &lock);
         extend_persistent_ttl(&env, &lock_key);
 
+        // Record an immutable checkpoint so historical voting-power queries
+        // are not affected by future extend_lock calls.
+        write_lock_checkpoint(&env, &voter, &lock, current_ledger);
+
         let config: Config = env
             .storage()
             .instance()
@@ -219,6 +258,22 @@ impl DaoGovernanceContract {
         lock.unlock_ledger = new_unlock_ledger;
         env.storage().persistent().set(&lock_key, &lock);
         extend_persistent_ttl(&env, &lock_key);
+
+        // Record an immutable checkpoint capturing the NEW unlock_ledger so
+        // that any proposal snapshot taken after this ledger sees the extended
+        // duration, while snapshots taken BEFORE this ledger continue to
+        // resolve against the pre-extension checkpoint.
+        // effective_from_ledger is set to sequence()+1 so that a snapshot
+        // taken in the SAME ledger as this extend_lock sees the pre-extension
+        // state, not the inflated unlock_ledger.
+        let extend_ledger = env.ledger().sequence();
+        write_lock_checkpoint(
+            &env,
+            &voter,
+            &lock,
+            extend_ledger.checked_add(1).expect("checkpoint ledger overflow"),
+        );
+
         env.events().publish(
             (Symbol::new(&env, "extend"), voter.clone()),
             new_unlock_ledger,
@@ -254,7 +309,59 @@ impl DaoGovernanceContract {
 
     // ─── Requirement 5: Voting Power Calculation ───────────────────────────
 
+    /// Returns the voting power of `voter` as it stood at `at_ledger`.
+    ///
+    /// # Security: checkpoint-based historical lookup
+    ///
+    /// Power is derived from the **checkpoint** whose `effective_from_ledger`
+    /// is the highest value that is still `<= at_ledger`.  Checkpoints are
+    /// written on every `lock_tokens` and `extend_lock` call, so the record
+    /// found this way faithfully reflects the lock state that existed at the
+    /// moment of the snapshot — regardless of any subsequent `extend_lock`
+    /// mutations.  The live `Lock` record is consulted only as a fallback when
+    /// no checkpoint predates `at_ledger` (which cannot happen in normal
+    /// operation, but keeps the function correct for edge cases).
     pub fn get_voting_power(env: Env, voter: Address, at_ledger: u32) -> i128 {
+        // Try to find the most-recent checkpoint whose effective_from_ledger <=
+        // at_ledger by scanning backwards through the checkpoint array.
+        let count_key = DataKey::LockCheckpointCount(voter.clone());
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&count_key)
+            .unwrap_or(0u32);
+
+        if count > 0 {
+            // Linear scan from newest to oldest; checkpoints are appended in
+            // effective_from_ledger order so we find the right one quickly.
+            let mut i = count;
+            loop {
+                i -= 1;
+                let cp_key = DataKey::LockCheckpoint(voter.clone(), i);
+                if env.storage().persistent().has(&cp_key) {
+                    let cp: LockCheckpoint =
+                        env.storage().persistent().get(&cp_key).unwrap();
+                    extend_persistent_ttl(&env, &cp_key);
+                    if cp.effective_from_ledger <= at_ledger {
+                        // This is the checkpoint that was current at at_ledger.
+                        if at_ledger >= cp.unlock_ledger || at_ledger < cp.created_ledger {
+                            return 0;
+                        }
+                        let remaining = cp.unlock_ledger - at_ledger;
+                        return (cp.amount * remaining as i128) / MAX_LOCK_LEDGERS as i128;
+                    }
+                }
+                if i == 0 {
+                    break;
+                }
+            }
+            // All checkpoints became effective after at_ledger — voter had no
+            // lock at that point (same as the created_ledger guard in old code).
+            return 0;
+        }
+
+        // No checkpoints: fall back to the live Lock record (legacy path,
+        // safe because no extend_lock has ever been called for this voter).
         let lock_key = DataKey::Lock(voter.clone());
         if !env.storage().persistent().has(&lock_key) {
             return 0;
@@ -617,6 +724,39 @@ fn extend_persistent_ttl(env: &Env, key: &DataKey) {
     env.storage()
         .persistent()
         .extend_ttl(key, MIN_VOTING_WINDOW, MAX_LOCK_LEDGERS);
+}
+
+/// Record a point-in-time snapshot of a voter's lock state.
+///
+/// `effective_from_ledger` controls when this checkpoint becomes canonical:
+/// * Pass `env.ledger().sequence()` from `lock_tokens` — a newly-created lock
+///   is valid starting from its creation ledger.
+/// * Pass `env.ledger().sequence() + 1` from `extend_lock` — the extension
+///   only takes effect from the next ledger, so a snapshot taken in the same
+///   ledger as the extension sees the pre-extension state.
+fn write_lock_checkpoint(env: &Env, voter: &Address, lock: &Lock, effective_from_ledger: u32) {
+    // Read and increment the per-voter checkpoint counter.
+    let count_key = DataKey::LockCheckpointCount(voter.clone());
+    let index: u32 = env
+        .storage()
+        .instance()
+        .get(&count_key)
+        .unwrap_or(0u32);
+
+    let cp = LockCheckpoint {
+        effective_from_ledger,
+        amount: lock.amount,
+        unlock_ledger: lock.unlock_ledger,
+        created_ledger: lock.created_ledger,
+    };
+    let cp_key = DataKey::LockCheckpoint(voter.clone(), index);
+    env.storage().persistent().set(&cp_key, &cp);
+    extend_persistent_ttl(env, &cp_key);
+
+    env.storage().instance().set(&count_key, &(index + 1));
+    env.storage()
+        .instance()
+        .extend_ttl(MIN_VOTING_WINDOW, MAX_LOCK_LEDGERS);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -1500,6 +1640,14 @@ mod tests {
 
     #[test]
     fn test_snapshot_immutable_after_extend() {
+        // Regression test: extend_lock after a proposal's snapshot_ledger must
+        // NOT inflate the voting power counted for that proposal.
+        //
+        // expected_power is captured BEFORE extend_lock.  After the extension
+        // we verify the voted power equals the pre-extension value, and also
+        // directly verify (using the live Lock fields) that the extension did
+        // change the lock in a way that would have inflated power on an unfixed
+        // contract — confirming the scenario is meaningful.
         let env = Env::default();
         env.mock_all_auths();
         let (_cid, cfg, client) = deploy(&env);
@@ -1513,14 +1661,137 @@ mod tests {
         let snap_ledger = env.ledger().sequence();
         snapshot(&client, &v, pid);
 
-        let lock = client.get_lock(&v);
-        client.extend_lock(&v, &(lock.unlock_ledger + 500_000));
+        // Capture expected power BEFORE extending — this is the power the
+        // voter held at the snapshot and what the vote must be counted as.
         let expected_power = client.get_voting_power(&v, &snap_ledger);
 
+        // Voter extends their lock after the snapshot has been taken.
+        let lock_before = client.get_lock(&v);
+        let new_unlock = lock_before.unlock_ledger + 500_000;
+        client.extend_lock(&v, &new_unlock);
+
+        // Manually compute what an unfixed contract would have returned using
+        // the new (extended) unlock_ledger and the same formula.
+        // This proves the attack scenario is real and the test is meaningful.
+        let unfixed_remaining = new_unlock - snap_ledger;
+        let unfixed_power = (max * unfixed_remaining as i128) / MAX_LOCK_LEDGERS as i128;
+        assert!(
+            unfixed_power > expected_power,
+            "the extended unlock_ledger must produce a larger power at snap_ledger \
+             on the raw formula; if not, the test scenario itself is trivial"
+        );
+
+        // Now cast the vote.  The recorded snapshot power must equal
+        // expected_power (pre-extension), not the unfixed inflated value.
         env.ledger().set_sequence_number(snap_ledger + 100_000);
         vote(&client, &v, pid, true);
 
-        assert_eq!(client.get_snapshot_power(&v, &pid), expected_power);
+        assert_eq!(
+            client.get_snapshot_power(&v, &pid),
+            expected_power,
+            "voted power must reflect the lock state AT the snapshot, \
+             not the retroactively extended unlock_ledger"
+        );
+        assert!(
+            client.get_snapshot_power(&v, &pid) < unfixed_power,
+            "fix confirmed: snapshot power is less than the inflated power \
+             that an unfixed contract would have counted"
+        );
+    }
+
+    /// Acceptance-criteria regression test for the snapshot-inflation
+    /// vulnerability (see SECURITY.md §CVE-DAO-GOV-2026-001).
+    ///
+    /// Attack sequence reproduced here:
+    ///   1. Voter locks tokens with a SHORT duration → low voting power.
+    ///   2. Proposal advances to SnapshotVote (snapshot_ledger = L).
+    ///   3. Before voting, voter calls extend_lock to push unlock_ledger far
+    ///      into the future — this would inflate their power at ledger L on an
+    ///      unfixed contract.
+    ///   4. Voter casts vote.
+    ///
+    /// The test asserts:
+    ///   • The power actually counted equals what the voter held AT L.
+    ///   • A second honest voter with the equivalent long lock (same amount,
+    ///     same final unlock_ledger, but locked BEFORE the snapshot) gets the
+    ///     larger power — confirming the attacker gains no advantage from the
+    ///     post-snapshot extension.
+    #[test]
+    fn test_extend_lock_after_snapshot_does_not_inflate_vote() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, cfg, client) = deploy(&env);
+        let sac = StellarAssetClient::new(&env, &cfg.gp_token);
+
+        // ── Attacker: locks with MIN duration (low power at snapshot). ──────
+        let attacker = Address::generate(&env);
+        sac.mint(&attacker, &1_000_000i128);
+        client.lock_tokens(&attacker, &1_000_000i128, &MIN_LOCK_LEDGERS);
+
+        // ── Honest voter: locks with MAX duration (high power). ─────────────
+        let honest = Address::generate(&env);
+        sac.mint(&honest, &1_000_000i128);
+        client.lock_tokens(&honest, &1_000_000i128, &MAX_LOCK_LEDGERS);
+
+        // Snapshot both voters at the same ledger.
+        let pid = mk_proposal(&env, &client, &honest);
+        let snap_ledger = env.ledger().sequence();
+        snapshot(&client, &honest, pid);
+
+        // Record expected powers AT the snapshot, before any extension.
+        let attacker_power_at_snap = client.get_voting_power(&attacker, &snap_ledger);
+        let honest_power_at_snap = client.get_voting_power(&honest, &snap_ledger);
+
+        // Attacker's power at snap must be strictly less than honest voter's,
+        // because the attacker only locked for MIN_LOCK_LEDGERS.
+        assert!(
+            attacker_power_at_snap < honest_power_at_snap,
+            "test setup: attacker's short lock should yield less power than honest voter's"
+        );
+
+        // ── Attack: extend unlock_ledger to match MAX_LOCK_LEDGERS AFTER snap.
+        let extended_unlock = env.ledger().sequence() + MAX_LOCK_LEDGERS;
+        client.extend_lock(&attacker, &extended_unlock);
+
+        // Manually compute what an unfixed contract would have returned using
+        // the new (extended) unlock_ledger and the same formula — this proves
+        // the attack vector is real and the scenario is meaningful.
+        let unfixed_remaining = extended_unlock - snap_ledger;
+        let unfixed_attacker_power =
+            (1_000_000i128 * unfixed_remaining as i128) / MAX_LOCK_LEDGERS as i128;
+        assert!(
+            unfixed_attacker_power > attacker_power_at_snap,
+            "the extended unlock_ledger must produce a higher power at snap_ledger \
+             on the raw formula; if not, the test scenario itself is trivial"
+        );
+
+        // ── Both voters cast their votes. ────────────────────────────────────
+        env.ledger().set_sequence_number(snap_ledger + 10_000);
+        vote(&client, &attacker, pid, true);
+        vote(&client, &honest, pid, true);
+
+        // ── Core assertion: attacker's counted vote == pre-extension power. ──
+        let attacker_counted = client.get_snapshot_power(&attacker, &pid);
+        assert_eq!(
+            attacker_counted,
+            attacker_power_at_snap,
+            "counted vote power must equal the power held AT the snapshot, \
+             not the retroactively inflated value"
+        );
+
+        // ── Honest voter retains their legitimate power unchanged. ───────────
+        assert_eq!(
+            client.get_snapshot_power(&honest, &pid),
+            honest_power_at_snap,
+            "honest voter's power must be unchanged by attacker's extend_lock"
+        );
+
+        // ── Attacker gained no advantage: their counted power is still less. ─
+        assert!(
+            attacker_counted < client.get_snapshot_power(&honest, &pid),
+            "attacker must not have gained power parity with the honest voter \
+             through a post-snapshot lock extension"
+        );
     }
 
     // ─── R12: Flash Loan Prevention ───────────────────────────────────────
