@@ -1,7 +1,7 @@
 "use strict";
 
 const cors = require("cors");
-const { env } = require("../config/env");
+const { createApiError } = require("./apiEnvelope");
 
 const DEFAULT_ALLOWED_ORIGINS = Object.freeze([
   "https://greenpay.app",
@@ -38,7 +38,7 @@ function rejectDisallowedOrigins(allowedOrigins = getAllowedOrigins()) {
       return next();
     }
 
-    return res.status(403).json({ error: "Origin not allowed" });
+    return next(createApiError(403, "ORIGIN_NOT_ALLOWED", "Origin not allowed"));
   };
 }
 

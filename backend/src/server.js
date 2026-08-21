@@ -19,6 +19,7 @@ const { Server } = require("socket.io");
 const { startIndexer, stopIndexer } = require("./services/indexerService");
 const { createCorsMiddleware, getAllowedOrigins } = require("./middleware/corsPolicy");
 const { correlationIdMiddleware } = require("./middleware/correlationId");
+const { apiEnvelope, errorHandler, notFoundHandler } = require("./middleware/apiEnvelope");
 const { initializeEventSourcing, shutdownEventSourcing } = require("./eventSourcing");
 const pool = require("./db/pool");
 const { createShutdownHandler } = require("./shutdown");
@@ -70,6 +71,7 @@ app.use(cookieParser());
 // Access-Control-Allow-Origin — otherwise browsers report a same-origin-looking
 // 403 as an opaque "blocked by CORS policy" failure instead of the real error.
 const origins = getAllowedOrigins();
+app.use(apiEnvelope);
 app.use(...createCorsMiddleware(origins));
 
 app.use(csurf({
@@ -103,7 +105,7 @@ app.set("io", io);
 const API_V1 = "/api/v1";
 
 app.get(`${API_V1}/csrf-token`, (req, res) => {
-  res.json({ success: true, csrfToken: req.csrfToken() });
+  res.json({ csrfToken: req.csrfToken() });
 });
 
 app.get("/livez", (req, res) => res.json({ status: "ok" }));
@@ -137,12 +139,8 @@ app.use("/api", (req, res, next) => {
   return res.redirect(308, `${API_V1}${req.url}`);
 });
 
-app.use((req, res) => res.status(404).json({ error: `${req.method} ${req.path} not found` }));
-app.use((err, req, res, next) => {
-  void next;
-  logger.error({ msg: "unhandled error", error: err.message, status: err.status || 500 });
-  res.status(err.status || 500).json({ error: err.message || "Internal server error" });
-});
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 async function startServer() {
   await runMigrations();
