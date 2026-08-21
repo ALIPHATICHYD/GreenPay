@@ -70,8 +70,7 @@ class DonationCommandHandler {
     const projectResult = await db.query("SELECT id FROM projects WHERE id = $1", [command.payload.projectId]);
     if (!projectResult.rows[0]) throw new Error("Project not found");
 
-    const amount = command.getAmount();
-    const amountXlm = command.payload.currency === "XLM" ? command.getAmountXlm() : String(amount);
+    const amountXlm = command.getAmountXlm();
     const amountStroops = command.payload.currency === "XLM" ? command.getAmountStroops().toString() : null;
     const project = await getProjectState(command.payload.projectId, db);
     const donor = await getDonorState(command.payload.donorAddress, db);
@@ -116,7 +115,7 @@ class DonationCommandHandler {
       ]
     );
 
-    return { events: [donationEvent], data: { donationId: donationEvent.eventId, amountXlm: amount }, deduplicated: false };
+    return { events: [donationEvent], data: { donationId: donationEvent.eventId, amountXlm }, deduplicated: false };
   }
 }
 
