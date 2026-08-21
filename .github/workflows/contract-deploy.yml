@@ -147,6 +147,34 @@ jobs:
           path: contracts/build-output/deployment-manifest.json
           retention-days: 30
 
+      - name: Generate network manifest
+        run: |
+          cd ../
+          cat > config/networks/testnet.json << EOF
+          {
+            "manifestVersion": "1.0.0",
+            "network": "testnet",
+            "networkPassphrase": "Test SDF Network ; September 2015",
+            "horizonUrl": "https://horizon-testnet.stellar.org",
+            "sorobanRpcUrl": "https://soroban-testnet.stellar.org",
+            "contracts": {
+              "greenPay": "${{ env.GREENPAY_CONTRACT_ID }}",
+              "escrow": "${{ env.ESCROW_CONTRACT_ID }}",
+              "daoGovernance": "${{ env.DAO_GOVERNANCE_CONTRACT_ID }}"
+            },
+            "generatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
+      - name: Commit updated manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "GreenPay Bot"
+          git config user.email "bot@greenpay.app"
+          git add config/networks/testnet.json
+          git commit -m "deploy: update testnet manifest [skip ci]" || echo "No changes to commit"
+          git push
+
   generate-proposal:
     name: Generate Multi-Sig Proposal
     needs: [test-and-verify, build-contract-metadata]

@@ -20,9 +20,12 @@ import {
   updateQueuedDonation,
   QueuedDonation,
 } from '../../utils/donationQueue';
+import { getActiveManifest } from '../../../config/networks';
 
+const manifest = getActiveManifest();
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
-const HORIZON_URL = process.env.EXPO_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';
+const HORIZON_URL = manifest.horizonUrl;
+const NETWORK_PASSPHRASE = manifest.networkPassphrase;
 
 interface ClimateProject {
   id: string;
@@ -216,7 +219,7 @@ export default function DonateScreen() {
 
       const transaction = new TransactionBuilder(sourceAccount, {
         fee: '100',
-        networkPassphrase: Networks.TESTNET,
+        networkPassphrase: NETWORK_PASSPHRASE,
       })
         .addOperation(
           Operation.payment({
@@ -319,7 +322,7 @@ export default function DonateScreen() {
     <ScrollView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Donate to {selectedProject?.name || 'a project'}</Text>
-        <Text style={styles.subtitle}>Choose a project and donate XLM on testnet.</Text>
+        <Text style={styles.subtitle}>Choose a project and donate XLM on {manifest.network}.</Text>
       </View>
 
       <View style={styles.selectorCard}>

@@ -1,3 +1,5 @@
+import { getActiveManifest } from '../../config/networks';
+
 export const SESSION_SCHEMA_VERSION = 1;
 export const WALLET_SESSION_TTL_MS = 15 * 60 * 1000;
 export const PROJECT_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -8,9 +10,12 @@ export const STORAGE_KEYS = {
   lastPopupWorker: 'greenpay.lastPopupWorkerId',
 } as const;
 
+// Load manifest once at module init
+const manifest = getActiveManifest();
+
 export interface WalletSession {
   publicKey: string;
-  network: 'TESTNET';
+  network: string; // Derived from active manifest
   validatedAt: number;
 }
 
@@ -56,7 +61,8 @@ function isWalletSession(value: unknown): value is WalletSession {
     isRecord(value) &&
     typeof value.publicKey === 'string' &&
     /^G[A-Z2-7]{55}$/.test(value.publicKey) &&
-    value.network === 'TESTNET' &&
+    typeof value.network === 'string' &&
+    value.network === manifest.network.toUpperCase() &&
     typeof value.validatedAt === 'number'
   );
 }
@@ -182,7 +188,7 @@ export class WorkerSessionState {
 
       this.wallet = {
         publicKey,
-        network: 'TESTNET',
+        network: manifest.network.toUpperCase(),
         validatedAt: this.now(),
       };
       const persisted: PersistedSessionState = {

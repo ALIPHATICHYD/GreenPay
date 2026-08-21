@@ -3,18 +3,24 @@
  */
 import { Horizon, Networks, Asset, Operation, TransactionBuilder, Transaction, Memo, rpc, Contract, scValToNative, Address, nativeToScVal, Account, xdr } from "@stellar/stellar-sdk";
 import { parseToStroops, stroopsToXLM } from "@/utils/amount";
+import { getActiveManifest } from "@/config/networks";
 
-export const NETWORK = (process.env.NEXT_PUBLIC_STELLAR_NETWORK || "testnet") as "testnet" | "mainnet";
-const HORIZON_URL = process.env.NEXT_PUBLIC_HORIZON_URL || "https://horizon-testnet.stellar.org";
-const RPC_URL     = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org";
+// Load manifest once at module init — throws if misconfigured
+const manifest = getActiveManifest();
 
-export const NETWORK_PASSPHRASE = NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-export const server = new Horizon.Server(HORIZON_URL);
-export const rpcServer = new rpc.Server(RPC_URL);
-export const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "";
+export const NETWORK = manifest.network as "testnet" | "mainnet";
+export const NETWORK_PASSPHRASE = manifest.networkPassphrase;
+export const server = new Horizon.Server(manifest.horizonUrl);
+export const rpcServer = new rpc.Server(manifest.sorobanRpcUrl);
+
+/** GreenPay core contract */
+export const CONTRACT_ID = manifest.contracts.greenPay || "";
 
 /** Soroban escrow contract (deploy `contracts/escrow-contract`). */
-export const ESCROW_CONTRACT_ID = process.env.NEXT_PUBLIC_ESCROW_CONTRACT_ID || "";
+export const ESCROW_CONTRACT_ID = manifest.contracts.escrow || "";
+
+/** DAO governance contract */
+export const DAO_GOVERNANCE_CONTRACT_ID = manifest.contracts.daoGovernance || "";
 
 export async function getXLMBalance(publicKey: string): Promise<string> {
   try {
