@@ -610,10 +610,14 @@ router.get("/:id/matching", async (req, res, next) => {
  */
 router.patch(
   "/:id/status",
+  // adminRequired runs before validate so an unauthenticated caller is turned
+  // away with a 401 rather than being told, via a 400, whether their body was
+  // well-formed.
+  adminRequired,
   validate(ProjectStatusUpdateSchema),
   async (req, res, next) => {
     try {
-      const { status, reason, adminAddress } = req.body;
+      const { status, reason } = req.body;
 
       const projectResult = await pool.query("SELECT * FROM projects WHERE id = $1", [req.params.id]);
       if (!projectResult.rows[0]) {
@@ -631,7 +635,10 @@ router.patch(
       );
 
       logAdminAction({
-        actor: adminAddress || "unknown",
+        // The verified JWT subject, never a client-supplied adminAddress: the
+        // request body is attacker-controlled, so trusting it here would let
+        // anyone forge who an audited status change is attributed to.
+        actor: req.admin.sub,
         action: `project.status.${status}`,
         targetType: "project",
         targetId: req.params.id,

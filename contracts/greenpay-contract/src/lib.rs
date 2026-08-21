@@ -656,16 +656,13 @@ impl GreenPayContract {
         }
         match dao_contract {
             Some(addr) => {
-                env.storage()
-                    .instance()
-                    .set(&DataKey::DaoContract, &addr);
+                env.storage().instance().set(&DataKey::DaoContract, &addr);
                 env.events()
                     .publish((symbol_short!("dao_set"), admin), addr);
             }
             None => {
                 env.storage().instance().remove(&DataKey::DaoContract);
-                env.events()
-                    .publish((symbol_short!("dao_clr"), admin), ());
+                env.events().publish((symbol_short!("dao_clr"), admin), ());
             }
         }
     }
@@ -709,10 +706,10 @@ impl GreenPayContract {
             panic!("Only the registered DAO contract can verify projects");
         }
 
-        let mut project: Project = env
-            .storage()
-            .instance()
-            .get(&DataKey::Project(project_id.clone()))
+        // Projects live in persistent storage (see read_persistent/
+        // write_persistent); reading them through instance storage finds
+        // nothing, so every call would fail with "Project not found".
+        let mut project: Project = read_persistent(&env, &DataKey::Project(project_id.clone()))
             .expect("Project not found");
         if !project.active {
             panic!("Cannot verify an inactive project");
@@ -723,9 +720,7 @@ impl GreenPayContract {
         // inspect the `active` flag; a separate `verified` field can be added
         // in a storage-compatible upgrade if needed.
         project.active = true;
-        env.storage()
-            .instance()
-            .set(&DataKey::Project(project_id.clone()), &project);
+        write_persistent(&env, &DataKey::Project(project_id.clone()), &project);
         env.events()
             .publish((symbol_short!("dao_ver"), caller), project_id);
     }
