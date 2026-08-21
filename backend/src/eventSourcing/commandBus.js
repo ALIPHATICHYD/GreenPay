@@ -3,6 +3,7 @@
 const { v4: uuid } = require("uuid");
 const pool = require("../db/pool");
 const { ProjectAggregate, DonorAggregate, MatchAggregate, JobAggregate, round7 } = require("./aggregates");
+const { eventStore } = require("./eventStore");
 
 const COMMAND_HANDLERS = new Map();
 
@@ -94,25 +95,9 @@ class DonationCommandHandler {
     await storeProjectAggregate(pool, command.payload.projectId, project, { includeRaisedTotal: false });
     await storeDonorAggregate(pool, command.payload.donorAddress);
 
-    const donationRow = donationEvent.toRow();
-    await pool.query(
-      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
-      [
-        donationRow.event_id,
-        donationRow.stream_id,
-        donationRow.aggregate_type,
-        donationRow.aggregate_id,
-        donationRow.event_type,
-        donationRow.version,
-        donationRow.aggregate_version,
-        JSON.stringify(donationRow.payload),
-        donationRow.actor,
-        donationRow.occurred_at,
-        donationRow.created_at,
-      ]
-    );
+    await eventStore.append(donationEvent);
 
-    return { events: [donationEvent], data: { donationId: donationRow.event_id, amountXlm: amount }, deduplicated: false };
+    return { events: [donationEvent], data: { donationId: donationEvent.eventId, amountXlm: amount }, deduplicated: false };
   }
 }
 
@@ -157,11 +142,7 @@ class ApplyMatchCommandHandler {
     donor.apply(matchEvent);
     await storeDonorAggregate(pool, donorAddress);
 
-    const matchRow = matchEvent.toRow();
-    await pool.query(
-      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
-      [matchRow.event_id, matchRow.stream_id, matchRow.aggregate_type, matchRow.aggregate_id, matchRow.event_type, matchRow.version, matchRow.aggregate_version, JSON.stringify(matchRow.payload), matchRow.actor, matchRow.occurred_at, matchRow.created_at]
-    );
+    await eventStore.append(matchEvent);
 
     return { events: [matchEvent], data: { matchId, matchAmount: command.payload.matchAmount }, deduplicated: false };
   }
@@ -194,11 +175,7 @@ class ChangeProjectStatusCommandHandler {
     project.apply(statusChangeEvent);
     await storeProjectAggregate(pool, projectId, project);
 
-    const row = statusChangeEvent.toRow();
-    await pool.query(
-      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
-      [row.event_id, row.stream_id, row.aggregate_type, row.aggregate_id, row.event_type, row.version, row.aggregate_version, JSON.stringify(row.payload), row.actor, row.occurred_at, row.created_at]
-    );
+    await eventStore.append(statusChangeEvent);
 
     return { events: [statusChangeEvent], data: { previousStatus: project.state.status, newStatus: command.payload.status } };
   }
@@ -221,11 +198,7 @@ class ReachMilestoneCommandHandler {
       transactionHash: command.payload.transactionHash,
     });
 
-    const row = milestoneEvent.toRow();
-    await pool.query(
-      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
-      [row.event_id, row.stream_id, row.aggregate_type, row.aggregate_id, row.event_type, row.version, row.aggregate_version, JSON.stringify(row.payload), row.actor, row.occurred_at, row.created_at]
-    );
+    await eventStore.append(milestoneEvent);
 
     return { events: [milestoneEvent], data: { milestoneId } };
   }
@@ -251,11 +224,7 @@ class ReleaseEscrowCommandHandler {
       releaseTransactionHash: command.payload.releaseTransactionHash,
     });
 
-    const row = jobReleasedEvent.toRow();
-    await pool.query(
-      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
-      [row.event_id, row.stream_id, row.aggregate_type, row.aggregate_id, row.event_type, row.version, row.aggregate_version, JSON.stringify(row.payload), row.actor, row.occurred_at, row.created_at]
-    );
+    await eventStore.append(jobReleasedEvent);
 
     return { events: [jobReleasedEvent], data: { jobId, releaseTransactionHash: command.payload.releaseTransactionHash } };
   }
@@ -279,11 +248,7 @@ class CreateMatchOfferCommandHandler {
       expiresAt: command.payload.expiresAt,
     });
 
-    const row = matchCreatedEvent.toRow();
-    await pool.query(
-      "INSERT INTO event_stream (event_id, stream_id, aggregate_type, aggregate_id, event_type, version, aggregate_version, payload, actor, occurred_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)",
-      [row.event_id, row.stream_id, row.aggregate_type, row.aggregate_id, row.event_type, row.version, row.aggregate_version, JSON.stringify(row.payload), row.actor, row.occurred_at, row.created_at]
-    );
+    await eventStore.append(matchCreatedEvent);
 
     return { events: [matchCreatedEvent], data: { matchId } };
   }
