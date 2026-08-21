@@ -36,6 +36,22 @@ jest.mock('expo-linking', () => ({
 
 jest.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
+jest.mock('expo-notifications', () => ({
+  setNotificationHandler: jest.fn(),
+  getPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
+  requestPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
+  scheduleNotificationAsync: jest.fn().mockResolvedValue('notif-1'),
+  cancelScheduledNotificationAsync: jest.fn(),
+  addNotificationResponseReceivedListener: jest.fn(() => ({ remove: jest.fn() })),
+}));
+
+jest.mock('../utils/recurringDonations', () => ({
+  createRecurringDonation: jest.fn(),
+  completeRecurringCycle: jest.fn(),
+  getRecurringDonation: jest.fn().mockResolvedValue(null),
+  requestNotificationPermissionsIfNeeded: jest.fn().mockResolvedValue(true),
+}));
+
 const MOCK_PROJECT = {
   id: 'proj-1',
   name: 'Amazon Reforestation',
@@ -487,5 +503,6 @@ describe('DonateScreen – issue #359: online donation Horizon-success / backend
              e x p e c t ( g e t B y T e x t ( e x p e c t e d T r u n c a t e d ) ) . t o B e T r u t h y ( ) ; 
          } ) ; 
      } ) ; 
- } ) ;  
+ } ) ; 
+ 
  
