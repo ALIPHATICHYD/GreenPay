@@ -6,8 +6,9 @@
  * modules that require a native environment.
  */
 import React from 'react';
-import { render, waitFor, screen } from '@testing-library/react-native';
+import { render, waitFor } from '@testing-library/react-native';
 import axios from 'axios';
+import { ThemeProvider } from '../app/theme';
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn() }),
@@ -16,7 +17,6 @@ jest.mock('expo-router', () => ({
 jest.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 import HomeScreen from '../app/index';
-import { ThemeProvider } from '../app/theme';
 
 // app/index.tsx reads theme colors via useTheme(), which requires a
 // ThemeProvider ancestor.
@@ -38,21 +38,30 @@ const MOCK_PROJECT = {
   donorCount: 147,
 };
 
-const MOCK_STATS = {
-  totalDonations: 320,
-  totalXLMRaised: '45200',
-};
-
 describe('HomeScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
+  it('shows skeleton header before data arrives', () => {
+    (axios.get as jest.Mock).mockImplementation(() => new Promise(() => {}));
+    const { getByText } = renderHomeScreen();
+    expect(getByText('Stellar GreenPay')).toBeTruthy();
+  });
+
   it('renders the app title', async () => {
+    (axios.get as jest.Mock).mockResolvedValue({ data: { data: [MOCK_PROJECT] } });
+    const { getByText } = renderHomeScreen();
+    await waitFor(() => expect(getByText('Stellar GreenPay')).toBeTruthy());
+  });
+
+  it('renders global stats after data loads', async () => {
     (axios.get as jest.Mock).mockResolvedValue({ data: { data: [MOCK_PROJECT] } });
 
     const { getByText } = renderHomeScreen();
-    await waitFor(() => expect(getByText('Stellar GreenPay')).toBeTruthy());
+    await waitFor(() => {
+      expect(getByText('Stellar GreenPay')).toBeTruthy();
+    });
   });
 
   it('renders the featured project name after data loads', async () => {
