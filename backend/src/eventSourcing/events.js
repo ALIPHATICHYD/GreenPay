@@ -1,12 +1,13 @@
 "use strict";
 
 const { v4: uuid } = require("uuid");
+const { getCorrelationId } = require("../utils/logger");
 
 class DomainEvent {
   static AGGREGATE_TYPE = null;
   static EVENT_TYPE = null;
 
-  constructor({ aggregateId, version, actor, aggregateVersion }) {
+  constructor({ aggregateId, version, actor, aggregateVersion, correlationId }) {
     if (!aggregateId) throw new Error("aggregateId is required");
     if (!version || version < 1) throw new Error("version must be >= 1");
     this.eventId = uuid();
@@ -18,6 +19,10 @@ class DomainEvent {
     this.actor = actor || "system";
     this.occurredAt = new Date().toISOString();
     this.createdAt = new Date().toISOString();
+    // Adopt the explicitly-supplied id first; fall back to whatever the
+    // AsyncLocalStorage context carries (set by correlationId middleware);
+    // leave undefined when no context exists (migrations, seed scripts).
+    this.correlationId = correlationId || getCorrelationId() || undefined;
   }
 
   getStreamId() {
@@ -50,6 +55,7 @@ class DomainEvent {
       aggregateVersion: this.aggregateVersion,
       actor: this.actor,
       occurredAt: this.occurredAt,
+      ...(this.correlationId !== undefined && { correlationId: this.correlationId }),
       data: this.data || {},
     };
   }
@@ -270,12 +276,15 @@ class MigratedDonationEvent extends DomainEvent {
 
 function fromPayload(payload) {
   const data = payload.data || {};
+  // correlationId is optional — events stored before this change have none.
+  const correlationId = payload.correlationId || undefined;
   switch (payload.eventType) {
   case "DonationRecorded":
     return new DonationRecordedEvent({
       aggregateId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       projectId: data.projectId,
       donorAddress: data.donorAddress,
       amountXlm: data.amountXlm,
@@ -288,6 +297,7 @@ function fromPayload(payload) {
       aggregateId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       matchId: data.matchId,
       projectId: data.projectId,
       donorAddress: data.donorAddress,
@@ -300,6 +310,7 @@ function fromPayload(payload) {
       aggregateId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       matchId: data.matchId,
       projectId: data.projectId,
       matcherAddress: data.matcherAddress,
@@ -312,6 +323,7 @@ function fromPayload(payload) {
       aggregateId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       previousStatus: data.previousStatus,
       newStatus: data.newStatus,
       reason: data.reason,
@@ -321,6 +333,7 @@ function fromPayload(payload) {
       aggregateId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       milestoneId: data.milestoneId,
       projectId: data.projectId,
       percentage: data.percentage,
@@ -332,6 +345,7 @@ function fromPayload(payload) {
       aggregateId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       clientPublicKey: data.clientPublicKey,
       freelancerPublicKey: data.freelancerPublicKey,
       amountXlm: data.amountXlm,
@@ -342,6 +356,7 @@ function fromPayload(payload) {
       aggregateId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       name: data.name,
       description: data.description,
       category: data.category,
@@ -355,6 +370,7 @@ function fromPayload(payload) {
       aggregateId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       displayName: data.displayName,
       bio: data.bio,
     });
@@ -364,6 +380,7 @@ function fromPayload(payload) {
       donationId: payload.aggregateId,
       version: payload.version,
       actor: payload.actor,
+      correlationId,
       originalCreatedAt: data.originalCreatedAt,
       projectId: data.projectId,
       donorAddress: data.donorAddress,

@@ -16,6 +16,9 @@ const { computeBadges, mapDonationRow } = require("../services/store");
 const donationLimiter = createRateLimiter(10, 1, "donation-post");
 const { execute } = require("../eventSourcing/commandBus");
 const { DonationRecordedEvent, MatchAppliedEvent } = require("../eventSourcing/events"); // 10 requests per minute
+const { logger: rootLogger } = require("../utils/logger");
+
+const logger = rootLogger.child({ service: "donations-route" });
 
 // POST /api/donations — record a donation after on-chain tx via Event Sourcing CQRS
 async function recordDonation(req, res, next) {
@@ -31,6 +34,13 @@ async function recordDonation(req, res, next) {
       message,
       transactionHash,
     } = validateBody(DonationCreateSchema, req.body || {});
+
+    logger.info({
+      msg: "donation attempt",
+      projectId,
+      donorAddress,
+      transactionHash,
+    });
 
     const projectResult = await pool.query("SELECT id FROM projects WHERE id = $1", [projectId]);
     if (!projectResult.rows[0]) {
@@ -62,6 +72,7 @@ async function recordDonation(req, res, next) {
           [transactionHash]
         );
         if (existing.rows[0]) {
+          logger.info({ msg: "donation deduplicated", transactionHash, donationId: existing.rows[0].event_id });
           return res.json({ success: true, data: { id: existing.rows[0].event_id, ...existing.rows[0].payload.data }, deduplicated: true });
         }
       }
@@ -69,6 +80,7 @@ async function recordDonation(req, res, next) {
     }
 
     if (result.deduplicated) {
+      logger.info({ msg: "donation deduplicated", transactionHash });
       return res.json({ success: true, data: result.data, deduplicated: true });
     }
 
@@ -91,8 +103,17 @@ async function recordDonation(req, res, next) {
       });
     }
 
+    logger.info({
+      msg: "donation recorded",
+      donationId: mainEvent.eventId,
+      projectId,
+      amountXlm: mainEvent.data.amountXlm,
+      transactionHash,
+    });
+
     res.status(201).json({ success: true, data: { id: mainEvent.eventId, ...mainEvent.data } });
   } catch (e) {
+    logger.error({ msg: "donation failed", error: e.message, status: e.status || 500 });
     next(e);
   }
 }
