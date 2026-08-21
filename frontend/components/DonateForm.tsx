@@ -31,7 +31,7 @@ type Step = "idle" | "building" | "signing" | "submitting" | "recording" | "succ
  *    success or failure, just point the donor at their transaction history.
  *  - "generic": any other failure (build/sign/validation errors, etc.).
  */
-type ErrorKind = "wallet_rejected" | "execution_failed" | "network_unknown" | "generic";
+type ErrorKind = "wallet_rejected" | "execution_failed" | "network_unknown" | "record_failed" | "generic";
 
 const PRESETS_XLM = ["10", "25", "50", "100", "250"];
 const PRESETS_USDC = ["5", "10", "25", "50", "100"];
@@ -70,6 +70,24 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
     if (!initialMessage) return;
     setMessage(initialMessage);
   }, [initialMessage]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("pendingDonationRecord");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.projectId === project.id) {
+          setTxHash(parsed.hash);
+          setAmount(parsed.amount);
+          if (parsed.message) setMessage(parsed.message);
+          setCurrency(parsed.currency);
+          setErrorKind("record_failed");
+          setError("We received your donation on-chain, but couldn't record it on the server.");
+          setStep("error");
+        }
+      }
+    } catch (e) {}
+  }, [project.id]);
 
   useEffect(() => {
     let mounted = true;
@@ -175,7 +193,7 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
   };
 
   const handleDonate = async () => {
-    if (!isValid || step !== "idle") return;
+    if (!isValid || (step !== "idle" && !(step === "error" && errorKind === "record_failed"))) return;
     setError(null);
     setErrorKind(null);
     setFailedTxHash(null);
@@ -185,6 +203,35 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
     const preDonationBadge = donorBadge;
 
     try {
+      if (step === "error" && errorKind === "record_failed" && txHash) {
+        setStep("recording");
+        let recordAmount = currency === "XLM" ? stroopsToXLM(amountStroops) : amountNum.toFixed(2);
+        let recordCurrency = currency;
+        let recordMessage = message.trim() || undefined;
+        try {
+          const saved = localStorage.getItem("pendingDonationRecord");
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            recordAmount = parsed.currency === "XLM" ? stroopsToXLM(parseToStroops(parsed.amount)) : Number.parseFloat(parsed.amount).toFixed(2);
+            recordCurrency = parsed.currency;
+            recordMessage = parsed.message?.trim() || undefined;
+          }
+        } catch (e) {}
+        
+        await recordDonation({
+          projectId: project.id,
+          donorAddress: publicKey,
+          amount: recordAmount,
+          currency: recordCurrency,
+          message: recordMessage,
+          transactionHash: txHash,
+        });
+        localStorage.removeItem("pendingDonationRecord");
+        setStep("success");
+        onSuccess?.();
+        return;
+      }
+
       const useContract = CONTRACT_ID && currency === "XLM";
 
       let tx;
@@ -244,6 +291,14 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
       setStep("submitting");
       const { hash } = await submitAndConfirmDonation(signedXDR);
       setTxHash(hash);
+      
+      localStorage.setItem("pendingDonationRecord", JSON.stringify({
+        hash,
+        amount,
+        message,
+        currency,
+        projectId: project.id,
+      }));
 
       setStep("recording");
       if (useContract) {
@@ -270,6 +325,8 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
         message: message.trim() || undefined,
         transactionHash: hash,
       });
+      
+      localStorage.removeItem("pendingDonationRecord");
 
       setStep("success");
       onSuccess?.();
@@ -277,7 +334,14 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
       // Revert any optimistic state a previous attempt (or this one, before
       // hitting the confirmed-failure branch above) may have set.
       setDonorBadge(preDonationBadge);
-      setTxHash(null);
+      
+      const isRecordPhase = localStorage.getItem("pendingDonationRecord") !== null;
+      if (isRecordPhase) {
+        setErrorKind("record_failed");
+        setError(err instanceof Error ? err.message : "Failed to record donation.");
+        setStep("error");
+      } else {
+        setTxHash(null);
 
       if (err instanceof DonationSubmissionError) {
         if (err.outcome === "execution_failed") {
@@ -293,8 +357,11 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
         setErrorKind("generic");
         setError(err instanceof Error ? err.message : "An error occurred");
       }
-      setStep("error");
-      setTimeout(() => setStep("idle"), 6000);
+      }
+      if (!isRecordPhase) {
+        setStep("error");
+        setTimeout(() => setStep("idle"), 6000);
+      }
     }
   };
 
@@ -428,6 +495,22 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           </div>
         )}
 
+        {step === "error" && error && errorKind === "record_failed" && (
+          <div
+            data-testid="donate-error-record-failed"
+            className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-sm font-body"
+          >
+            <p className="font-semibold mb-1">We couldn&apos;t record this donation</p>
+            <p>{error}</p>
+            {txHash && (
+              <a href={explorerUrl(txHash)} target="_blank" rel="noopener noreferrer"
+                className="underline text-amber-800 hover:text-amber-900 block mt-2">
+                View on Stellar Expert ↗
+              </a>
+            )}
+          </div>
+        )}
+
         {step === "error" && error && (errorKind === "generic" || errorKind === null) && (
           <div
             data-testid="donate-error-generic"
@@ -467,14 +550,14 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
           </div>
         )}
 
-        <button onClick={handleDonate} disabled={!isValid || step !== "idle"}
+        <button onClick={handleDonate} disabled={!isValid || (step !== "idle" && !(step === "error" && errorKind === "record_failed"))}
           className="btn-primary w-full flex items-center justify-center gap-2">
           {step === "building"   && <><Spinner />Building transaction...</>}
           {step === "signing"    && <><Spinner />Sign in Freighter...</>}
           {step === "submitting" && <><Spinner />Submitting &amp; confirming...</>}
           {step === "recording"  && <>Done</>}
           {step === "idle"       && <>🌱 Donate {amount ? (currency === "XLM" ? formatXLM(parseFloat(stroopsToXLM(amountStroops)), 2, localeTag) : `$${parseFloat(amount).toFixed(2)} ${currency}`) : currency}</>}
-          {step === "error"      && "Retry"}
+          {step === "error"      && (errorKind === "record_failed" ? "Retry Recording" : "Retry")}
         </button>
 
         {step === "signing" && (
