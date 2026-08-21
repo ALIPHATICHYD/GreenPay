@@ -219,7 +219,10 @@ for. The right fix is either (a) auto-mint every tier crossed in
 `tier_rank(tier) <= tier_rank(stats.badge)` and let the donor claim
 backwards. The current design is documented here so it is fixed in a
 dedicated change with its own UX review (claim-back vs. auto-mint) —
-out of scope for a security audit fix.
+out of scope for a security audit fix. Note: since Issue #114, minted
+badges are real NFT tokens in a token registry (`NftMeta(u32)` /
+`NftOwnerTokens(Address)`), and `transfer` enforces that only the
+current owner can move a badge.
 
 ### L-02 — `DonationRecord` constructed but never stored  *(Documented)*
 
@@ -279,6 +282,7 @@ both `require_auth` checks. Out of scope for this audit pass.
 | `deactivate_project` | `admin.require_auth` | `stored_admin == admin` | OK; missing event (L-03) |
 | `donate` | `donor.require_auth` | n/a (open) | OK |
 | `mint_impact_nft` | `donor.require_auth` | tier == current badge | Logic bug (M-02) |
+| `transfer` | `from.require_auth` | `from == meta.owner`; token exists | OK (Issue #114) |
 | `create_proposal` | `admin.require_auth` | `stored_admin == admin` | OK |
 | `vote_verify_project` | `voter.require_auth` | badge ≥ Seedling, no double-vote, deadline alive | OK |
 | `resolve_proposal` | none | deadline passed, not yet resolved | OK (idempotent) |
