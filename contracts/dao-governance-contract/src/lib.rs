@@ -271,7 +271,9 @@ impl DaoGovernanceContract {
             &env,
             &voter,
             &lock,
-            extend_ledger.checked_add(1).expect("checkpoint ledger overflow"),
+            extend_ledger
+                .checked_add(1)
+                .expect("checkpoint ledger overflow"),
         );
 
         env.events().publish(
@@ -325,11 +327,7 @@ impl DaoGovernanceContract {
         // Try to find the most-recent checkpoint whose effective_from_ledger <=
         // at_ledger by scanning backwards through the checkpoint array.
         let count_key = DataKey::LockCheckpointCount(voter.clone());
-        let count: u32 = env
-            .storage()
-            .instance()
-            .get(&count_key)
-            .unwrap_or(0u32);
+        let count: u32 = env.storage().instance().get(&count_key).unwrap_or(0u32);
 
         if count > 0 {
             // Linear scan from newest to oldest; checkpoints are appended in
@@ -339,8 +337,7 @@ impl DaoGovernanceContract {
                 i -= 1;
                 let cp_key = DataKey::LockCheckpoint(voter.clone(), i);
                 if env.storage().persistent().has(&cp_key) {
-                    let cp: LockCheckpoint =
-                        env.storage().persistent().get(&cp_key).unwrap();
+                    let cp: LockCheckpoint = env.storage().persistent().get(&cp_key).unwrap();
                     extend_persistent_ttl(&env, &cp_key);
                     if cp.effective_from_ledger <= at_ledger {
                         // This is the checkpoint that was current at at_ledger.
@@ -737,11 +734,7 @@ fn extend_persistent_ttl(env: &Env, key: &DataKey) {
 fn write_lock_checkpoint(env: &Env, voter: &Address, lock: &Lock, effective_from_ledger: u32) {
     // Read and increment the per-voter checkpoint counter.
     let count_key = DataKey::LockCheckpointCount(voter.clone());
-    let index: u32 = env
-        .storage()
-        .instance()
-        .get(&count_key)
-        .unwrap_or(0u32);
+    let index: u32 = env.storage().instance().get(&count_key).unwrap_or(0u32);
 
     let cp = LockCheckpoint {
         effective_from_ledger,
@@ -1773,8 +1766,7 @@ mod tests {
         // ── Core assertion: attacker's counted vote == pre-extension power. ──
         let attacker_counted = client.get_snapshot_power(&attacker, &pid);
         assert_eq!(
-            attacker_counted,
-            attacker_power_at_snap,
+            attacker_counted, attacker_power_at_snap,
             "counted vote power must equal the power held AT the snapshot, \
              not the retroactively inflated value"
         );
