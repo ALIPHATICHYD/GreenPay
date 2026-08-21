@@ -8,6 +8,7 @@ const { validate } = require("../middleware/validate");
 const { AdminLoginSchema, AdminRefreshSchema, AdminAuditQuerySchema } = require("../schemas/admin");
 const { logAdminAction } = require("../services/audit");
 const { enqueueAISummary } = require("../services/summaryQueue");
+const { env } = require("../config/env");
 
 const loginLimiter = createRateLimiter(10, 15, "admin-login");
 
@@ -16,19 +17,17 @@ const REFRESH_EXPIRY = "24h";
 
 router.post("/login", loginLimiter, validate(AdminLoginSchema), (req, res) => {
   const { username, password } = req.body || {};
-  const adminUser = process.env.ADMIN_USERNAME || "admin";
-  const adminPass = process.env.ADMIN_PASSWORD;
 
-  if (!adminPass) {
+  if (!env.adminPassword) {
     return res.status(503).json({ error: "Admin authentication not configured on this server" });
   }
 
-  if (username !== adminUser || password !== adminPass) {
+  if (username !== env.adminUsername || password !== env.adminPassword) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  const token = signToken({ role: "admin", sub: adminUser }, TOKEN_EXPIRY);
-  const refreshToken = signToken({ role: "admin", sub: adminUser, type: "refresh" }, REFRESH_EXPIRY);
+  const token = signToken({ role: "admin", sub: env.adminUsername }, TOKEN_EXPIRY);
+  const refreshToken = signToken({ role: "admin", sub: env.adminUsername, type: "refresh" }, REFRESH_EXPIRY);
 
   res.json({
     success: true,

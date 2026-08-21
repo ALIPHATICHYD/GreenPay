@@ -3,22 +3,20 @@
  */
 "use strict";
 
-const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
-const FROM_ADDRESS   = process.env.EMAIL_FROM || "GreenPay <updates@greenpay.app>";
-const APP_URL        = process.env.APP_URL || "http://localhost:3000";
+const { env } = require("../config/env");
 
 /**
  * Send a project update notification to a list of subscriber emails.
  * Silently skips if RESEND_API_KEY is not configured.
  */
 async function sendUpdateNotifications({ project, update, emails }) {
-  if (!RESEND_API_KEY) {
+  if (!env.resendApiKey) {
     console.warn("[email] RESEND_API_KEY not set — skipping notifications");
     return;
   }
   if (!emails || emails.length === 0) return;
 
-  const projectUrl = `${APP_URL}/projects/${project.id}`;
+  const projectUrl = `${env.appUrl}/projects/${project.id}`;
 
   // Resend supports up to 50 recipients per call — batch if needed
   const BATCH = 50;
@@ -27,11 +25,11 @@ async function sendUpdateNotifications({ project, update, emails }) {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${RESEND_API_KEY}`,
+        Authorization: `Bearer ${env.resendApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: FROM_ADDRESS,
+        from: env.emailFrom,
         to: batch,
         subject: `Update from ${project.name}: ${update.title}`,
         html: buildHtml({ project, update, projectUrl }),
