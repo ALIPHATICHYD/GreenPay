@@ -309,7 +309,7 @@ jobs:
             context: ./backend
             dockerfile: ./backend/Dockerfile
           - image: greenpay-frontend
-            context: ./frontend
+            context: .
             dockerfile: ./frontend/Dockerfile
           - image: greenpay-scheduler
             context: ./scheduler

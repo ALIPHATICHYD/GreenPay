@@ -3,10 +3,10 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy shared module first (needed for build)
+# Copy shared module from root context
 COPY shared /app/shared
 
-# Copy frontend files
+# Copy frontend package files
 COPY frontend/package*.json ./
 RUN npm ci
 

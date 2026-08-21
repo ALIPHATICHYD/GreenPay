@@ -1,13 +1,9 @@
 /**
  * lib/i18n.tsx — Lightweight i18n context with JSON locale files.
- *
- * Interpolation/pluralization is backed by `intl-messageformat`, which
- * implements the ICU MessageFormat spec on top of the native
- * `Intl.PluralRules` API.
  */
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
-import { createT, getDir, LOCALE_TAGS, RTL_LOCALES } from "../../shared/i18n";
-import type { Locale, InterpolationValues } from "../../shared/i18n";
+import { createT, getDir, LOCALE_TAGS, RTL_LOCALES } from "@greenpay/i18n";
+import type { Locale, InterpolationValues } from "@greenpay/i18n";
 
 export type { Locale, InterpolationValues };
 
