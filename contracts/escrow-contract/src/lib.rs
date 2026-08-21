@@ -23,7 +23,7 @@ const DISPUTE_TIMEOUT_LEDGERS: u32 = 518_400;
 const DISPUTE_TIMEOUT_LEDGERS: u32 = 200;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, String,
 };
 
 #[contracttype]
@@ -385,6 +385,27 @@ impl EscrowContract {
 
     pub fn get_job(env: Env, job_id: String) -> Option<Job> {
         env.storage().instance().get(&DataKey::Job(job_id))
+    }
+
+    // ─── Upgrade ──────────────────────────────────────────────────────────────────
+
+    /// Replaces the contract's WASM with a new hash.
+    /// Only the admin (set at `initialize`) may call this.
+    /// Emits an `upgraded` event containing the new hash.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if stored_admin != admin {
+            panic!("Only admin can upgrade");
+        }
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish((symbol_short!("upgraded"), admin), new_wasm_hash);
     }
 }
 

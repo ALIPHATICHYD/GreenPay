@@ -13,7 +13,7 @@ const { DonationCreateSchema } = require("../schemas/donations");
 const { stellarPublicKey } = require("../schemas/common");
 const donorKeyParamsSchema = z.object({ publicKey: stellarPublicKey });
 const { computeBadges, mapDonationRow } = require("../services/store");
-const donationLimiter = createRateLimiter(10, 1);
+const donationLimiter = createRateLimiter(10, 1, "donation-post");
 const { execute } = require("../eventSourcing/commandBus");
 const { DonationRecordedEvent, MatchAppliedEvent } = require("../eventSourcing/events"); // 10 requests per minute
 

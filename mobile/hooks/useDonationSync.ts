@@ -31,23 +31,28 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import axios from 'axios';
 import NetInfo from '@react-native-community/netinfo';
-import { Server } from '@stellar/stellar-sdk';
+import { Horizon } from '@stellar/stellar-sdk';
+const StellarServer = (require('@stellar/stellar-sdk') as any).Server || Horizon.Server;
 import {
   QueuedDonation,
   listQueuedDonations,
   removeQueuedDonation,
   updateQueuedDonation,
 } from '../utils/donationQueue';
+import {
+  parseAmountToStroops,
+  formatStroopsToDisplay,
+  FEE_BUFFER_STROOPS,
+  isBalanceSufficient,
+} from '../utils/amount';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 const HORIZON_URL = process.env.EXPO_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';
-
 /** Small reserve added on top of the donation amount to account for network fees. */
 const FEE_BUFFER_XLM = 0.5;
 
 /** Base delay (ms) before retrying after a 429 rate-limit response. */
 const RATE_LIMIT_BACKOFF_MS = 5_000;
-
 export type ResolveAction = 'remove' | 'edit-amount';
 
 /** Cached Horizon account load result for deduplication within a sync pass. */
@@ -123,12 +128,11 @@ async function preflightCheck(
         conflictDetail: 'This project is no longer accepting donations.',
       };
     }
-
     // Use cached loadAccount result when available for this donor address.
     let cacheEntry = accountCache.get(entry.donorAddress);
     if (!cacheEntry) {
       try {
-        const server = new Server(HORIZON_URL);
+        const server = new StellarServer(HORIZON_URL);
         const account = await server.loadAccount(entry.donorAddress);
         cacheEntry = { account, error: null };
       } catch (error) {
@@ -150,15 +154,26 @@ async function preflightCheck(
     }
 
     const nativeBalance = cacheEntry.account.balances.find((b: any) => b.asset_type === 'native');
-    const available = nativeBalance ? parseFloat(nativeBalance.balance) : 0;
-    const required = parseFloat(entry.amountXLM) + FEE_BUFFER_XLM;
+    const availableStroops = nativeBalance ? parseAmountToStroops(nativeBalance.balance) : null;
+    const entryStroops = parseAmountToStroops(entry.amountXLM);
 
-    if (Number.isNaN(available) || available < required) {
+    if (availableStroops === null || entryStroops === null) {
       return {
         ...entry,
         status: 'conflict',
         conflictReason: 'insufficient-balance',
-        conflictDetail: `Available: ${Number.isNaN(available) ? '0' : available.toFixed(2)} XLM, required: ${required.toFixed(2)} XLM`,
+        conflictDetail: `Available: ${nativeBalance?.balance ? formatStroopsToDisplay(parseAmountToStroops(nativeBalance.balance) ?? 0n, 2) : '0'} XLM, required: ${entry.amountXLM} XLM`,
+      };
+    }
+
+    const requiredStroops = entryStroops + FEE_BUFFER_STROOPS;
+
+    if (!isBalanceSufficient(availableStroops, requiredStroops)) {
+      return {
+        ...entry,
+        status: 'conflict',
+        conflictReason: 'insufficient-balance',
+        conflictDetail: `Available: ${formatStroopsToDisplay(availableStroops, 2)} XLM, required: ${formatStroopsToDisplay(requiredStroops, 2)} XLM`,
       };
     }
 

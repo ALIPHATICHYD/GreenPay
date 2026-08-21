@@ -7,7 +7,7 @@ const { createRateLimiter } = require("../middleware/rateLimiter");
 const { validate } = require("../middleware/validate");
 const { AdminLoginSchema, AdminRefreshSchema, AdminAuditQuerySchema } = require("../schemas/admin");
 
-const loginLimiter = createRateLimiter(10, 15);
+const loginLimiter = createRateLimiter(10, 15, "admin-login");
 
 const TOKEN_EXPIRY = "1h";
 const REFRESH_EXPIRY = "24h";

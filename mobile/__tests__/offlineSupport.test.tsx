@@ -6,6 +6,7 @@ import React from 'react';
 import { render, waitFor } from '@testing-library/react-native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ThemeProvider } from '../app/theme';
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn() }),
@@ -14,12 +15,7 @@ jest.mock('expo-router', () => ({
 jest.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 import ProjectsScreen from '../app/projects/index';
-import { ThemeProvider } from '../app/theme';
 
-jest.setTimeout(15000);
-
-// app/projects/index.tsx reads theme colors via useTheme(), which requires a
-// ThemeProvider ancestor.
 function renderProjectsScreen() {
   return render(
     <ThemeProvider>

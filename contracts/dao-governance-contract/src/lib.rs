@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, vec, Address, Bytes, Env, IntoVal, String, Symbol,
+    contract, contractimpl, contracttype, token, vec, Address, Bytes, BytesN, Env, IntoVal, String,
+    Symbol,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ pub enum DataKey {
     Proposal(u64),
     Snapshot(u64, Address),
     ProposalCount,
+    AllowedTarget(Address, Symbol),
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -277,6 +279,66 @@ impl DaoGovernanceContract {
         }
     }
 
+    // ─── Execution Target Allowlist ─────────────────────────────────────────
+    //
+    // execute_proposal invokes proposal.target_contract/function with
+    // proposer-supplied calldata. Without a restriction here, a successful
+    // vote would let a proposal invoke arbitrary calldata against any
+    // contract/function pair. Only the dao_admin (the same authority that
+    // can already force-advance a proposal past Discussion) may change the
+    // allowlist, and the pair is checked both when a proposal is created and
+    // again immediately before execution, so removing an entry after a
+    // proposal is queued still blocks it from running.
+
+    pub fn add_allowed_target(
+        env: Env,
+        caller: Address,
+        target_contract: Address,
+        function: Symbol,
+    ) {
+        caller.require_auth();
+        let config: Config = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized");
+        if caller != config.dao_admin {
+            panic!("not authorised to modify allowlist");
+        }
+        let key = DataKey::AllowedTarget(target_contract.clone(), function.clone());
+        env.storage().persistent().set(&key, &true);
+        extend_persistent_ttl(&env, &key);
+        env.events()
+            .publish((Symbol::new(&env, "tgt_add"),), (target_contract, function));
+    }
+
+    pub fn remove_allowed_target(
+        env: Env,
+        caller: Address,
+        target_contract: Address,
+        function: Symbol,
+    ) {
+        caller.require_auth();
+        let config: Config = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized");
+        if caller != config.dao_admin {
+            panic!("not authorised to modify allowlist");
+        }
+        let key = DataKey::AllowedTarget(target_contract.clone(), function.clone());
+        env.storage().persistent().remove(&key);
+        env.events()
+            .publish((Symbol::new(&env, "tgt_rmv"),), (target_contract, function));
+    }
+
+    pub fn is_allowed_target(env: Env, target_contract: Address, function: Symbol) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::AllowedTarget(target_contract, function))
+    }
+
     // ─── Requirement 6: Proposal Creation ──────────────────────────────────
 
     pub fn create_proposal(
@@ -294,6 +356,11 @@ impl DaoGovernanceContract {
         if power <= 0 {
             panic!("insufficient voting power to propose");
         }
+        let allow_key = DataKey::AllowedTarget(target_contract.clone(), function.clone());
+        if !env.storage().persistent().has(&allow_key) {
+            panic!("target/function not allowlisted");
+        }
+        extend_persistent_ttl(&env, &allow_key);
         let count: u64 = env
             .storage()
             .instance()
@@ -505,6 +572,11 @@ impl DaoGovernanceContract {
         if env.ledger().sequence() < proposal.executable_from_ledger {
             panic!("timelock not elapsed");
         }
+        let allow_key =
+            DataKey::AllowedTarget(proposal.target_contract.clone(), proposal.function.clone());
+        if !env.storage().persistent().has(&allow_key) {
+            panic!("target/function not allowlisted");
+        }
         let args = vec![&env, proposal.calldata.into_val(&env)];
         env.invoke_contract::<()>(&proposal.target_contract, &proposal.function, args);
 
@@ -514,6 +586,28 @@ impl DaoGovernanceContract {
         extend_persistent_ttl(&env, &key);
         env.events()
             .publish((Symbol::new(&env, "executed"), proposal_id), ());
+    }
+
+    // ─── Requirement 11: On-Chain Upgrade ──────────────────────────────────────
+
+    /// Replaces the contract's WASM with a new hash.
+    /// Only the `dao_admin` (set at `initialize`) may call this.
+    /// For on-chain governance, route calls through `execute_proposal`.
+    /// Emits an `upgraded` event containing the new hash.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        caller.require_auth();
+        let config: Config = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("not initialized");
+        if caller != config.dao_admin {
+            panic!("only dao_admin can upgrade");
+        }
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish((Symbol::new(&env, "upgraded"), caller), new_wasm_hash);
     }
 }
 
@@ -583,12 +677,16 @@ mod tests {
         client: &DaoGovernanceContractClient<'static>,
         proposer: &Address,
     ) -> u64 {
+        let target = Address::generate(env);
+        let function = Symbol::new(env, "fn");
+        let admin = client.get_config().dao_admin;
+        client.add_allowed_target(&admin, &target, &function);
         client.create_proposal(
             proposer,
             &String::from_str(env, "Test"),
             &String::from_str(env, "Desc"),
-            &Address::generate(env),
-            &Symbol::new(env, "fn"),
+            &target,
+            &function,
             &Bytes::from_slice(env, &[1, 2, 3]),
         )
     }
@@ -1287,12 +1385,14 @@ mod tests {
         client.lock_tokens(&a, &500_000i128, &MAX_LOCK_LEDGERS);
         client.lock_tokens(&b, &500_000i128, &MAX_LOCK_LEDGERS);
 
+        let noop_fn = Symbol::new(&env, "noop");
+        client.add_allowed_target(&cfg.dao_admin, &target, &noop_fn);
         let pid = client.create_proposal(
             &a,
             &String::from_str(&env, "X"),
             &String::from_str(&env, "Y"),
             &target,
-            &Symbol::new(&env, "noop"),
+            &noop_fn,
             &Bytes::new(&env),
         );
         snapshot(&client, &a, pid);
@@ -1336,12 +1436,14 @@ mod tests {
         client.lock_tokens(&a, &500_000i128, &MAX_LOCK_LEDGERS);
         client.lock_tokens(&b, &500_000i128, &MAX_LOCK_LEDGERS);
 
+        let noop_fn = Symbol::new(&env, "noop");
+        client.add_allowed_target(&cfg.dao_admin, &target, &noop_fn);
         let pid = client.create_proposal(
             &a,
             &String::from_str(&env, "X"),
             &String::from_str(&env, "Y"),
             &target,
-            &Symbol::new(&env, "noop"),
+            &noop_fn,
             &Bytes::new(&env),
         );
         snapshot(&client, &a, pid);
@@ -1474,13 +1576,17 @@ mod tests {
         sac.mint(&v, &500_000i128);
         client.lock_tokens(&v, &500_000i128, &MAX_LOCK_LEDGERS);
 
+        let target = Address::generate(&env);
+        let function = Symbol::new(&env, "f");
+        client.add_allowed_target(&cfg.dao_admin, &target, &function);
+
         let orig = Bytes::from_slice(&env, &[1, 2, 3, 255, 0, 128]);
         let pid = client.create_proposal(
             &v,
             &String::from_str(&env, "T"),
             &String::from_str(&env, "D"),
-            &Address::generate(&env),
-            &Symbol::new(&env, "f"),
+            &target,
+            &function,
             &orig,
         );
         let p = client.get_proposal(&pid);
@@ -1498,12 +1604,16 @@ mod tests {
         sac.mint(&v, &500_000i128);
         client.lock_tokens(&v, &500_000i128, &MAX_LOCK_LEDGERS);
 
+        let target = Address::generate(&env);
+        let function = Symbol::new(&env, "f");
+        client.add_allowed_target(&cfg.dao_admin, &target, &function);
+
         let pid = client.create_proposal(
             &v,
             &String::from_str(&env, "T"),
             &String::from_str(&env, "D"),
-            &Address::generate(&env),
-            &Symbol::new(&env, "f"),
+            &target,
+            &function,
             &Bytes::new(&env),
         );
         assert_eq!(client.get_proposal(&pid).calldata.len(), 0);
@@ -1525,12 +1635,14 @@ mod tests {
         client.lock_tokens(&a, &500_000i128, &MAX_LOCK_LEDGERS);
         client.lock_tokens(&b, &500_000i128, &MAX_LOCK_LEDGERS);
 
+        let noop_fn = Symbol::new(&env, "noop");
+        client.add_allowed_target(&cfg.dao_admin, &target, &noop_fn);
         let pid = client.create_proposal(
             &a,
             &String::from_str(&env, "X"),
             &String::from_str(&env, "Y"),
             &target,
-            &Symbol::new(&env, "noop"),
+            &noop_fn,
             &Bytes::new(&env),
         );
         snapshot(&client, &a, pid);
@@ -1544,5 +1656,172 @@ mod tests {
         env.ledger().set_sequence_number(p.executable_from_ledger);
         client.execute_proposal(&pid);
         assert_eq!(client.get_proposal(&pid).stage, ProposalStage::Executed);
+    }
+
+    // ─── R11: Upgrade ─────────────────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "only dao_admin can upgrade")]
+    fn test_upgrade_rejects_non_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, _cfg, client) = deploy(&env);
+        let impostor = Address::generate(&env);
+        let hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+        client.upgrade(&impostor, &hash);
+    }
+
+    #[test]
+    fn test_upgrade_preserves_lock_and_proposal_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (cid, cfg, client) = deploy(&env);
+
+        // Lock tokens and create a proposal so there is real state to survive.
+        let voter = Address::generate(&env);
+        let sac = StellarAssetClient::new(&env, &cfg.gp_token);
+        sac.mint(&voter, &500_000i128);
+        client.lock_tokens(&voter, &500_000i128, &MAX_LOCK_LEDGERS);
+        let pid = mk_proposal(&env, &client, &voter);
+
+        // Re-register same binary at same address.
+        let new_cid = env.register_contract(Some(&cid), DaoGovernanceContract);
+        assert_eq!(new_cid, cid);
+
+        let client_v2 = DaoGovernanceContractClient::new(&env, &cid);
+        let lock = client_v2.get_lock(&voter);
+        assert_eq!(lock.amount, 500_000);
+        let proposal = client_v2.get_proposal(&pid);
+        assert_eq!(proposal.stage, ProposalStage::Discussion);
+    }
+
+    // ─── R15: Execution Target Allowlist ──────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "target/function not allowlisted")]
+    fn test_create_proposal_rejects_unallowlisted_target() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, cfg, client) = deploy(&env);
+        let v = Address::generate(&env);
+        let sac = StellarAssetClient::new(&env, &cfg.gp_token);
+        sac.mint(&v, &500_000i128);
+        client.lock_tokens(&v, &500_000i128, &MAX_LOCK_LEDGERS);
+
+        client.create_proposal(
+            &v,
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &Address::generate(&env),
+            &Symbol::new(&env, "f"),
+            &Bytes::new(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "target/function not allowlisted")]
+    fn test_create_proposal_rejects_unallowlisted_function() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, cfg, client) = deploy(&env);
+        let v = Address::generate(&env);
+        let sac = StellarAssetClient::new(&env, &cfg.gp_token);
+        sac.mint(&v, &500_000i128);
+        client.lock_tokens(&v, &500_000i128, &MAX_LOCK_LEDGERS);
+
+        let target = Address::generate(&env);
+        client.add_allowed_target(&cfg.dao_admin, &target, &Symbol::new(&env, "foo"));
+
+        // Same target, different function: allowlisting must be checked as a
+        // (target, function) pair, not the target alone.
+        client.create_proposal(
+            &v,
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &target,
+            &Symbol::new(&env, "bar"),
+            &Bytes::new(&env),
+        );
+    }
+
+    #[test]
+    fn test_allowed_target_add_and_remove_persist() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, cfg, client) = deploy(&env);
+        let target = Address::generate(&env);
+        let function = Symbol::new(&env, "f");
+
+        assert!(!client.is_allowed_target(&target, &function));
+        client.add_allowed_target(&cfg.dao_admin, &target, &function);
+        assert!(client.is_allowed_target(&target, &function));
+        client.remove_allowed_target(&cfg.dao_admin, &target, &function);
+        assert!(!client.is_allowed_target(&target, &function));
+    }
+
+    #[test]
+    #[should_panic(expected = "not authorised to modify allowlist")]
+    fn test_add_allowed_target_unauthorized_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, _cfg, client) = deploy(&env);
+        let rando = Address::generate(&env);
+        client.add_allowed_target(&rando, &Address::generate(&env), &Symbol::new(&env, "f"));
+    }
+
+    #[test]
+    #[should_panic(expected = "not authorised to modify allowlist")]
+    fn test_remove_allowed_target_unauthorized_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, cfg, client) = deploy(&env);
+        let target = Address::generate(&env);
+        let function = Symbol::new(&env, "f");
+        client.add_allowed_target(&cfg.dao_admin, &target, &function);
+
+        let rando = Address::generate(&env);
+        client.remove_allowed_target(&rando, &target, &function);
+    }
+
+    #[test]
+    #[should_panic(expected = "target/function not allowlisted")]
+    fn test_removed_target_cannot_execute() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_cid, cfg, client) = deploy(&env);
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let target = deploy_noop(&env);
+        let function = Symbol::new(&env, "noop");
+        let sac = StellarAssetClient::new(&env, &cfg.gp_token);
+        sac.mint(&a, &500_000i128);
+        sac.mint(&b, &500_000i128);
+        client.lock_tokens(&a, &500_000i128, &MAX_LOCK_LEDGERS);
+        client.lock_tokens(&b, &500_000i128, &MAX_LOCK_LEDGERS);
+
+        client.add_allowed_target(&cfg.dao_admin, &target, &function);
+        let pid = client.create_proposal(
+            &a,
+            &String::from_str(&env, "X"),
+            &String::from_str(&env, "Y"),
+            &target,
+            &function,
+            &Bytes::new(&env),
+        );
+        snapshot(&client, &a, pid);
+        let end = env.ledger().sequence() + VOTING_PERIOD;
+        vote(&client, &a, pid, true);
+        vote(&client, &b, pid, true);
+        env.ledger().set_sequence_number(end + 1);
+        finalise(&client, pid);
+
+        // Allowlist entry is revoked while the proposal sits in its timelock;
+        // execution must re-check the allowlist, not just trust the pair
+        // that was valid at proposal-creation time.
+        client.remove_allowed_target(&cfg.dao_admin, &target, &function);
+
+        let p = client.get_proposal(&pid);
+        env.ledger().set_sequence_number(p.executable_from_ledger);
+        client.execute_proposal(&pid);
     }
 }
