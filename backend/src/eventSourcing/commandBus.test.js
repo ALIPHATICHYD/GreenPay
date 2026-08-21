@@ -60,6 +60,33 @@ describe("commandBus.js - Event Sourcing Core Engine (Issue #129)", () => {
       await expect(execute(cmd)).rejects.toThrow("projectId is required");
     });
 
+    test("rejects XLM amounts with more than seven decimal places", () => {
+      const cmd = new RecordDonationCommand({
+        actor: "actor-1",
+        projectId: "proj-1",
+        donorAddress: makePublicKey("A"),
+        amountXlm: "1.00000001",
+        transactionHash: makeTxHash("a"),
+      });
+
+      expect(cmd.validate()).toContain(
+        "amount must be a positive XLM amount with at most 7 decimal places"
+      );
+    });
+
+    test("retains the maximum amount guard for non-XLM donations", () => {
+      const cmd = new RecordDonationCommand({
+        actor: "actor-1",
+        projectId: "proj-1",
+        donorAddress: makePublicKey("A"),
+        amount: 1e15 + 1,
+        currency: "USDC",
+        transactionHash: makeTxHash("a"),
+      });
+
+      expect(cmd.validate()).toContain("amount exceeds allowed maximum");
+    });
+
     test("deduplicates donation when transaction hash already exists in event_stream", async () => {
       const donorAddress = makePublicKey("A");
       const transactionHash = makeTxHash("a");
@@ -163,7 +190,7 @@ describe("commandBus.js - Event Sourcing Core Engine (Issue #129)", () => {
       expect(result.deduplicated).toBe(false);
       expect(result.events.length).toBe(1);
       expect(result.events[0].eventType).toBe("DonationRecorded");
-      expect(result.data.amountXlm).toBe(15.5);
+      expect(result.data.amountXlm).toBe("15.5000000");
 
       // Verify INSERT INTO event_stream was called with correct parameters
       const insertCall = pool.query.mock.calls.find(

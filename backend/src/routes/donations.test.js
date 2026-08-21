@@ -166,7 +166,7 @@ describe("POST /api/donations", () => {
     });
     execute.mockResolvedValueOnce({
       events: [donationEvent],
-      data: { donationId: donationEvent.eventId, amountXlm: 10 },
+      data: { donationId: donationEvent.eventId, amountXlm: "10.0000000" },
       deduplicated: false,
     });
 
@@ -185,7 +185,7 @@ describe("POST /api/donations", () => {
         id: donationEvent.eventId,
         projectId: "project-1",
         donorAddress,
-        amountXlm: 10,
+        amountXlm: "10.0000000",
         currency: "XLM",
         transactionHash,
       }),

@@ -21,6 +21,10 @@ const { logger: rootLogger } = require("../utils/logger");
 
 const logger = rootLogger.child({ service: "donations-route" });
 
+function publicDonationData(data) {
+  return { ...data, amountXlm: Number.parseFloat(data.amountXlm) };
+}
+
 // POST /api/donations — record a donation after on-chain tx via Event Sourcing CQRS
 async function recordDonation(req, res, next) {
   try {
@@ -96,7 +100,7 @@ async function recordDonation(req, res, next) {
       io.emit("donation_event", {
         projectId,
         donorAddress,
-        amountXLM: mainEvent.data.amountXlm,
+        amountXLM: Number.parseFloat(mainEvent.data.amountXlm),
         transactionHash,
         timestamp: new Date().toISOString(),
       });
