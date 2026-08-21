@@ -58,18 +58,31 @@ api.interceptors.request.use(async (config) => {
 });
 
 const ADMIN_TOKEN_STORAGE_KEY = "greenpay_admin_token";
+const ADMIN_REFRESH_TOKEN_STORAGE_KEY = "greenpay_admin_refresh_token";
 
 let adminToken: string | null =
   typeof window !== "undefined" ? window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) : null;
+let adminRefreshToken: string | null =
+  typeof window !== "undefined" ? window.sessionStorage.getItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY) : null;
 
-export function setAdminToken(token: string | null) {
+export function setAdminToken(token: string | null, refreshToken: string | null = null) {
   adminToken = token;
+  adminRefreshToken = refreshToken;
   if (typeof window === "undefined") return;
   if (token) {
     window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+    if (refreshToken) {
+      window.sessionStorage.setItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY, refreshToken);
+    }
   } else {
     window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    window.sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY);
   }
+}
+
+export function logoutAdmin() {
+  setAdminToken(null);
+  // Clear any redirect/refresh state if needed. In-flight promise handles itself.
 }
 
 export function isAdminAuthenticated(): boolean {
@@ -83,19 +96,58 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+let refreshPromise: Promise<string | null> | null = null;
+
+async function refreshAdminSession(): Promise<string | null> {
+  if (!adminRefreshToken) return null;
+  try {
+    const { data } = await api.post<{
+      success: boolean;
+      data: { token: string; refreshToken: string; expiresIn: number };
+    }>("/api/admin/refresh", { refreshToken: adminRefreshToken });
+    
+    setAdminToken(data.data.token, data.data.refreshToken);
+    return data.data.token;
+  } catch (err) {
+    logoutAdmin();
+    return null;
+  }
+}
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 403 && !error.config.__csrfRetry) {
-      error.config.__csrfRetry = true;
+    const originalRequest = error.config;
+    
+    if (error.response?.status === 403 && !originalRequest.__csrfRetry) {
+      originalRequest.__csrfRetry = true;
       csrfToken = null;
       await refreshCsrfToken();
       if (csrfToken) {
-        error.config.headers = {
-          ...error.config.headers,
+        originalRequest.headers = {
+          ...originalRequest.headers,
           "X-CSRF-Token": csrfToken,
         };
-        return api.request(error.config);
+        return api.request(originalRequest);
+      }
+    }
+
+    if (error.response?.status === 401 && adminRefreshToken && !originalRequest.__authRetry) {
+      originalRequest.__authRetry = true;
+      
+      if (!refreshPromise) {
+        refreshPromise = refreshAdminSession().finally(() => {
+          refreshPromise = null;
+        });
+      }
+      
+      const newToken = await refreshPromise;
+      if (newToken) {
+        originalRequest.headers = {
+          ...originalRequest.headers,
+          Authorization: `Bearer ${newToken}`,
+        };
+        return api.request(originalRequest);
       }
     }
 
@@ -375,7 +427,7 @@ export async function adminLogin(username: string, password: string) {
     success: boolean;
     data: { token: string; refreshToken: string; expiresIn: number };
   }>("/api/admin/login", { username, password });
-  setAdminToken(data.data.token);
+  setAdminToken(data.data.token, data.data.refreshToken);
   return data.data;
 }
 
@@ -428,19 +480,17 @@ export interface AISummaryJobFailure {
   resolvedAt: string | null;
 }
 
-export async function fetchAISummaryFailures(token: string) {
+export async function fetchAISummaryFailures() {
   const { data } = await api.get<{ success: boolean; data: AISummaryJobFailure[] }>(
     "/api/admin/ai-summary-failures",
-    { headers: { Authorization: `Bearer ${token}` } },
   );
   return data.data;
 }
 
-export async function retryAISummaryFailure(token: string, failureId: string) {
+export async function retryAISummaryFailure(failureId: string) {
   const { data } = await api.post<{ success: boolean; data: { status: string } }>(
     `/api/admin/ai-summary-failures/${failureId}/retry`,
     {},
-    { headers: { Authorization: `Bearer ${token}` } },
   );
   return data.data;
 }
