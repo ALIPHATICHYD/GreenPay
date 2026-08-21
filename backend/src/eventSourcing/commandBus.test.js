@@ -1,19 +1,17 @@
 "use strict";
 
-const DONOR = "G" + "A".repeat(55);
-const TX = "a".repeat(64);
-
 jest.mock("../db/pool", () => ({
   query: jest.fn(),
 }));
 
-jest.mock("./eventStore", () => ({
-  eventStore: { append: jest.fn().mockResolvedValue({ eventId: "evt-1", version: 1, inserted: true }) },
-}));
-
 const pool = require("../db/pool");
-const { eventStore } = require("./eventStore");
-const commandBus = require("./commandBus");
+const {
+  execute,
+  storeProjectAggregate,
+  storeDonorAggregate,
+  loadAggregateStream,
+  fromRow,
+} = require("./commandBus");
 const {
   RecordDonationCommand,
   ApplyMatchCommand,
@@ -22,155 +20,532 @@ const {
   ReleaseEscrowCommand,
   CreateMatchOfferCommand,
 } = require("./commands");
+const { ProjectAggregate } = require("./aggregates");
 
-function fakeQuery(sql) {
-  if (sql.includes("DonationRecorded")) return Promise.resolve({ rows: [] });
-  if (sql.includes("MatchApplied")) return Promise.resolve({ rows: [] });
-  if (sql.includes("event_stream")) return Promise.resolve({ rows: [{ max_version: null }] });
-  if (sql.includes("donor_stats")) return Promise.resolve({ rows: [] });
-  if (sql.includes("match_state")) return Promise.resolve({ rows: [{ cap_xlm: "1000", matched_xlm: "0" }] });
-  if (sql.includes("FROM jobs")) {
-    return Promise.resolve({
-      rows: [{ id: "job-1", client_public_key: DONOR, freelancer_public_key: DONOR, amount_escrow_xlm: "5" }],
-    });
-  }
-  if (sql.includes("SELECT id FROM projects")) return Promise.resolve({ rows: [{ id: "proj-1" }] });
-  if (sql.includes("FROM projects")) {
-    return Promise.resolve({ rows: [{ id: "proj-1", status: "active", raised_xlm: "0", donor_count: 0, goal_xlm: "0" }] });
-  }
-  if (sql.includes("INSERT INTO profiles")) return Promise.resolve({ rows: [] });
-  if (sql.includes("UPDATE projects")) return Promise.resolve({ rows: [] });
-  return Promise.resolve({ rows: [] });
+function makePublicKey(char = "A") {
+  return `G${char.repeat(55)}`;
 }
 
-beforeEach(() => {
-  pool.query.mockImplementation(fakeQuery);
-  eventStore.append.mockClear();
-  eventStore.append.mockResolvedValue({ eventId: "evt-1", version: 1, inserted: true });
-});
+function makeTxHash(char = "a") {
+  return char.repeat(64);
+}
 
-const commands = [
-  {
-    name: "RecordDonation",
-    build: () =>
-      new RecordDonationCommand({
-        actor: "tester",
-        projectId: "proj-1",
-        donorAddress: DONOR,
-        amountXlm: 10,
-        transactionHash: TX,
-      }),
-  },
-  {
-    name: "ApplyMatch",
-    build: () =>
-      new ApplyMatchCommand({
-        actor: "tester",
-        matchId: "m-1",
-        projectId: "proj-1",
-        donorAddress: DONOR,
-        matchAmount: 5,
-        originalTxHash: TX,
-        multiplier: 1,
-      }),
-  },
-  {
-    name: "ChangeProjectStatus",
-    build: () =>
-      new ChangeProjectStatusCommand({
-        actor: "tester",
-        projectId: "proj-1",
-        status: "completed",
-        reason: "done",
-      }),
-  },
-  {
-    name: "ReachMilestone",
-    build: () =>
-      new ReachMilestoneCommand({
-        actor: "tester",
-        milestoneId: "ms-1",
-        projectId: "proj-1",
-        transactionHash: TX,
-      }),
-  },
-  {
-    name: "ReleaseEscrow",
-    build: () =>
-      new ReleaseEscrowCommand({
-        actor: "tester",
-        jobId: "job-1",
-        releaseTransactionHash: TX,
-      }),
-  },
-  {
-    name: "CreateMatchOffer",
-    build: () =>
-      new CreateMatchOfferCommand({
-        actor: "tester",
-        projectId: "proj-1",
-        matcherAddress: DONOR,
-        capXlm: 100,
-        multiplier: 2,
-        expiresAt: new Date(Date.now() + 86400000).toISOString(),
-      }),
-  },
-];
+function queryResult(rows = []) {
+  return { rows };
+}
 
-describe("command handlers route through eventStore.append()", () => {
-  test.each(commands)("$name handler calls eventStore.append once and emits no raw INSERT", async ({ build }) => {
-    const result = await commandBus.execute(build());
-
-    expect(eventStore.append).toHaveBeenCalledTimes(1);
-    expect(result.events).toBeDefined();
-    expect(result.events.length).toBeGreaterThanOrEqual(1);
-
-    const rawInsertCalls = pool.query.mock.calls.filter(
-      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO event_stream")
-    );
-    expect(rawInsertCalls).toHaveLength(0);
+describe("commandBus.js - Event Sourcing Core Engine (Issue #129)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
-});
 
-describe("DonationCommandHandler dedup-by-transactionHash still works", () => {
-  test("a duplicate transactionHash is returned as deduplicated and does not append", async () => {
-    pool.query.mockImplementation((sql) => {
-      if (sql.includes("DonationRecorded")) {
-        return Promise.resolve({ rows: [{ event_id: "existing-1" }] });
-      }
-      if (sql.includes("SELECT * FROM event_stream WHERE event_id")) {
-        return Promise.resolve({
-          rows: [
+  describe("execute() command routing", () => {
+    test("throws error when command handler is not registered", async () => {
+      const fakeCommand = { commandType: "NonExistentCommand" };
+      await expect(execute(fakeCommand)).rejects.toThrow(
+        "No handler registered for command: NonExistentCommand"
+      );
+    });
+  });
+
+  describe("RecordDonationCommand / DonationCommandHandler", () => {
+    test("throws validation error when payload is invalid", async () => {
+      const cmd = new RecordDonationCommand({
+        actor: "actor-1",
+        projectId: "",
+        donorAddress: "invalid-key",
+        amountXlm: "-5",
+        transactionHash: "short",
+      });
+      await expect(execute(cmd)).rejects.toThrow("projectId is required");
+    });
+
+    test("deduplicates donation when transaction hash already exists in event_stream", async () => {
+      const donorAddress = makePublicKey("A");
+      const transactionHash = makeTxHash("a");
+
+      pool.query
+        // 1. existingCheck
+        .mockResolvedValueOnce(queryResult([{ event_id: "existing-event-id" }]))
+        // 2. SELECT * FROM event_stream
+        .mockResolvedValueOnce(
+          queryResult([
             {
-              event_id: "existing-1",
-              stream_id: "Donation:tx",
+              event_id: "existing-event-id",
+              stream_id: `Donation:${transactionHash}`,
               aggregate_type: "Donation",
-              aggregate_id: "Donation:tx",
+              aggregate_id: `Donation:${transactionHash}`,
               event_type: "DonationRecorded",
               version: 1,
               aggregate_version: 1,
-              payload: { data: { amountXlm: 10 } },
-              actor: "tester",
+              payload: {
+                data: {
+                  donorAddress,
+                  amountXlm: 25,
+                  transactionHash,
+                },
+              },
+              actor: donorAddress,
               occurred_at: new Date().toISOString(),
               created_at: new Date().toISOString(),
             },
-          ],
-        });
-      }
-      return fakeQuery(sql);
+          ])
+        );
+
+      const cmd = new RecordDonationCommand({
+        actor: donorAddress,
+        projectId: "proj-1",
+        donorAddress,
+        amountXlm: "25",
+        transactionHash,
+      });
+
+      const res = await execute(cmd);
+      expect(res.deduplicated).toBe(true);
+      expect(res.data.eventId).toBe("existing-event-id");
     });
 
-    const result = await commandBus.execute(
-      new RecordDonationCommand({
-        actor: "tester",
-        projectId: "proj-1",
-        donorAddress: DONOR,
-        amountXlm: 10,
-        transactionHash: TX,
-      })
-    );
+    test("throws error when target project does not exist", async () => {
+      const donorAddress = makePublicKey("B");
+      const transactionHash = makeTxHash("b");
 
-    expect(result.deduplicated).toBe(true);
-    expect(eventStore.append).not.toHaveBeenCalled();
+      pool.query
+        // 1. existingCheck
+        .mockResolvedValueOnce(queryResult([]))
+        // 2. project check
+        .mockResolvedValueOnce(queryResult([]));
+
+      const cmd = new RecordDonationCommand({
+        actor: donorAddress,
+        projectId: "missing-project",
+        donorAddress,
+        amountXlm: "50",
+        transactionHash,
+      });
+
+      await expect(execute(cmd)).rejects.toThrow("Project not found");
+    });
+
+    test("successfully processes and records valid donation", async () => {
+      const donorAddress = makePublicKey("C");
+      const transactionHash = makeTxHash("c");
+
+      pool.query
+        // 1. existingCheck
+        .mockResolvedValueOnce(queryResult([]))
+        // 2. project check (SELECT id FROM projects)
+        .mockResolvedValueOnce(queryResult([{ id: "proj-100" }]))
+        // 3. getProjectState (SELECT * FROM projects)
+        .mockResolvedValueOnce(
+          queryResult([{ id: "proj-100", raised_xlm: "100.0", donor_count: 5, status: "active" }])
+        )
+        // 4. getDonorState (SELECT * FROM donor_stats)
+        .mockResolvedValueOnce(queryResult([]))
+        // 5. getNextVersion (SELECT MAX(version))
+        .mockResolvedValueOnce(queryResult([{ max_version: 2 }]))
+        // 6. storeProjectAggregate (UPDATE projects)
+        .mockResolvedValueOnce(queryResult([]))
+        // 7. storeDonorAggregate (INSERT INTO profiles)
+        .mockResolvedValueOnce(queryResult([]))
+        // 8. INSERT INTO event_stream
+        .mockResolvedValueOnce(queryResult([]));
+
+      const cmd = new RecordDonationCommand({
+        actor: donorAddress,
+        projectId: "proj-100",
+        donorAddress,
+        amountXlm: "15.5",
+        transactionHash,
+      });
+
+      const result = await execute(cmd);
+
+      expect(result.deduplicated).toBe(false);
+      expect(result.events.length).toBe(1);
+      expect(result.events[0].eventType).toBe("DonationRecorded");
+      expect(result.data.amountXlm).toBe(15.5);
+
+      // Verify INSERT INTO event_stream was called with correct parameters
+      const insertCall = pool.query.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("INSERT INTO event_stream")
+      );
+      expect(insertCall).toBeDefined();
+      expect(insertCall[1][4]).toBe("DonationRecorded"); // event_type
+      expect(insertCall[1][5]).toBe(3); // version (max_version 2 + 1)
+    });
+  });
+
+  describe("ApplyMatchCommand / ApplyMatchCommandHandler", () => {
+    test("throws validation error when matchAmount is non-positive", async () => {
+      const cmd = new ApplyMatchCommand({
+        actor: "actor-2",
+        matchId: "match-1",
+        projectId: "proj-1",
+        donorAddress: makePublicKey("D"),
+        matchAmount: "0",
+      });
+      await expect(execute(cmd)).rejects.toThrow("matchAmount must be a positive number");
+    });
+
+    test("returns deduplicated result if match was already applied for originalTxHash", async () => {
+      const donorAddress = makePublicKey("E");
+      const originalTxHash = makeTxHash("e");
+
+      pool.query.mockResolvedValueOnce(queryResult([{ event_id: "match-event-1" }]));
+
+      const cmd = new ApplyMatchCommand({
+        actor: donorAddress,
+        matchId: "match-offer-1",
+        projectId: "proj-1",
+        donorAddress,
+        matchAmount: "10",
+        originalTxHash,
+        multiplier: 1,
+      });
+
+      const res = await execute(cmd);
+      expect(res.deduplicated).toBe(true);
+      expect(res.data).toBeNull();
+    });
+
+    test("successfully applies match to donor stats and appends MatchApplied event", async () => {
+      const donorAddress = makePublicKey("F");
+      const originalTxHash = makeTxHash("f");
+
+      pool.query
+        // 1. existingMatchTx check
+        .mockResolvedValueOnce(queryResult([]))
+        // 2. getMatchState
+        .mockResolvedValueOnce(
+          queryResult([{ match_id: "match-10", cap_xlm: "100", matched_xlm: "20" }])
+        )
+        // 3. getDonorState
+        .mockResolvedValueOnce(queryResult([]))
+        // 4. getNextVersion
+        .mockResolvedValueOnce(queryResult([{ max_version: 0 }]))
+        // 5. storeDonorAggregate (profiles insert)
+        .mockResolvedValueOnce(queryResult([]))
+        // 6. INSERT INTO event_stream
+        .mockResolvedValueOnce(queryResult([]));
+
+      const cmd = new ApplyMatchCommand({
+        actor: donorAddress,
+        matchId: "match-10",
+        projectId: "proj-1",
+        donorAddress,
+        matchAmount: "15",
+        originalTxHash,
+        multiplier: 2,
+      });
+
+      const res = await execute(cmd);
+      expect(res.deduplicated).toBe(false);
+      expect(res.data).toEqual({ matchId: "match-10", matchAmount: "15" });
+      expect(res.events[0].eventType).toBe("MatchApplied");
+    });
+  });
+
+  describe("ChangeProjectStatusCommand / ChangeProjectStatusCommandHandler", () => {
+    test("throws validation error for invalid status value", async () => {
+      const cmd = new ChangeProjectStatusCommand({
+        actor: "admin",
+        projectId: "proj-1",
+        status: "invalid_status",
+      });
+      await expect(execute(cmd)).rejects.toThrow(
+        "status must be one of: active, completed, paused, rejected"
+      );
+    });
+
+    test("throws error if project is not found", async () => {
+      pool.query.mockResolvedValueOnce(queryResult([]));
+
+      const cmd = new ChangeProjectStatusCommand({
+        actor: "admin",
+        projectId: "missing-proj",
+        status: "paused",
+      });
+      await expect(execute(cmd)).rejects.toThrow("Project not found");
+    });
+
+    test("returns noop when target status is identical to current status", async () => {
+      pool.query.mockResolvedValueOnce(
+        queryResult([{ id: "proj-1", status: "active", raised_xlm: "50", donor_count: 2 }])
+      );
+
+      const cmd = new ChangeProjectStatusCommand({
+        actor: "admin",
+        projectId: "proj-1",
+        status: "active",
+      });
+
+      const res = await execute(cmd);
+      expect(res.noop).toBe(true);
+      expect(res.events).toEqual([]);
+    });
+
+    test("successfully changes project status and persists ProjectStatusChanged event", async () => {
+      pool.query
+        // 1. SELECT * FROM projects
+        .mockResolvedValueOnce(
+          queryResult([{ id: "proj-1", status: "active", raised_xlm: "50", donor_count: 2 }])
+        )
+        // 2. getNextVersion
+        .mockResolvedValueOnce(queryResult([{ max_version: 4 }]))
+        // 3. storeProjectAggregate (UPDATE projects)
+        .mockResolvedValueOnce(queryResult([]))
+        // 4. INSERT INTO event_stream
+        .mockResolvedValueOnce(queryResult([]));
+
+      const cmd = new ChangeProjectStatusCommand({
+        actor: "admin",
+        projectId: "proj-1",
+        status: "paused",
+        reason: "Owner requested pause",
+      });
+
+      const res = await execute(cmd);
+      expect(res.events.length).toBe(1);
+      expect(res.events[0].eventType).toBe("ProjectStatusChanged");
+      expect(res.data).toEqual({ previousStatus: "paused", newStatus: "paused" });
+    });
+  });
+
+  describe("ReachMilestoneCommand / ReachMilestoneCommandHandler", () => {
+    test("throws validation error when milestoneId is missing", async () => {
+      const cmd = new ReachMilestoneCommand({
+        actor: "system",
+        milestoneId: "",
+        projectId: "proj-1",
+      });
+      await expect(execute(cmd)).rejects.toThrow("milestoneId is required");
+    });
+
+    test("successfully records MilestoneReached event", async () => {
+      const txHash = makeTxHash("f");
+
+      pool.query
+        // 1. getNextVersion
+        .mockResolvedValueOnce(queryResult([{ max_version: 1 }]))
+        // 2. INSERT INTO event_stream
+        .mockResolvedValueOnce(queryResult([]));
+
+      const cmd = new ReachMilestoneCommand({
+        actor: "system",
+        milestoneId: "m-100",
+        projectId: "proj-1",
+        transactionHash: txHash,
+      });
+
+      const res = await execute(cmd);
+      expect(res.data.milestoneId).toBe("m-100");
+      expect(res.events[0].eventType).toBe("MilestoneReached");
+    });
+  });
+
+  describe("ReleaseEscrowCommand / ReleaseEscrowCommandHandler", () => {
+    test("throws validation error when releaseTransactionHash is not 64-char hex", async () => {
+      const cmd = new ReleaseEscrowCommand({
+        actor: "freelancer",
+        jobId: "job-1",
+        releaseTransactionHash: "invalid-hash",
+      });
+      await expect(execute(cmd)).rejects.toThrow("releaseTransactionHash must be a 64-char hex string");
+    });
+
+    test("throws error when job is not found", async () => {
+      const releaseTxHash = makeTxHash("e");
+      pool.query.mockResolvedValueOnce(queryResult([])); // getJobState SELECT * FROM jobs
+
+      const cmd = new ReleaseEscrowCommand({
+        actor: "freelancer",
+        jobId: "missing-job",
+        releaseTransactionHash: releaseTxHash,
+      });
+      await expect(execute(cmd)).rejects.toThrow("Job not found");
+    });
+
+    test("successfully processes job escrow release", async () => {
+      const clientKey = makePublicKey("C");
+      const freelancerKey = makePublicKey("F");
+      const releaseTxHash = makeTxHash("e");
+
+      pool.query
+        // 1. getJobState (SELECT * FROM jobs WHERE id = $1)
+        .mockResolvedValueOnce(
+          queryResult([
+            {
+              id: "job-50",
+              client_public_key: clientKey,
+              freelancer_public_key: freelancerKey,
+              amount_escrow_xlm: "150.0",
+              status: "funded",
+            },
+          ])
+        )
+        // 2. SELECT * FROM jobs WHERE id = $1
+        .mockResolvedValueOnce(
+          queryResult([
+            {
+              id: "job-50",
+              client_public_key: clientKey,
+              freelancer_public_key: freelancerKey,
+              amount_escrow_xlm: "150.0",
+              status: "funded",
+            },
+          ])
+        )
+        // 3. getNextVersion
+        .mockResolvedValueOnce(queryResult([{ max_version: 0 }]))
+        // 4. INSERT INTO event_stream
+        .mockResolvedValueOnce(queryResult([]));
+
+      const cmd = new ReleaseEscrowCommand({
+        actor: freelancerKey,
+        jobId: "job-50",
+        releaseTransactionHash: releaseTxHash,
+      });
+
+      const res = await execute(cmd);
+      expect(res.data.jobId).toBe("job-50");
+      expect(res.events[0].eventType).toBe("JobReleased");
+    });
+  });
+
+  describe("CreateMatchOfferCommand / CreateMatchOfferCommandHandler", () => {
+    test("throws validation error when expiresAt is in the past", async () => {
+      const cmd = new CreateMatchOfferCommand({
+        actor: makePublicKey("M"),
+        projectId: "proj-1",
+        matcherAddress: makePublicKey("M"),
+        capXlm: "500",
+        multiplier: 2,
+        expiresAt: new Date(Date.now() - 10000).toISOString(),
+      });
+      await expect(execute(cmd)).rejects.toThrow("expiresAt must be in the future");
+    });
+
+    test("successfully creates match offer event", async () => {
+      const matcherAddress = makePublicKey("M");
+      const futureDate = new Date(Date.now() + 86400000).toISOString();
+
+      pool.query
+        // 1. getNextVersion
+        .mockResolvedValueOnce(queryResult([{ max_version: 0 }]))
+        // 2. INSERT INTO event_stream
+        .mockResolvedValueOnce(queryResult([]));
+
+      const cmd = new CreateMatchOfferCommand({
+        actor: matcherAddress,
+        projectId: "proj-1",
+        matcherAddress,
+        capXlm: "1000",
+        multiplier: 2,
+        expiresAt: futureDate,
+      });
+
+      const res = await execute(cmd);
+      expect(res.data.matchId).toBeDefined();
+      expect(res.events[0].eventType).toBe("MatchCreated");
+    });
+  });
+
+  describe("Aggregate Persistence & Helper Utilities", () => {
+    test("storeProjectAggregate omits raised_xlm update when includeRaisedTotal is false", async () => {
+      pool.query.mockResolvedValueOnce(queryResult([]));
+
+      const aggregate = ProjectAggregate.fromState({
+        id: "p1",
+        status: "active",
+        donor_count: 10,
+        raised_xlm: "250.0",
+      });
+
+      await storeProjectAggregate(pool, "p1", aggregate, { includeRaisedTotal: false });
+
+      const queryCall = pool.query.mock.calls[0];
+      expect(queryCall[0]).toContain("UPDATE projects");
+      expect(queryCall[0]).not.toContain("raised_xlm");
+      expect(queryCall[1]).toEqual([10, "active", "p1"]);
+    });
+
+    test("storeDonorAggregate performs idempotent ON CONFLICT profile insert", async () => {
+      pool.query.mockResolvedValueOnce(queryResult([]));
+      const donorKey = makePublicKey("Z");
+
+      await storeDonorAggregate(pool, donorKey);
+
+      const queryCall = pool.query.mock.calls[0];
+      expect(queryCall[0]).toContain("INSERT INTO profiles");
+      expect(queryCall[0]).toContain("ON CONFLICT (public_key) DO NOTHING");
+      expect(queryCall[1]).toEqual([donorKey]);
+    });
+
+    test("loadAggregateStream loads and parses payload into Event domain models", async () => {
+      const streamId = "Donation:test-tx";
+      pool.query.mockResolvedValueOnce(
+        queryResult([
+          {
+            event_id: "e1",
+            stream_id: streamId,
+            aggregate_type: "Donation",
+            aggregate_id: "test-tx",
+            event_type: "DonationRecorded",
+            version: 1,
+            aggregate_version: 1,
+            payload: {
+              eventType: "DonationRecorded",
+              aggregateId: streamId,
+              version: 1,
+              actor: makePublicKey("A"),
+              data: {
+                projectId: "proj-1",
+                donorAddress: makePublicKey("A"),
+                amountXlm: 10,
+                transactionHash: makeTxHash("a"),
+              },
+            },
+            actor: "actor-1",
+            occurred_at: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+          },
+        ])
+      );
+
+      const events = await loadAggregateStream("Donation", "test-tx");
+      expect(events.length).toBe(1);
+      expect(events[0].eventType).toBe("DonationRecorded");
+    });
+
+    test("fromRow formats raw db row into standardized object", () => {
+      const row = {
+        event_id: "ev-1",
+        stream_id: "st-1",
+        aggregate_type: "Match",
+        aggregate_id: "m-1",
+        event_type: "MatchApplied",
+        version: 1,
+        aggregate_version: 1,
+        payload: { test: true },
+        actor: "act-1",
+        occurred_at: "2026-01-01",
+        created_at: "2026-01-01",
+      };
+
+      const result = fromRow(row);
+      expect(result).toEqual({
+        eventId: "ev-1",
+        streamId: "st-1",
+        aggregateType: "Match",
+        aggregateId: "m-1",
+        eventType: "MatchApplied",
+        version: 1,
+        aggregateVersion: 1,
+        payload: { test: true },
+        actor: "act-1",
+        occurredAt: "2026-01-01",
+        createdAt: "2026-01-01",
+      });
+    });
   });
 });

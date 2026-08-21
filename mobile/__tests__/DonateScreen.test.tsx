@@ -9,13 +9,17 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import axios from 'axios';
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Account, Keypair, Server } from '@stellar/stellar-sdk';
+import { Account, Keypair, Horizon } from '@stellar/stellar-sdk';
+const Server = (require('@stellar/stellar-sdk') as any).Server;
 import { ThemeProvider } from '../app/theme';
 import { DONATION_QUEUE_KEY, enqueueDonation, listQueuedDonations } from '../utils/donationQueue';
 
 jest.mock('@stellar/stellar-sdk', () => {
   const actual = jest.requireActual('@stellar/stellar-sdk');
-  return { ...actual, Server: jest.fn() };
+  return {
+    ...actual,
+    Server: jest.fn(),
+  };
 });
 
 let mockSearchParams: { id?: string; queueId?: string } = { id: 'proj-1' };

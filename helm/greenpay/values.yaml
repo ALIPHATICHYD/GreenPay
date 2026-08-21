@@ -29,6 +29,38 @@ backend:
   # Must stay above the app's SHUTDOWN_TIMEOUT_MS (25s, see backend/src/server.js)
   # so a graceful shutdown can finish before the kubelet sends SIGKILL.
   terminationGracePeriodSeconds: 30
+  # PodDisruptionBudget — keeps at least one backend pod available during
+  # voluntary disruptions (node drain, cluster-autoscaler scale-down).
+  # maxUnavailable: 1 means at most 1 of the 2 replicas may be evicted at once.
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  # HPA targets the Argo Rollout (not a Deployment). minReplicas matches the
+  # HA floor so topologySpreadConstraints (maxSkew: 1) still have two pods to
+  # place. CPU uses metrics-server; latency/queue-depth need prometheus-adapter.
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    cpuUtilization: 60
+    latency:
+      enabled: true
+      metric: greenpay_backend_request_latency_p95_ms
+      targetValue: "400"
+    queueDepth:
+      enabled: true
+      metric: greenpay_backend_queue_depth
+      targetValue: "25"
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 0
+        pods: 4
+        percent: 100
+        periodSeconds: 15
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        percent: 25
+        periodSeconds: 60
   canary:
     steps:
       initialWeight: 10
@@ -48,6 +80,31 @@ frontend:
   image: greenpay/frontend:latest
   replicas: 2
   port: 3000
+  # PodDisruptionBudget — keeps at least one frontend pod available during
+  # voluntary disruptions. maxUnavailable: 1 at 2 replicas = 1 always up.
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  # HPA targets the frontend Rollout. CPU + per-pod RPS (prometheus-adapter).
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    cpuUtilization: 70
+    rps:
+      enabled: true
+      metric: http_requests_per_second
+      targetAverageValue: "40"
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 0
+        pods: 4
+        percent: 100
+        periodSeconds: 15
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        percent: 25
+        periodSeconds: 60
   canary:
     steps:
       initialWeight: 10
@@ -61,6 +118,23 @@ frontend:
       interval: 1m
       count: 5
       failureLimit: 3
+
+# summary-worker PDB values (Deployment managed via ml-workloads/summary-worker.yaml)
+summaryWorker:
+  # PodDisruptionBudget — 2 replicas; maxUnavailable: 1 keeps one worker
+  # processing the pg-boss queue during voluntary node disruptions.
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+
+# ml-inference PDB values (Deployment managed via ml-workloads/ml-inference.yaml)
+mlInference:
+  # PodDisruptionBudget — HPA minReplicas is 1, so we MUST use maxUnavailable
+  # rather than minAvailable: 1. A minAvailable: 1 PDB would permanently block
+  # eviction once the HPA scales to its minimum, hanging node drains forever.
+  pdb:
+    enabled: true
+    maxUnavailable: 1
 
 monitoring:
   namespace: monitoring
@@ -101,6 +175,26 @@ secrets:
 ingress:
   host: greenpay.local
   className: nginx
+  # TLS is off in the testnet defaults (HTTP on greenpay.local). The mainnet
+  # overlay turns it on. ingress.tls.enabled is the enableTLS switch;
+  # ingress.tls.secretName is the tlsSecretName the Ingress spec.tls block
+  # and cert-manager both write into.
   tls:
     enabled: false
     secretName: greenpay-tls
+    # Empty here so testnet renders no cert-manager annotation. Mainnet sets
+    # this to the ClusterIssuer the chart (or the operator) creates.
+    clusterIssuer: ""
+
+# cert-manager ClusterIssuer the production overlay enables. The chart does
+# not install cert-manager itself — that is a cluster prerequisite (see
+# docs/deployment-mainnet.md). Disabled on testnet so `helm template` of the
+# defaults never emits a cluster-scoped ACME issuer.
+certManager:
+  enabled: false
+  clusterIssuerName: letsencrypt-prod
+  acme:
+    # REQUIRED at deploy time on mainnet: --set certManager.acme.email=ops@...
+    email: ""
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretName: letsencrypt-prod-account-key

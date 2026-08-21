@@ -7,11 +7,14 @@ const express = require("express");
 const router = express.Router();
 const { v4: uuid } = require("uuid");
 const pool = require("../db/pool");
+const { adminRequired } = require("../middleware/auth");
 const { logAdminAction } = require("../services/audit");
 const { mapProjectRow, mapProjectMilestoneRow } = require("../services/store");
 const { getOnChainProject, CONTRACT_ID, server, NETWORK_PASSPHRASE } = require("../services/stellar");
 const { enqueueAISummary } = require("../services/summaryQueue");
 const { Contract, TransactionBuilder } = require("@stellar/stellar-sdk");
+const { validate } = require("../middleware/validate");
+const { ProjectStatusUpdateSchema } = require("../schemas/projects");
 
 const VALID_STATUSES = ["active", "completed", "paused"];
 const VALID_CATEGORIES = [
@@ -86,7 +89,7 @@ router.get("/featured", async (req, res, next) => {
   try {
     const now = Date.now();
     if (featuredCache && now < featuredCacheExpiry) {
-      return res.json({ success: true, data: featuredCache });
+      return res.json({ success: true, data: { ...featuredCache, serverNow: Date.now() } });
     }
 
     const result = await pool.query(
@@ -102,7 +105,7 @@ router.get("/featured", async (req, res, next) => {
 
     featuredCache = mapProjectRow(result.rows[0]);
     featuredCacheExpiry = now + 24 * 60 * 60 * 1000; // 24 hours
-    res.json({ success: true, data: featuredCache });
+    res.json({ success: true, data: { ...featuredCache, serverNow: Date.now() } });
   } catch (e) {
     next(e);
   }
@@ -146,7 +149,7 @@ router.get("/", async (req, res, next) => {
 
     const result = await pool.query(query, values);
 
-    res.json({ success: true, data: result.rows.map(mapProjectRow) });
+    res.json({ success: true, data: result.rows.map(row => ({ ...mapProjectRow(row), serverNow: Date.now() })) });
   } catch (e) {
     next(e);
   }
@@ -443,6 +446,7 @@ router.get("/:id", async (req, res, next) => {
       success: true,
       data: {
         ...mapProjectRow(projectResult.rows[0]),
+        serverNow: Date.now(),
         onChainVerified: Boolean(onChainProject) || Boolean(projectResult.rows[0].on_chain_verified),
         contractRegisteredAt: onChainProject ? Number(onChainProject.registered_at) : null,
         totalRaisedOnChain: onChainProject ? stroopsToXlm(onChainProject.total_raised) : "0.0000000",
@@ -602,44 +606,51 @@ router.get("/:id/matching", async (req, res, next) => {
 /**
  * PATCH /api/projects/:id/status
  * Approve or reject a project. Body: { status: "active" | "rejected", reason?: string }
- * `adminAddress` must match the project wallet (owner) or be a platform admin.
+ * Requires a verified platform-admin JWT (adminRequired) — no client-supplied
+ * identity claim is accepted as proof for this action.
  */
-router.patch("/:id/status", async (req, res, next) => {
-  try {
-    const { status, reason, adminAddress } = req.body || {};
-    const validStatuses = ["active", "rejected", "paused"];
-    if (!status || !validStatuses.includes(status)) {
-      return res.status(400).json({ error: `status must be one of: ${validStatuses.join(", ")}` });
-    }
+router.patch(
+  "/:id/status",
+  // adminRequired runs before validate so an unauthenticated caller is turned
+  // away with a 401 rather than being told, via a 400, whether their body was
+  // well-formed.
+  adminRequired,
+  validate(ProjectStatusUpdateSchema),
+  async (req, res, next) => {
+    try {
+      const { status, reason } = req.body;
 
-    const projectResult = await pool.query("SELECT * FROM projects WHERE id = $1", [req.params.id]);
-    if (!projectResult.rows[0]) {
-      return res.status(404).json({ error: "Project not found" });
-    }
+      const projectResult = await pool.query("SELECT * FROM projects WHERE id = $1", [req.params.id]);
+      if (!projectResult.rows[0]) {
+        return res.status(404).json({ error: "Project not found" });
+      }
 
-    const result = await pool.query(
-      `UPDATE projects
+      const result = await pool.query(
+        `UPDATE projects
        SET status = $1,
            rejection_reason = $2,
            updated_at = NOW()
        WHERE id = $3
        RETURNING *`,
-      [status, reason || null, req.params.id],
-    );
+        [status, reason || null, req.params.id],
+      );
 
-    logAdminAction({
-      actor: adminAddress || "unknown",
-      action: `project.status.${status}`,
-      targetType: "project",
-      targetId: req.params.id,
-      metadata: { previousStatus: projectResult.rows[0].status, reason },
-      ipAddress: req.ip,
-    });
+      logAdminAction({
+        // The verified JWT subject, never a client-supplied adminAddress: the
+        // request body is attacker-controlled, so trusting it here would let
+        // anyone forge who an audited status change is attributed to.
+        actor: req.admin.sub,
+        action: `project.status.${status}`,
+        targetType: "project",
+        targetId: req.params.id,
+        metadata: { previousStatus: projectResult.rows[0].status, reason },
+        ipAddress: req.ip,
+      });
 
-    res.json({ success: true, data: mapProjectRow(result.rows[0]) });
-  } catch (e) {
-    next(e);
-  }
-});
+      res.json({ success: true, data: mapProjectRow(result.rows[0]) });
+    } catch (e) {
+      next(e);
+    }
+  });
 
 module.exports = router;
