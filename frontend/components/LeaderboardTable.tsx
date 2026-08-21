@@ -12,9 +12,9 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { fetchLeaderboard } from "@/lib/api";
-import { formatXLM, formatUSDEquivalent, shortenAddress, badgeEmoji } from "@/utils/format";
+import { formatXLM, formatUSDEquivalent, shortenAddress, badgeEmoji, timeAgo } from "@/utils/format";
 import { accountUrl } from "@/lib/stellar";
-import { useXlmPrice } from "@/lib/priceContext";
+import { useXlmPriceInfo } from "@/lib/priceContext";
 import { useI18n } from "@/lib/i18n";
 import type { LeaderboardEntry } from "@/utils/types";
 
@@ -64,7 +64,7 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
   const [loadingMore, setLoadingMore] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
-  const xlmUsd = useXlmPrice();
+  const { xlmUsd, lastFetchedAt } = useXlmPriceInfo();
   const { t, localeTag } = useI18n();
 
   const loadPage = useCallback(async (offset: number, append: boolean) => {
@@ -164,8 +164,12 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
               {formatXLM(entry.totalDonatedXLM, 2, localeTag)}
             </p>
             {formatUSDEquivalent(entry.totalDonatedXLM, xlmUsd, localeTag) && (
-              <p className="text-[11px] text-[#547454] font-body">
+              <p 
+                className="text-[11px] text-[#547454] font-body"
+                title={lastFetchedAt ? `Rate updated ${timeAgo(lastFetchedAt.toISOString())}` : undefined}
+              >
                 {formatUSDEquivalent(entry.totalDonatedXLM, xlmUsd, localeTag)}
+                {lastFetchedAt && " ⓘ"}
               </p>
             )}
             <p className="text-xs text-[#547454] font-body">donated</p>
