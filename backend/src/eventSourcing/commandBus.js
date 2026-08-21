@@ -3,6 +3,7 @@
 const { v4: uuid } = require("uuid");
 const pool = require("../db/pool");
 const { ProjectAggregate, DonorAggregate, MatchAggregate, JobAggregate, round7 } = require("./aggregates");
+const { eventStore } = require("./eventStore");
 
 const COMMAND_HANDLERS = new Map();
 
@@ -112,7 +113,7 @@ class DonationCommandHandler {
       ]
     );
 
-    return { events: [donationEvent], data: { donationId: donationRow.event_id, amountXlm: amount }, deduplicated: false };
+    return { events: [donationEvent], data: { donationId: donationEvent.eventId, amountXlm: amount }, deduplicated: false };
   }
 }
 
