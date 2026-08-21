@@ -16,6 +16,7 @@ const { computeBadges, mapDonationRow } = require("../services/store");
 const donationLimiter = createRateLimiter(10, 1, "donation-post");
 const { execute } = require("../eventSourcing/commandBus");
 const { DonationRecordedEvent, MatchAppliedEvent } = require("../eventSourcing/events"); // 10 requests per minute
+const { SOCKET_EVENTS } = require("../schemas/socketEvents");
 
 // POST /api/donations — record a donation after on-chain tx via Event Sourcing CQRS
 async function recordDonation(req, res, next) {
@@ -82,7 +83,7 @@ async function recordDonation(req, res, next) {
 
     const io = req.app?.get("io");
     if (io && !result.deduplicated) {
-      io.emit("donation_event", {
+      io.emit(SOCKET_EVENTS.DONATION_EVENT, {
         projectId,
         donorAddress,
         amountXLM: mainEvent.data.amountXlm,

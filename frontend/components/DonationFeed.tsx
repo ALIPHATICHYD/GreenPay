@@ -26,7 +26,7 @@ export default function DonationFeed({ projectId, walletAddress, refreshKey = 0,
   const seenTxHashesRef = useRef<Set<string>>(new Set());
 
   // Load initial donation data from the backend API
-  useEffect(() => {
+  const loadInitialDonations = useCallback(() => {
     setLoading(true);
     fetchProjectDonations(projectId, 10)
       .then(({ donations: data, nextCursor: cursor }) => {
@@ -39,7 +39,11 @@ export default function DonationFeed({ projectId, walletAddress, refreshKey = 0,
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [projectId, refreshKey]);
+  }, [projectId]);
+
+  useEffect(() => {
+    loadInitialDonations();
+  }, [loadInitialDonations, refreshKey]);
 
   // Handle incoming SSE payment
   const handleNewPayment = useCallback((payment: {
@@ -117,7 +121,7 @@ export default function DonationFeed({ projectId, walletAddress, refreshKey = 0,
     onNewDonation?.(newDonation);
   }, [projectId, onNewDonation]);
 
-  useDonationSocket(projectId, handleSocketDonation);
+  useDonationSocket(projectId, handleSocketDonation, { onReconnect: loadInitialDonations });
 
   // Start SSE stream once initial data is loaded
   useEffect(() => {

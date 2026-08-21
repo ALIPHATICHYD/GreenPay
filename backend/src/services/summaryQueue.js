@@ -100,7 +100,8 @@ async function processSummaryJob(io, job) {
   if (!row) return; // project was deleted while job was queued
 
   if (io) {
-    io.emit("ai_summary_ready", {
+    const { SOCKET_EVENTS } = require("../schemas/socketEvents");
+    io.emit(SOCKET_EVENTS.AI_SUMMARY_READY, {
       projectId,
       aiSummary:            row.ai_summary,
       aiSummaryGeneratedAt: new Date(row.ai_summary_generated_at).toISOString(),

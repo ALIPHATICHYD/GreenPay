@@ -222,7 +222,8 @@ async function handleDonation(projectId, op) {
     console.log(`[Indexer] New donation: ${amountXLM} XLM from ${donorAddress} to project ${projectId}`);
 
     if (io) {
-      io.emit("donation_event", {
+      const { SOCKET_EVENTS } = require("../schemas/socketEvents");
+      io.emit(SOCKET_EVENTS.DONATION_EVENT, {
         projectId,
         donorAddress,
         amountXLM,
