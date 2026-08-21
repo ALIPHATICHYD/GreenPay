@@ -369,13 +369,14 @@ export async function fetchGlobalStats(): Promise<GlobalStats> {
   return data.data;
 }
 
-// ── Admin: Project Approval ──────────────────────────────────────
-export async function adminLogin(username: string, password: string): Promise<void> {
-  const { data } = await api.post<{ success: boolean; data: { token: string } }>(
-    "/api/admin/login",
-    { username, password },
-  );
+// ── Admin Login ──────────────────────────────────────────────────
+export async function adminLogin(username: string, password: string) {
+  const { data } = await api.post<{
+    success: boolean;
+    data: { token: string; refreshToken: string; expiresIn: number };
+  }>("/api/admin/login", { username, password });
   setAdminToken(data.data.token);
+  return data.data;
 }
 
 export async function updateProjectStatus(
@@ -416,14 +417,6 @@ export async function confirmProjectRegistration(payload: {
 }
 
 // ── Admin: AI Summary Failures ────────────────────────────────────
-export async function adminLogin(username: string, password: string) {
-  const { data } = await api.post<{
-    success: boolean;
-    data: { token: string; refreshToken: string; expiresIn: number };
-  }>("/api/admin/login", { username, password });
-  return data.data;
-}
-
 export interface AISummaryJobFailure {
   id: string;
   projectId: string;
