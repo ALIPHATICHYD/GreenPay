@@ -8,8 +8,11 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import NetInfo from '@react-native-community/netinfo';
 import { authenticate } from '../../hooks/useBiometricAuth';
-import { Keypair, Server, TransactionBuilder, Networks, Operation, Asset, Memo } from '@stellar/stellar-sdk';
+import { Keypair, Horizon, TransactionBuilder, Networks, Operation, Asset, Memo } from '@stellar/stellar-sdk';
+
+const StellarServer = (require('@stellar/stellar-sdk') as any).Server || Horizon.Server;
 import { useTheme } from '../theme';
+import { parseAmountToStroops, formatStroopsToXLM, STROOPS_PER_XLM } from '../../utils/amount';
 import {
   enqueueDonation,
   getQueuedDonation,
@@ -38,7 +41,7 @@ export default function DonateScreen() {
   const [message, setMessage] = useState('');
   const [queueEntry, setQueueEntry] = useState<QueuedDonation | null>(null);
   const [secretKey, setSecretKey] = useState('');
-  const { publicKey, loading: walletLoading, connect: connectWalletKey } = useWallet();
+  const [publicKey, setPublicKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -136,11 +139,14 @@ export default function DonateScreen() {
       return;
     }
 
-    const donationAmount = parseFloat(amount);
-    if (!amount || Number.isNaN(donationAmount) || donationAmount < 1) {
+    const donationStroops = parseAmountToStroops(amount);
+    const minStroops = STROOPS_PER_XLM;
+    if (donationStroops === null || donationStroops < minStroops) {
       Alert.alert('Error', 'Please enter a valid amount (minimum 1 XLM).');
       return;
     }
+
+    const formattedAmount = formatStroopsToXLM(donationStroops);
 
     if (!publicKey) {
       Alert.alert('Wallet Required', 'Please connect your Stellar wallet first.');
@@ -158,7 +164,7 @@ export default function DonateScreen() {
         projectId: selectedProject.id,
         projectName: selectedProject.name,
         donorAddress: publicKey,
-        amountXLM: donationAmount.toFixed(7),
+        amountXLM: formattedAmount,
         message: message.trim() || undefined,
       });
 
@@ -205,7 +211,7 @@ export default function DonateScreen() {
 
     let transactionHash: string;
     try {
-      const server = new Server(HORIZON_URL);
+      const server = new StellarServer(HORIZON_URL);
       const sourceAccount = await server.loadAccount(publicKey);
 
       const transaction = new TransactionBuilder(sourceAccount, {
@@ -216,7 +222,7 @@ export default function DonateScreen() {
           Operation.payment({
             destination: selectedProject.walletAddress,
             asset: Asset.native(),
-            amount: donationAmount.toFixed(7),
+            amount: formattedAmount,
           })
         )
         .addMemo(Memo.text(`GreenPay:${selectedProject.id.slice(0, 16)}`))
@@ -224,6 +230,7 @@ export default function DonateScreen() {
         .build();
 
       transaction.sign(keypair);
+
       const horizonResult = await server.submitTransaction(transaction);
       transactionHash = horizonResult.hash;
     } catch (error: any) {
@@ -242,8 +249,8 @@ export default function DonateScreen() {
       await axios.post(`${API_URL}/api/donations`, {
         projectId: selectedProject.id,
         donorAddress: publicKey,
-        amountXLM: donationAmount.toFixed(7),
-        amount: donationAmount.toFixed(7),
+        amountXLM: formattedAmount,
+        amount: formattedAmount,
         currency: 'XLM',
         message: message.trim() || undefined,
         transactionHash,
@@ -277,7 +284,7 @@ export default function DonateScreen() {
     }
   };
 
-  const connectWallet = () => {
+  const connectWallet = async () => {
     Alert.alert(
       'Connect Wallet',
       'Enter your Stellar public key:',
@@ -285,16 +292,17 @@ export default function DonateScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'OK',
-          onPress: async (input: any) => {
+          onPress: (input: any) => {
             const trimmed = String(input || '').trim();
-            const ok = await connectWalletKey(trimmed);
-            if (!ok) {
+            if (/^G[A-Z0-9]{55}$/.test(trimmed)) {
+              setPublicKey(trimmed);
+            } else {
               Alert.alert('Invalid Key', 'Please enter a valid Stellar public key');
             }
           },
         },
       ],
-      'plain-text-input'
+      { cancelable: true }
     );
   };
 
@@ -339,9 +347,7 @@ export default function DonateScreen() {
         </ScrollView>
       </View>
 
-      {walletLoading ? (
-        <ActivityIndicator size="small" color={colors.buttonBackground} style={styles.walletLoading} />
-      ) : !publicKey ? (
+      {!publicKey ? (
         <TouchableOpacity style={[styles.connectButton, { backgroundColor: colors.buttonBackground }]}
           onPress={connectWallet}
         >
@@ -400,12 +406,6 @@ export default function DonateScreen() {
         </View>
       ) : null}
 
-      {/*
-        Only disable while actively submitting. Deliberately NOT disabled for
-        a missing wallet: handleDonate() already shows a "Wallet Required"
-        alert in that case, which doubles as the offline-queue entry point —
-        a disabled button would make that guidance unreachable.
-      */}
       <TouchableOpacity
         style={[styles.donateButton, submitting && styles.donateButtonDisabled]}
         onPress={handleDonate}
@@ -486,9 +486,6 @@ const styles = StyleSheet.create({
   connectButtonText: {
     fontSize: 16,
     fontWeight: 'bold',
-  },
-  walletLoading: {
-    marginVertical: 16,
   },
   walletCard: {
     margin: 16,

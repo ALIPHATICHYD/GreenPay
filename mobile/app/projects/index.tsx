@@ -88,10 +88,12 @@ export default function ProjectsScreen() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}> 
-      {isOffline ? (
-        <Text style={[styles.offlineBanner, { color: colors.secondaryText }]}>Offline — showing cached data</Text>
-      ) : null}
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {isOffline && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerText}>Offline — showing cached data</Text>
+        </View>
+      )}
       <TextInput
         style={[styles.searchInput, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder, color: colors.primaryText }]}
         placeholder="Search projects..."
@@ -154,12 +156,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     textAlign: 'center',
     marginTop: 40,
-  },
-  offlineBanner: {
-    textAlign: 'center',
-    marginTop: 12,
-    fontSize: 13,
-    fontWeight: '600',
   },
   card: {
     borderRadius: 12,
