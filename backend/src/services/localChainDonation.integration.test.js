@@ -54,11 +54,18 @@ async function converge(layer, observe, matches, { timeoutMs = 20_000, intervalM
 }
 
 async function fundAccount(publicKey) {
-  const response = await fetch(`${HORIZON_URL}/friendbot?addr=${encodeURIComponent(publicKey)}`);
-  if (!response.ok) {
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await fetch(`${HORIZON_URL}/friendbot?addr=${encodeURIComponent(publicKey)}`);
+    if (response.ok) return;
+
     const body = await response.text();
     if (response.status === 400 && /already (?:funded|exist)/i.test(body)) return;
-    throw new Error(`[local network funding] Friendbot returned ${response.status}: ${body}`);
+    if (response.status < 500 || response.status >= 600 || attempt === maxAttempts - 1) {
+      throw new Error(`[local network funding] Friendbot returned ${response.status}: ${body}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
   }
 }
 
