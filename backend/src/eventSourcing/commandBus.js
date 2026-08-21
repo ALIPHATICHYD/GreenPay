@@ -70,6 +70,8 @@ class DonationCommandHandler {
     if (!projectResult.rows[0]) throw new Error("Project not found");
 
     const amount = command.getAmount();
+    const amountXlm = command.payload.currency === "XLM" ? command.getAmountXlm() : String(amount);
+    const amountStroops = command.payload.currency === "XLM" ? command.getAmountStroops().toString() : null;
     const project = await getProjectState(command.payload.projectId, db);
     const donor = await getDonorState(command.payload.donorAddress, db);
 
@@ -79,7 +81,8 @@ class DonationCommandHandler {
       actor: command.actor,
       projectId: command.payload.projectId,
       donorAddress: command.payload.donorAddress,
-      amountXlm: amount,
+      amountXlm,
+      amountStroops,
       currency: command.payload.currency,
       message: command.payload.message,
       transactionHash: command.getTransactionHash(),
@@ -112,7 +115,7 @@ class DonationCommandHandler {
       ]
     );
 
-    return { events: [donationEvent], data: { donationId: donationRow.event_id, amountXlm: amount }, deduplicated: false };
+    return { events: [donationEvent], data: { donationId: donationRow.event_id, amountXlm }, deduplicated: false };
   }
 }
 

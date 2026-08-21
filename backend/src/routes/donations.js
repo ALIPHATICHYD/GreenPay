@@ -20,6 +20,10 @@ const { logger: rootLogger } = require("../utils/logger");
 
 const logger = rootLogger.child({ service: "donations-route" });
 
+function publicDonationData(data) {
+  return { ...data, amountXlm: Number.parseFloat(data.amountXlm) };
+}
+
 // POST /api/donations — record a donation after on-chain tx via Event Sourcing CQRS
 async function recordDonation(req, res, next) {
   try {
@@ -73,7 +77,11 @@ async function recordDonation(req, res, next) {
         );
         if (existing.rows[0]) {
           logger.info({ msg: "donation deduplicated", transactionHash, donationId: existing.rows[0].event_id });
-          return res.json({ success: true, data: { id: existing.rows[0].event_id, ...existing.rows[0].payload.data }, deduplicated: true });
+          return res.json({
+            success: true,
+            data: { id: existing.rows[0].event_id, ...publicDonationData(existing.rows[0].payload.data) },
+            deduplicated: true,
+          });
         }
       }
       throw err;
@@ -97,7 +105,7 @@ async function recordDonation(req, res, next) {
       io.emit("donation_event", {
         projectId,
         donorAddress,
-        amountXLM: mainEvent.data.amountXlm,
+        amountXLM: Number.parseFloat(mainEvent.data.amountXlm),
         transactionHash,
         timestamp: new Date().toISOString(),
       });
@@ -111,7 +119,10 @@ async function recordDonation(req, res, next) {
       transactionHash,
     });
 
-    res.status(201).json({ success: true, data: { id: mainEvent.eventId, ...mainEvent.data } });
+    res.status(201).json({
+      success: true,
+      data: { id: mainEvent.eventId, ...publicDonationData(mainEvent.data) },
+    });
   } catch (e) {
     logger.error({ msg: "donation failed", error: e.message, status: e.status || 500 });
     next(e);
