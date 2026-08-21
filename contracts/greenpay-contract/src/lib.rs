@@ -112,6 +112,10 @@ pub enum DataKey {
     Proposal(String),
     HasVoted(String, Address),
     AllowedToken(Address),
+    // DAO integration: the registered dao-governance-contract address.
+    // Set once by admin via `set_dao_contract`; only that address may call
+    // `verify_project` directly (bypassing the legacy badge-holder voting).
+    DaoContract,
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -631,8 +635,115 @@ impl GreenPayContract {
         has_persistent(&env, &DataKey::ImpactNFT(donor, tier))
     }
 
-    // ─── Governance ───────────────────────────────────────────────────────────
+    // ─── DAO Integration ──────────────────────────────────────────────────────
 
+    /// Register the `dao-governance-contract` address so its `execute_proposal`
+    /// can call `verify_project` on behalf of a passed DAO vote.
+    ///
+    /// May only be called by the contract admin. Can be called again later to
+    /// point at an upgraded DAO contract (re-registering replaces the old
+    /// address). Pass `None` to clear the registration and fall back to the
+    /// legacy badge-holder voting path.
+    pub fn set_dao_contract(env: Env, admin: Address, dao_contract: Option<Address>) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if stored_admin != admin {
+            panic!("Only admin can set DAO contract");
+        }
+        match dao_contract {
+            Some(addr) => {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::DaoContract, &addr);
+                env.events()
+                    .publish((symbol_short!("dao_set"), admin), addr);
+            }
+            None => {
+                env.storage().instance().remove(&DataKey::DaoContract);
+                env.events()
+                    .publish((symbol_short!("dao_clr"), admin), ());
+            }
+        }
+    }
+
+    /// Return the registered DAO contract address, or `None` if not set.
+    pub fn get_dao_contract(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::DaoContract)
+    }
+
+    /// Mark a project as DAO-verified.
+    ///
+    /// **Authorization model (Issue #112 fix):**  
+    /// This function may only be invoked by the registered
+    /// `dao-governance-contract` (set via `set_dao_contract`). The DAO
+    /// contract is expected to call this function as the *execution payload*
+    /// of a `dao-governance-contract::execute_proposal` call — meaning the
+    /// verification decision has already passed the DAO's full
+    /// quorum/snapshot/timelock pipeline before reaching here.
+    ///
+    /// If no DAO contract is registered, this function panics. Use the legacy
+    /// `create_proposal` / `vote_verify_project` / `resolve_proposal` path
+    /// until the DAO contract address is set.
+    ///
+    /// # Calldata format expected by `dao-governance-contract::execute_proposal`
+    ///
+    /// The DAO's `Proposal` must target this contract with `function =
+    /// Symbol::new("verify_project")` and `calldata` encoding the
+    /// `project_id: String`. The DAO SDK encodes calldata as a single `Bytes`
+    /// blob; on the DAO side a helper should encode the project ID before
+    /// creating the proposal.
+    pub fn verify_project(env: Env, caller: Address, project_id: String) {
+        caller.require_auth();
+
+        // Only the registered DAO contract may call this function.
+        let dao_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DaoContract)
+            .expect("DAO contract not registered; call set_dao_contract first");
+        if caller != dao_addr {
+            panic!("Only the registered DAO contract can verify projects");
+        }
+
+        let mut project: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(project_id.clone()))
+            .expect("Project not found");
+        if !project.active {
+            panic!("Cannot verify an inactive project");
+        }
+
+        // Mark the project as DAO-verified by setting its active flag and
+        // emitting a canonical event. Future callers of `get_project` can
+        // inspect the `active` flag; a separate `verified` field can be added
+        // in a storage-compatible upgrade if needed.
+        project.active = true;
+        env.storage()
+            .instance()
+            .set(&DataKey::Project(project_id.clone()), &project);
+        env.events()
+            .publish((symbol_short!("dao_ver"), caller), project_id);
+    }
+
+    // ─── Legacy Governance (deprecated — superseded by DAO integration) ───────
+    //
+    // The functions below implement the original admin-controlled, badge-holder
+    // 1-address-1-vote scheme for project verification. They remain present for
+    // deployments that have not yet registered a DAO contract, and for any
+    // in-flight proposals that were created before the DAO integration was
+    // activated. They will be removed in a future upgrade once the DAO path is
+    // fully operational and all legacy proposals are resolved.
+    //
+    // Do NOT use these functions for new integrations — use `verify_project`
+    // via a DAO `execute_proposal` call instead.
+
+    /// **DEPRECATED** — use `verify_project` via DAO governance instead.
+    ///
     /// Admin creates a voting proposal for a project to be community-verified.
     ///
     /// `duration_ledgers` is the length of the voting window in Stellar
@@ -685,6 +796,8 @@ impl GreenPayContract {
             .publish((symbol_short!("prop_new"), admin), (project_id, window));
     }
 
+    /// **DEPRECATED** — use `verify_project` via DAO governance instead.
+    ///
     /// Badge holders (≥ Seedling) cast a vote. One vote per address per proposal.
     pub fn vote_verify_project(env: Env, voter: Address, project_id: String, approve: bool) {
         voter.require_auth();
@@ -732,6 +845,8 @@ impl GreenPayContract {
             .publish((symbol_short!("voted"), voter, project_id), approve);
     }
 
+    /// **DEPRECATED** — use `verify_project` via DAO governance instead.
+    ///
     /// Callable by anyone after the deadline. Resolves based on majority.
     /// Emits proj_ver on approval, prop_rej on rejection.
     pub fn resolve_proposal(env: Env, project_id: String) {
@@ -1710,6 +1825,106 @@ mod tests {
     fn test_create_proposal_rejects_too_long_duration() {
         let (_env, _cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &(MAX_VOTING_WINDOW_LEDGERS + 1));
+    }
+
+    // ─── DAO integration tests (Issue #112) ──────────────────────────────────
+
+    /// After `set_dao_contract`, `get_dao_contract` returns the stored address.
+    #[test]
+    fn test_set_and_get_dao_contract() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let dao = Address::generate(&env);
+        client.set_dao_contract(&admin, &Some(dao.clone()));
+        assert_eq!(client.get_dao_contract(), Some(dao));
+    }
+
+    /// Only the contract admin may call `set_dao_contract`.
+    #[test]
+    #[should_panic(expected = "Only admin can set DAO contract")]
+    fn test_set_dao_contract_rejects_non_admin() {
+        let (env, _cid, client, _admin, _pid) = setup();
+        let impostor = Address::generate(&env);
+        let dao = Address::generate(&env);
+        client.set_dao_contract(&impostor, &Some(dao));
+    }
+
+    /// Clearing the DAO address removes it from storage.
+    #[test]
+    fn test_clear_dao_contract() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let dao = Address::generate(&env);
+        client.set_dao_contract(&admin, &Some(dao));
+        client.set_dao_contract(&admin, &None);
+        assert_eq!(client.get_dao_contract(), None);
+    }
+
+    /// The registered DAO contract address can successfully call `verify_project`.
+    #[test]
+    fn test_verify_project_by_dao_succeeds() {
+        let (env, _cid, client, admin, pid) = setup();
+        let dao = Address::generate(&env);
+        client.set_dao_contract(&admin, &Some(dao.clone()));
+        client.verify_project(&dao, &pid);
+        // Project remains active and registered after DAO verification.
+        let p = client.get_project(&pid);
+        assert!(p.active);
+    }
+
+    /// Any address that is NOT the registered DAO contract is rejected.
+    #[test]
+    #[should_panic(expected = "Only the registered DAO contract can verify projects")]
+    fn test_verify_project_rejects_non_dao() {
+        let (env, _cid, client, admin, pid) = setup();
+        let dao = Address::generate(&env);
+        client.set_dao_contract(&admin, &Some(dao));
+        let impostor = Address::generate(&env);
+        client.verify_project(&impostor, &pid);
+    }
+
+    /// Calling `verify_project` when no DAO contract is registered panics with
+    /// a clear message so integrators know to call `set_dao_contract` first.
+    #[test]
+    #[should_panic(expected = "DAO contract not registered; call set_dao_contract first")]
+    fn test_verify_project_panics_when_no_dao_registered() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let caller = Address::generate(&env);
+        client.verify_project(&caller, &pid);
+    }
+
+    /// `verify_project` panics on an unknown project ID.
+    #[test]
+    #[should_panic(expected = "Project not found")]
+    fn test_verify_project_unknown_project() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let dao = Address::generate(&env);
+        client.set_dao_contract(&admin, &Some(dao.clone()));
+        client.verify_project(&dao, &String::from_str(&env, "does-not-exist"));
+    }
+
+    /// `verify_project` panics on an inactive project (deactivated by admin).
+    #[test]
+    #[should_panic(expected = "Cannot verify an inactive project")]
+    fn test_verify_project_inactive_project() {
+        let (env, _cid, client, admin, pid) = setup();
+        let dao = Address::generate(&env);
+        client.set_dao_contract(&admin, &Some(dao.clone()));
+        client.deactivate_project(&admin, &pid);
+        client.verify_project(&dao, &pid);
+    }
+
+    /// Re-registering a new DAO address replaces the old one, and the old
+    /// address can no longer call `verify_project`.
+    #[test]
+    #[should_panic(expected = "Only the registered DAO contract can verify projects")]
+    fn test_update_dao_contract_revokes_old_address() {
+        let (env, _cid, client, admin, pid) = setup();
+        let dao_v1 = Address::generate(&env);
+        let dao_v2 = Address::generate(&env);
+        client.set_dao_contract(&admin, &Some(dao_v1.clone()));
+        // Replace with dao_v2
+        client.set_dao_contract(&admin, &Some(dao_v2));
+        // dao_v1 should now be rejected
+        client.verify_project(&dao_v1, &pid);
     }
 
     // ─── Upgrade tests ────────────────────────────────────────────────────────

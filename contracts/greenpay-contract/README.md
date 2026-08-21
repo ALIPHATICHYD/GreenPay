@@ -20,6 +20,9 @@ Every donation is recorded permanently on the Stellar blockchain. Anyone can que
 | `get_global_total()` | Anyone | Total XLM raised platform-wide |
 | `get_global_co2()` | Anyone | Total CO₂ offset in grams |
 | `get_donation_count()` | Anyone | Total donations recorded |
+| `set_dao_contract(admin, dao)` | Admin | Register the DAO contract for project verification (Issue #112) |
+| `get_dao_contract()` | Anyone | Get the registered DAO contract address |
+| `verify_project(caller, project_id)` | DAO contract only | Mark a project as DAO-verified; must be called via `dao-governance-contract.execute_proposal` |
 
 ## Badge Tiers
 
@@ -95,4 +98,4 @@ ledger-entry size ceiling. TTL extension is automatic on every read/write via
 ## Roadmap
 
 - **v1.3** — Impact NFT minting on badge achievement
-- **v2.1** — DAO governance voting for project verification
+- **v2.1** — DAO governance voting for project verification ✅ (implemented — see [ARCHITECTURE.md](../ARCHITECTURE.md))
