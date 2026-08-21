@@ -105,6 +105,7 @@ app.use(`${API_V1}/ratings`,        require("./routes/ratings"));
 app.use(`${API_V1}/notifications`,  require("./routes/notifications"));
 app.use(`${API_V1}/admin`,          require("./routes/admin"));
 app.use(`${API_V1}/network`,        require("./routes/network"));
+app.use(`${API_V1}/meta`,           require("./routes/meta"));
 
 // Legacy unversioned routes → redirect to /api/v1 with a deprecation notice.
 app.use("/api", (req, res, next) => {
