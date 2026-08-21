@@ -14,29 +14,21 @@
  * matters for locales like Arabic, which has 6 plural categories.
  */
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
-import IntlMessageFormat from "intl-messageformat";
-import en from "@/locales/en.json";
-import es from "@/locales/es.json";
-import ar from "@/locales/ar.json";
+import { getMessage, createT, getDir, LOCALE_TAGS, RTL_LOCALES, type Locale, type InterpolationValues } from "@greenpay/i18n";
 
-export type Locale = "en" | "es" | "ar";
+export type { Locale, InterpolationValues };
 
-export type InterpolationValues = Record<string, string | number | Date>;
-
-const locales: Record<Locale, Record<string, any>> = { en, es, ar };
-
-/** BCP-47 tag used for Intl.PluralRules / Intl.NumberFormat per locale. */
-export const LOCALE_TAGS: Record<Locale, string> = {
-  en: "en-US",
-  es: "es-ES",
-  ar: "ar-EG",
-};
+export const LOCALES: Locale[] = ["en", "es", "ar"];
 
 /** Locales that are read/written right-to-left. */
-export const RTL_LOCALES: ReadonlySet<Locale> = new Set<Locale>(["ar"]);
+export const RTL_LOCALES_SET = RTL_LOCALES;
 
 export function isRtl(locale: Locale): boolean {
   return RTL_LOCALES.has(locale);
+}
+
+export function getLocaleDir(locale: Locale): "ltr" | "rtl" {
+  return getDir(locale);
 }
 
 interface I18nContextValue {
@@ -49,93 +41,60 @@ interface I18nContextValue {
   t: (key: string, values?: InterpolationValues) => string;
 }
 
-const I18nContext = createContext<I18nContextValue>({
-  locale: "en",
-  setLocale: () => {},
-  localeTag: LOCALE_TAGS.en,
-  dir: "ltr",
-  t: (k) => k,
-});
+const I18nContext = createContext<I18nContextValue | undefined>(undefined);
 
-function get(obj: Record<string, any>, path: string): string | undefined {
-  return path.split(".").reduce((acc: any, part) => acc?.[part], obj);
-}
-
-// Cache compiled ICU MessageFormat instances per (locale, key, pattern) so
-// repeated renders (e.g. lists of donation cards) don't re-parse the ICU
-// pattern on every call.
-const formatterCache = new Map<string, IntlMessageFormat>();
-
-function formatMessage(locale: Locale, key: string, pattern: string, values?: InterpolationValues): string {
-  if ((!values || Object.keys(values).length === 0) && !pattern.includes("{")) {
-    // Plain string, nothing to interpolate — skip the ICU parser entirely.
-    return pattern;
-  }
-
-  const cacheKey = `${locale}::${key}::${pattern}`;
-  let msg = formatterCache.get(cacheKey);
-  if (!msg) {
-    try {
-      msg = new IntlMessageFormat(pattern, LOCALE_TAGS[locale]);
-      formatterCache.set(cacheKey, msg);
-    } catch {
-      // Malformed ICU pattern — fail soft to the raw string.
-      return pattern;
-    }
-  }
-
-  try {
-    const result = msg.format(values ?? {});
-    return Array.isArray(result) ? result.join("") : String(result);
-  } catch {
-    return pattern;
-  }
-}
+const STORAGE_KEY = "greenpay-locale";
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocale] = useState<Locale>(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("locale");
-      if (stored === "en" || stored === "es" || stored === "ar") return stored;
-    }
-    return "en";
-  });
+  const [locale, setLocaleState] = useState<Locale>("en");
 
-  const dir = isRtl(locale) ? "rtl" : "ltr";
-
-  // Keep <html dir="..."> / <html lang="..."> in sync with the active
-  // locale so RTL locales actually render right-to-left, and so that
-  // browser/AT behavior (bidi, form controls, scrollbars) follows suit.
+  // Load saved locale on mount
   useEffect(() => {
-    if (typeof document === "undefined") return;
-    document.documentElement.dir = dir;
-    document.documentElement.lang = LOCALE_TAGS[locale];
-  }, [locale, dir]);
-
-  const handleSetLocale = useCallback((l: Locale) => {
-    setLocale(l);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("locale", l);
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
+      if (saved && LOCALES.includes(saved)) {
+        setLocaleState(saved);
+      }
+    } catch (err) {
+      console.warn("Failed to load locale from localStorage:", err);
     }
   }, []);
 
-  const t = useCallback(
-    (key: string, values?: InterpolationValues) => {
-      const pattern = get(locales[locale], key);
-      if (pattern === undefined) return key;
-      return formatMessage(locale, key, pattern, values);
-    },
-    [locale],
-  );
+  const setLocale = useCallback((newLocale: Locale) => {
+    setLocaleState(newLocale);
+    try {
+      localStorage.setItem(STORAGE_KEY, newLocale);
+    } catch (err) {
+      console.warn("Failed to save locale to localStorage:", err);
+    }
+  }, []);
 
-  const value = useMemo<I18nContextValue>(
-    () => ({ locale, setLocale: handleSetLocale, localeTag: LOCALE_TAGS[locale], dir, t }),
-    [locale, handleSetLocale, dir, t],
-  );
+  const t = useMemo(() => createT(locale), [locale]);
 
-  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+  const value: I18nContextValue = {
+    locale,
+    setLocale,
+    localeTag: LOCALE_TAGS[locale],
+    dir: getDir(locale),
+    t,
+  };
+
+  return (
+    <I18nContext.Provider value={value}>
+      {children}
+    </I18nContext.Provider>
+  );
 }
 
-export function useI18n() {
-  return useContext(I18nContext);
+export function useI18n(): I18nContextValue {
+  const context = useContext(I18nContext);
+  if (context === undefined) {
+    throw new Error("useI18n must be used within an I18nProvider");
+  }
+  return context;
+}
+
+export function useTranslation() {
+  const { t, locale } = useI18n();
+  return { t, locale };
 }
