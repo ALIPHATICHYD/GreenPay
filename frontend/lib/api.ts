@@ -496,9 +496,8 @@ export async function fetchGlobalStats(): Promise<GlobalStats> {
 // ── Admin Login ──────────────────────────────────────────────────
 export async function adminLogin(username: string, password: string) {
   const { data } = await api.post<{
-    token: string;
-    refreshToken: string;
-    expiresIn: number;
+    success: boolean;
+    data: { token: string; refreshToken: string; expiresIn: number };
   }>("/api/admin/login", { username, password });
   setAdminToken(data.data.token, data.data.refreshToken);
   return data.data;

@@ -184,9 +184,10 @@ pub const MAX_REALISTIC_DONATION_STROOPS: i128 = 1_000_000_000 * STROOP;
 ///     20 × 100 × STROOP = 2 000 × STROOP — a tie rather than a win.
 ///
 /// Cost-of-attack at the Tree threshold (100 XLM ≈ $10–30 at typical XLM
-/// prices): to out-vote a single 2 000 XLM donor, an attacker must deploy
-/// > 20 funded addresses, costing > 2 000 XLM — identical to simply being a
-/// large donor, eliminating the asymmetric advantage of Sybil identities.
+/// prices): to out-vote a single 2 000 XLM donor, an attacker must deploy more
+/// than 20 funded addresses, costing more than 2 000 XLM — identical to simply
+/// being a large donor, eliminating the asymmetric advantage of Sybil
+/// identities.
 pub const VOTE_ELIGIBILITY_STROOP: i128 = 100 * STROOP; // 100 XLM (Tree tier)
 
 // 7 days × 24 h × 3600 s ÷ 5 s per ledger ≈ 120_960 ledgers — used as the
@@ -381,11 +382,7 @@ fn mint_badge_token(
         minted_at_ledger,
     };
     write_persistent(env, &DataKey::NftMeta(token_id), &meta);
-    write_persistent(
-        env,
-        &DataKey::ImpactNFT(donor.clone(), tier.clone()),
-        &meta,
-    );
+    write_persistent(env, &DataKey::ImpactNFT(donor.clone(), tier.clone()), &meta);
 
     let mut owned: Vec<u32> = read_persistent(env, &DataKey::NftOwnerTokens(donor.clone()))
         .unwrap_or_else(|| Vec::new(env));
@@ -402,8 +399,7 @@ fn mint_badge_token(
 /// marker (pre-interface layout), it is transparently backfilled into the
 /// token registry and the new token id is returned.
 fn find_token_id(env: &Env, donor: &Address, tier: &BadgeTier) -> Option<u32> {
-    let owned_opt: Option<Vec<u32>> =
-        read_persistent(env, &DataKey::NftOwnerTokens(donor.clone()));
+    let owned_opt: Option<Vec<u32>> = read_persistent(env, &DataKey::NftOwnerTokens(donor.clone()));
     if let Some(owned) = owned_opt {
         for id in owned.iter() {
             let meta: ImpactNFT =
@@ -648,20 +644,21 @@ impl GreenPayContract {
         // mint registers the badge in the NFT token registry so it is
         // discoverable through the standard NFT interface (see
         // `balance_of`/`owner_of`/`transfer`), not just `has_nft`.
-        if donor_stats.badge != BadgeTier::None && donor_stats.badge != prev_badge {
-            if find_token_id(&env, &donor, &donor_stats.badge).is_none() {
-                mint_badge_token(
-                    &env,
-                    &donor,
-                    &donor_stats.badge,
-                    donor_stats.total_donated,
-                    env.ledger().sequence(),
-                );
-                env.events().publish(
-                    (symbol_short!("nft_mint"), donor.clone()),
-                    donor_stats.badge.clone(),
-                );
-            }
+        if donor_stats.badge != BadgeTier::None
+            && donor_stats.badge != prev_badge
+            && find_token_id(&env, &donor, &donor_stats.badge).is_none()
+        {
+            mint_badge_token(
+                &env,
+                &donor,
+                &donor_stats.badge,
+                donor_stats.total_donated,
+                env.ledger().sequence(),
+            );
+            env.events().publish(
+                (symbol_short!("nft_mint"), donor.clone()),
+                donor_stats.badge.clone(),
+            );
         }
 
         let dc: u32 = env
@@ -904,8 +901,9 @@ impl GreenPayContract {
         write_persistent(&env, &DataKey::NftMeta(token_id), &meta);
 
         // Remove the token from the sender's ownership index.
-        let mut from_tokens: Vec<u32> = read_persistent(&env, &DataKey::NftOwnerTokens(from.clone()))
-            .expect("Sender does not own any tokens");
+        let mut from_tokens: Vec<u32> =
+            read_persistent(&env, &DataKey::NftOwnerTokens(from.clone()))
+                .expect("Sender does not own any tokens");
         let mut removed = false;
         for i in 0..from_tokens.len() {
             if from_tokens.get(i) == Some(token_id) {
@@ -924,10 +922,8 @@ impl GreenPayContract {
         }
 
         // Add the token to the recipient's ownership index.
-        let mut to_tokens: Vec<u32> =
-            read_persistent(&env, &DataKey::NftOwnerTokens(to.clone())).unwrap_or_else(|| {
-                Vec::new(&env)
-            });
+        let mut to_tokens: Vec<u32> = read_persistent(&env, &DataKey::NftOwnerTokens(to.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
         to_tokens.push_back(token_id);
         write_persistent(&env, &DataKey::NftOwnerTokens(to.clone()), &to_tokens);
 
@@ -936,13 +932,10 @@ impl GreenPayContract {
         env.storage()
             .persistent()
             .remove(&DataKey::ImpactNFT(from.clone(), tier.clone()));
-        write_persistent(
-            &env,
-            &DataKey::ImpactNFT(to.clone(), tier.clone()),
-            &meta,
-        );
+        write_persistent(&env, &DataKey::ImpactNFT(to.clone(), tier.clone()), &meta);
 
-        env.events().publish((symbol_short!("nft_xfr"), from, to), token_id);
+        env.events()
+            .publish((symbol_short!("nft_xfr"), from, to), token_id);
     }
 
     // ─── DAO Integration ──────────────────────────────────────────────────────
@@ -2165,6 +2158,14 @@ mod tests {
     fn test_double_resolve_fails() {
         let (env, cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &0u32);
+
+        // Cast one eligible vote so the first resolve clears the quorum check
+        // and actually resolves the proposal. Without a vote the first call
+        // panics on quorum and the second call is never reached.
+        let voter = Address::generate(&env);
+        grant_badge_with_amount(&env, &cid, &voter, 100 * STROOP);
+        client.vote_verify_project(&voter, &pid, &true);
+
         extend_ttl(&env, &cid);
         env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
         client.resolve_proposal(&pid);
@@ -2216,10 +2217,16 @@ mod tests {
 
         let expected_for: i128 = SYBIL_COUNT as i128 * SYBIL_STAKE_XLM * STROOP;
         let expected_against: i128 = WHALE_STAKE_XLM * STROOP;
-        assert_eq!(p.votes_for, expected_for,
-            "FOR weight should equal 20 × 100 XLM = {} stroops", expected_for);
-        assert_eq!(p.votes_against, expected_against,
-            "AGAINST weight should equal 2100 XLM = {} stroops", expected_against);
+        assert_eq!(
+            p.votes_for, expected_for,
+            "FOR weight should equal 20 × 100 XLM = {} stroops",
+            expected_for
+        );
+        assert_eq!(
+            p.votes_against, expected_against,
+            "AGAINST weight should equal 2100 XLM = {} stroops",
+            expected_against
+        );
 
         // The whale outweighs all 20 Sybil addresses combined → proposal rejected.
         assert!(
@@ -2261,8 +2268,10 @@ mod tests {
 
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, p.votes_against,
-            "stakes are equal so this should be a tie");
+        assert_eq!(
+            p.votes_for, p.votes_against,
+            "stakes are equal so this should be a tie"
+        );
         // Ties resolve as rejection (votes_for <= votes_against).
         assert!(
             p.votes_for <= p.votes_against,
@@ -2469,7 +2478,10 @@ mod tests {
         client.donate(&token, &donor, &pid, &amount, &0u32);
 
         // Collection metadata.
-        assert_eq!(client.name(), String::from_str(&env, "GreenPay Impact Badge"));
+        assert_eq!(
+            client.name(),
+            String::from_str(&env, "GreenPay Impact Badge")
+        );
         assert_eq!(client.symbol(), String::from_str(&env, "GPB"));
         assert_eq!(client.decimals(), 0);
 

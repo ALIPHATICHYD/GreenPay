@@ -8,6 +8,10 @@ COPY shared /app/shared
 WORKDIR /app/shared
 RUN npm install
 
+# Copy the shared network manifests (lib/stellar.ts imports @greenpay/config)
+WORKDIR /app
+COPY config /app/config
+
 # Copy frontend and install dependencies
 WORKDIR /app
 COPY frontend/package*.json ./
@@ -15,7 +19,8 @@ RUN npm ci
 
 # Create a symlink to the shared module in node_modules
 RUN mkdir -p node_modules/@greenpay && \
-    ln -sf /app/shared node_modules/@greenpay/i18n
+    ln -sf /app/shared node_modules/@greenpay/i18n && \
+    ln -sf /app/config node_modules/@greenpay/config
 
 # Copy the rest of the frontend
 COPY frontend/. .
@@ -38,14 +43,19 @@ COPY shared /app/shared
 WORKDIR /app/shared
 RUN npm install --production
 
+# Copy the shared network manifests
+WORKDIR /app
+COPY config /app/config
+
 # Copy frontend and install production dependencies
 WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci --only=production
 
-# Create symlink in production
+# Create symlinks in production
 RUN mkdir -p node_modules/@greenpay && \
-    ln -sf /app/shared node_modules/@greenpay/i18n
+    ln -sf /app/shared node_modules/@greenpay/i18n && \
+    ln -sf /app/config node_modules/@greenpay/config
 
 # Copy built assets
 COPY --from=builder --chown=node:node /app/next.config.mjs ./

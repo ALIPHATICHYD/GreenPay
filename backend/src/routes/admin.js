@@ -19,11 +19,11 @@ const REFRESH_EXPIRY = "24h";
 router.post("/login", loginLimiter, validate(AdminLoginSchema), (req, res) => {
   const { username, password } = req.body || {};
 
-  if (!adminPass) {
+  if (!env.adminPassword) {
     throw createApiError(503, "ADMIN_AUTH_NOT_CONFIGURED", "Admin authentication not configured on this server");
   }
 
-  if (username !== adminUser || password !== adminPass) {
+  if (username !== env.adminUsername || password !== env.adminPassword) {
     throw createApiError(401, "INVALID_CREDENTIALS", "Invalid credentials");
   }
 
