@@ -3,10 +3,29 @@ name: Mobile Preview Build
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile.yml'
 
 jobs:
+  audit:
+    name: Mobile dependency audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node-install
+        with:
+          working-directory: mobile
+      - name: npm audit (fail on high/critical)
+        run: npx --yes audit-ci@7.1.0 --high --package-manager npm --config .audit-ci.json
+
   build:
     name: EAS Preview Build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     defaults:
       run:
