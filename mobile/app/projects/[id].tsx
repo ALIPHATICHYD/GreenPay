@@ -183,6 +183,16 @@ export default function ProjectDetailScreen() {
       >
         <Text style={[styles.donateButtonText, { color: colors.buttonText }]}>🌱 Donate Now</Text>
       </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.monthlyButton, { borderColor: colors.primary }]}
+        onPress={() => router.push(`/donate/${project.id}`)}
+        accessibilityLabel="Set up monthly donation"
+      >
+        <Text style={[styles.monthlyButtonText, { color: colors.primary }]}>
+          📅 Set up monthly giving
+        </Text>
+      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -322,5 +332,19 @@ const styles = StyleSheet.create({
   donateButtonText: {
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  monthlyButton: {
+    padding: 14,
+    marginHorizontal: 16,
+    marginBottom: 28,
+    marginTop: 0,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 2,
+    backgroundColor: 'transparent',
+  },
+  monthlyButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
   },
 });
