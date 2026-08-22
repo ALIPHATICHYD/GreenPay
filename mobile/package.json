@@ -47,7 +47,15 @@
     "react-test-renderer": "18.2.0"
   },
   "overrides": {
-    "turbo-stream": ">=3.0.0"
+    "expo-router": {
+      "@expo/server": {
+        "@remix-run/node": {
+          "@remix-run/server-runtime": {
+            "turbo-stream": ">=3.0.0"
+          }
+        }
+      }
+    }
   },
   "jest": {
     "preset": "jest-expo",
