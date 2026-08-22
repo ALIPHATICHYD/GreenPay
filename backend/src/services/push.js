@@ -5,6 +5,7 @@
 const { Expo } = require("expo-server-sdk");
 const PgBoss = require("pg-boss");
 const pool = require("../db/pool");
+const { env } = require("../config/env");
 
 // Create a new Expo SDK client
 const expo = new Expo();
@@ -23,8 +24,7 @@ let boss = null;
  * Must be called once before sendUpdatePushNotifications can queue receipt checks.
  */
 async function start() {
-  const connectionString =
-    process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/greenpay";
+  const connectionString = env.databaseUrl;
 
   boss = new PgBoss(connectionString);
   boss.on("error", (err) => console.error("[Push] pg-boss error:", err.message));

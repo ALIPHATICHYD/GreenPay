@@ -31,15 +31,12 @@
 const { Server, TransactionBuilder, Networks, Memo, Operation, Asset } = require("@stellar/stellar-sdk");
 const { v4: uuidv4 } = require("uuid");
 const pool = require("../db/pool");
+const { env } = require("../config/env");
 
 // Network configuration
-const NETWORK = process.env.STELLAR_NETWORK || "testnet";
+const NETWORK = env.stellarNetwork;
 const NETWORK_PASSPHRASE = NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-const HORIZON_URL = process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
-
-// Postgres unique_violation error code
-const PG_UNIQUE_VIOLATION = "23505";
-
+const HORIZON_URL = env.horizonUrl;
 let server;
 function getServer() {
   if (!server) {
@@ -321,7 +318,7 @@ async function submitMatchingPayment({
     // In a real implementation, this would use pre-signed transactions
     // For now, we'll need the matcher's secret key to sign
     // This should be stored securely (e.g., in environment variables or a secret manager)
-    const matcherSecret = process.env.MATCHER_SECRET_KEY;
+    const matcherSecret = env.matcherSecretKey;
     
     if (!matcherSecret) {
       console.warn("MATCHER_SECRET_KEY not configured. Cannot submit matching payment.");

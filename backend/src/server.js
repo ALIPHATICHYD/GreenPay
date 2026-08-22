@@ -3,11 +3,15 @@
  */
 "use strict";
 
-const express   = require("express");
+const express = require("express");
 const cookieParser = require("cookie-parser");
-const csurf     = require("csurf");
-const helmet    = require("helmet");
+const csurf = require("csurf");
+const helmet = require("helmet");
 require("dotenv").config();
+
+// MUST be first: validate all environment variables or exit
+const { env } = require("./config/env");
+
 const { runMigrations } = require("./db/migrate");
 const { startTurretsServer } = require("./services/turrets");
 const http = require("http");
@@ -21,17 +25,16 @@ const pool = require("./db/pool");
 const { createShutdownHandler } = require("./shutdown");
 const { logger } = require("./utils/logger");
 
-const app  = express();
-const PORT = process.env.PORT || 4000;
+const app = express();
 const server = http.createServer(app);
 // Kubernetes sends SIGTERM (not SIGINT) to terminate pods during rolling
 // deploys, HPA scale-down, or node drains — keep this below the pod's
 // terminationGracePeriodSeconds (see k8s/backend.yaml) so the process has
 // time to exit on its own before the kubelet sends SIGKILL.
-const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 25000;
+const SHUTDOWN_TIMEOUT_MS = env.shutdownTimeoutMs;
 
 // ── Swagger UI (development) ─────────────────────────────────────────────────
-if (process.env.NODE_ENV !== "production") {
+if (!env.isProduction) {
   try {
     const swaggerUi = require("swagger-ui-express");
     const yaml = require("js-yaml");
@@ -77,8 +80,8 @@ app.use(csurf({
     // SameSite=None requires Secure, or browsers drop the cookie outright.
     // Only production serves over HTTPS, so keep them tied together —
     // otherwise every CSRF-protected request silently fails everywhere else.
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    secure: env.isProduction,
+    sameSite: env.isProduction ? "none" : "lax",
     path: "/",
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
@@ -158,12 +161,12 @@ async function startServer() {
     logger.info({
       msg: "server started",
       port: PORT,
-      network: process.env.STELLAR_NETWORK || "testnet",
+      network: env.stellarNetwork,
     });
   });
 
-  if (process.env.ENABLE_TURRETS === "true") {
-    const turretsPort = process.env.TURRETS_PORT || 3001;
+  if (env.enableTurrets) {
+    const turretsPort = env.turretsPort;
     startTurretsServer(turretsPort);
   }
 }
