@@ -17,3 +17,10 @@ export function getSocket(): Socket {
   return socket;
 }
 
+// Add the explicit disconnect/teardown function
+export const disconnectSocket = (): void => {
+  if (socket) {
+    socket.disconnect();
+    socket = null; // Reset singleton instance for tests or clean re-initialization
+  }
+};
