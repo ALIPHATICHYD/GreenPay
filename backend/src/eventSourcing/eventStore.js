@@ -2,6 +2,9 @@
 
 const pool = require("../db/pool");
 const { dispatchToProjections } = require("./projections");
+const { logger: rootLogger } = require("../utils/logger");
+
+const logger = rootLogger.child({ service: "event-store" });
 
 function intFromEnv(name, fallback, { min = 1 } = {}) {
   const raw = process.env[name];
@@ -59,13 +62,18 @@ class EventStoreService {
     const row = event.toRow();
 
     try {
+      // DO NOTHING (not DO UPDATE) is what makes `inserted` meaningful: on a
+      // conflict Postgres reports rowCount 0, so a matched row no longer fakes a
+      // successful insert. The xmax = 0 RETURNING expression is a belt-and-braces
+      // check — xmax is 0 only for freshly inserted rows — so even if a future
+      // caller relies on the returned flag it stays provably correct.
       const result = await this.pool.query(
         `INSERT INTO event_stream (
           event_id, stream_id, aggregate_type, aggregate_id, event_type,
           version, aggregate_version, payload, actor, occurred_at, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
-        ON CONFLICT (stream_id, version) DO UPDATE SET
-          payload = event_stream.payload`,
+        ON CONFLICT (stream_id, version) DO NOTHING
+        RETURNING (xmax = 0) AS inserted`,
         [
           row.event_id,
           row.stream_id,
@@ -80,7 +88,8 @@ class EventStoreService {
           row.created_at,
         ]
       );
-      return { eventId: row.event_id, version: row.version, inserted: (result.rowCount === 1) };
+      const inserted = result.rows.length > 0 ? result.rows[0].inserted : false;
+      return { eventId: row.event_id, version: row.version, inserted };
     } catch (err) {
       if (err.code === "23505") {
         throw new Error(`Duplicate event: stream ${row.stream_id} version ${row.version} already exists`);
@@ -98,12 +107,14 @@ class EventStoreService {
       const results = [];
       for (const event of events) {
         const row = event.toRow();
-        await client.query(
+        // DO NOTHING (not DO UPDATE) so re-running a migration batch skips rows
+        // that were already written instead of touching them as "affected".
+        const result = await client.query(
           `INSERT INTO event_stream (
             event_id, stream_id, aggregate_type, aggregate_id, event_type,
             version, aggregate_version, payload, actor, occurred_at, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
-          ON CONFLICT (stream_id, version) DO UPDATE SET payload = event_stream.payload`,
+          ON CONFLICT (stream_id, version) DO NOTHING`,
           [
             row.event_id,
             row.stream_id,
@@ -118,7 +129,7 @@ class EventStoreService {
             row.created_at,
           ]
         );
-        results.push({ eventId: row.event_id, version: row.version });
+        results.push({ eventId: row.event_id, version: row.version, inserted: (result.rowCount === 1) });
       }
       await client.query("COMMIT");
       inTransaction = false;
@@ -211,7 +222,7 @@ class EventStoreService {
           await dispatchToProjections(this.pool, event);
           processedIds.push(row.event_id);
         } catch (err) {
-          console.error(`[EventStore] Failed to dispatch event ${row.event_id}:`, err.message);
+          logger.error({ msg: "failed to dispatch event", eventId: row.event_id, error: err.message });
           failedCount++;
         }
       }
@@ -222,7 +233,7 @@ class EventStoreService {
 
       return { processed: processedIds.length, failed: failedCount, total: batch.length, limit };
     } catch (err) {
-      console.error("[EventStore] Batch processing error:", err.message);
+      logger.error({ msg: "batch processing error", error: err.message });
       return { processed: 0, failed: 0, total: 0, limit, error: err.message };
     } finally {
       this.isProcessing = false;
@@ -302,16 +313,21 @@ class EventStoreService {
     this.recordBatchOutcome(result);
 
     if (result.processed > 0 || result.failed > 0) {
-      console.log(
-        `[EventStore] Dispatch: ${result.processed} processed, ${result.failed} failed, ` +
-          `${result.total || 0} total (batch size ${this.stats.currentBatchSize}, ${this.stats.lastBatchDurationMs} ms)`
-      );
+      logger.info({
+        msg: "event dispatch batch",
+        processed: result.processed,
+        failed: result.failed,
+        total: result.total || 0,
+        batchSize: this.stats.currentBatchSize,
+        durationMs: this.stats.lastBatchDurationMs,
+      });
     }
     if (this.stats.consecutiveSaturated > 0 && this.stats.consecutiveSaturated % 10 === 0) {
-      console.warn(
-        `[EventStore] Backlog: ${this.stats.consecutiveSaturated} consecutive saturated batches, ` +
-          `batch size now ${this.stats.currentBatchSize}`
-      );
+      logger.warn({
+        msg: "event store backlog",
+        consecutiveSaturated: this.stats.consecutiveSaturated,
+        currentBatchSize: this.stats.currentBatchSize,
+      });
     }
     return result;
   }
@@ -319,10 +335,13 @@ class EventStoreService {
   async startScheduler() {
     if (schedulerRunning) return;
     schedulerRunning = true;
-    console.log(
-      `[EventStore] Scheduler started (batch ${EVENT_STORE_BATCH_SIZE}..${EVENT_STORE_MAX_BATCH_SIZE}, ` +
-        `poll ${EVENT_STORE_POLL_INTERVAL_MS} ms, adaptive ${this.adaptiveBatch})`
-    );
+    logger.info({
+      msg: "event store scheduler started",
+      baseBatchSize: EVENT_STORE_BATCH_SIZE,
+      maxBatchSize: EVENT_STORE_MAX_BATCH_SIZE,
+      pollIntervalMs: EVENT_STORE_POLL_INTERVAL_MS,
+      adaptive: this.adaptiveBatch,
+    });
 
     const scheduleNext = (delay) => {
       schedulerTimer = setTimeout(loop, delay);
@@ -336,7 +355,7 @@ class EventStoreService {
         const result = await this.runSchedulerTick();
         delay = this.nextDelayMs(result, this.stats.lastBatchDurationMs);
       } catch (err) {
-        console.error("[EventStore] Scheduler tick error:", err.message);
+        logger.error({ msg: "event store scheduler tick error", error: err.message });
       }
       if (!schedulerRunning) return;
       scheduleNext(delay);
@@ -351,7 +370,7 @@ class EventStoreService {
       clearTimeout(schedulerTimer);
       schedulerTimer = null;
     }
-    console.log("[EventStore] Scheduler stopped");
+    logger.info({ msg: "event store scheduler stopped" });
   }
 }
 

@@ -7,7 +7,6 @@ const express   = require("express");
 const cookieParser = require("cookie-parser");
 const csurf     = require("csurf");
 const helmet    = require("helmet");
-const morgan    = require("morgan");
 require("dotenv").config();
 const { runMigrations } = require("./db/migrate");
 const { startTurretsServer } = require("./services/turrets");
@@ -15,9 +14,12 @@ const http = require("http");
 const { Server } = require("socket.io");
 const { startIndexer, stopIndexer } = require("./services/indexerService");
 const { createCorsMiddleware, getAllowedOrigins } = require("./middleware/corsPolicy");
+const { correlationIdMiddleware } = require("./middleware/correlationId");
+const { apiEnvelope, errorHandler, notFoundHandler } = require("./middleware/apiEnvelope");
 const { initializeEventSourcing, shutdownEventSourcing } = require("./eventSourcing");
 const pool = require("./db/pool");
 const { createShutdownHandler } = require("./shutdown");
+const { logger } = require("./utils/logger");
 
 const app  = express();
 const PORT = process.env.PORT || 4000;
@@ -46,7 +48,19 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 app.use(helmet());
-app.use(morgan("dev"));
+
+// Correlation-ID must be the first custom middleware so that the
+// AsyncLocalStorage context is established before any route handler,
+// including the structured access log below, executes.
+app.use(correlationIdMiddleware);
+
+// Structured access log — replaces morgan("dev") so every request
+// record carries the same JSON shape as all other log output.
+app.use((req, _res, next) => {
+  logger.info({ msg: "request", method: req.method, path: req.path });
+  next();
+});
+
 app.use(express.json({ limit: "20kb" }));
 app.use(cookieParser());
 
@@ -54,6 +68,7 @@ app.use(cookieParser());
 // Access-Control-Allow-Origin — otherwise browsers report a same-origin-looking
 // 403 as an opaque "blocked by CORS policy" failure instead of the real error.
 const origins = getAllowedOrigins();
+app.use(apiEnvelope);
 app.use(...createCorsMiddleware(origins));
 
 app.use(csurf({
@@ -87,7 +102,7 @@ app.set("io", io);
 const API_V1 = "/api/v1";
 
 app.get(`${API_V1}/csrf-token`, (req, res) => {
-  res.json({ success: true, csrfToken: req.csrfToken() });
+  res.json({ csrfToken: req.csrfToken() });
 });
 
 app.get("/livez", (req, res) => res.json({ status: "ok" }));
@@ -121,12 +136,8 @@ app.use("/api", (req, res, next) => {
   return res.redirect(308, `${API_V1}${req.url}`);
 });
 
-app.use((req, res) => res.status(404).json({ error: `${req.method} ${req.path} not found` }));
-app.use((err, req, res, next) => {
-  void next;
-  console.error("[Error]", err.message);
-  res.status(err.status || 500).json({ error: err.message || "Internal server error" });
-});
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 async function startServer() {
   await runMigrations();
@@ -139,10 +150,16 @@ async function startServer() {
   const { start: startPushReceiptQueue } = require("./services/push");
   await startPushReceiptQueue();
 
-  startIndexer(io).catch(err => console.error("[Indexer Error]", err.message));
+  startIndexer(io).catch(err =>
+    logger.error({ msg: "indexer startup error", error: err.message })
+  );
 
   server.listen(PORT, () => {
-    console.log(`\n  🌱 Stellar GreenPay API\n  🚀 Running at http://localhost:${PORT}\n  🌐 Network: ${process.env.STELLAR_NETWORK || "testnet"}\n`);
+    logger.info({
+      msg: "server started",
+      port: PORT,
+      network: process.env.STELLAR_NETWORK || "testnet",
+    });
   });
 
   if (process.env.ENABLE_TURRETS === "true") {
@@ -161,7 +178,7 @@ const gracefulShutdown = createShutdownHandler({
 
 if (require.main === module) {
   startServer().catch((err) => {
-    console.error("[Startup Error]", err.message);
+    logger.error({ msg: "startup error", error: err.message });
     process.exit(1);
   });
 

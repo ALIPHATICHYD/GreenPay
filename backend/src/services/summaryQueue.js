@@ -12,6 +12,9 @@ const PgBoss = require("pg-boss");
 const pool = require("../db/pool");
 const { generateProjectSummary } = require("./claude");
 const { logAdminAction } = require("./audit");
+const { logger: rootLogger, getCorrelationId, runWithCorrelationId } = require("../utils/logger");
+
+const logger = rootLogger.child({ service: "summary-queue" });
 
 const QUEUE = "ai-summary";
 const DEAD_LETTER_QUEUE = "ai-summary-dlq";
@@ -35,7 +38,7 @@ async function start(io) {
 
   boss = new PgBoss(connectionString);
 
-  boss.on("error", (err) => console.error("[summaryQueue] pg-boss error:", err.message));
+  boss.on("error", (err) => logger.error({ msg: "pg-boss error", error: err.message }));
 
   await boss.start();
 
@@ -51,7 +54,7 @@ async function start(io) {
   await boss.work(QUEUE, { teamSize: 2, teamConcurrency: 1 }, handleSummaryJob(io));
   await boss.work(DEAD_LETTER_QUEUE, { includeMetadata: true }, handlePermanentFailure);
 
-  console.log("[summaryQueue] pg-boss started, worker registered on queue:", QUEUE);
+  logger.info({ msg: "pg-boss started, worker registered", queue: QUEUE });
 }
 
 function handleSummaryJob(io) {
@@ -65,56 +68,71 @@ function handleSummaryJob(io) {
 }
 
 async function processSummaryJob(io, job) {
-  const { projectId, name, category, description, adminAddress } = job.data;
+  const { projectId, name, category, description, adminAddress, correlationId } = job.data;
 
-  let summaryResult;
-  try {
-    summaryResult = await generateProjectSummary({ name, category, description });
-  } catch (err) {
-    if (err.code === "MISSING_API_KEY") {
-      // Permanent misconfiguration — log and give up without retrying.
-      console.error("[summaryQueue] ANTHROPIC_API_KEY not set; skipping job", projectId);
-      return;
+  // Re-enter the original correlation context so every log line emitted
+  // during this job (including retries in later sessions) carries the id
+  // that was set when the HTTP request that triggered the job was handled.
+  // runWithCorrelationId is a no-op when correlationId is falsy (jobs
+  // enqueued before this change have no id).
+  const run = (fn) =>
+    correlationId ? runWithCorrelationId(correlationId, fn) : fn();
+
+  await run(async () => {
+    const jobLogger = logger.child({ projectId, jobId: job.id });
+    jobLogger.info({ msg: "summary job started" });
+
+    let summaryResult;
+    try {
+      summaryResult = await generateProjectSummary({ name, category, description });
+    } catch (err) {
+      if (err.code === "MISSING_API_KEY") {
+        // Permanent misconfiguration — log and give up without retrying.
+        jobLogger.error({ msg: "ANTHROPIC_API_KEY not set; skipping job" });
+        return;
+      }
+      throw err; // pg-boss will retry according to retryLimit, then dead-letter
     }
-    throw err; // pg-boss will retry according to retryLimit, then dead-letter
-  }
 
-  const sourceHash = crypto
-    .createHash("sha256")
-    .update(description || "")
-    .digest("hex");
+    const sourceHash = crypto
+      .createHash("sha256")
+      .update(description || "")
+      .digest("hex");
 
-  const updated = await pool.query(
-    `UPDATE projects
-        SET ai_summary              = $1,
-            ai_summary_generated_at = NOW(),
-            ai_summary_model        = $2,
-            ai_summary_source_hash  = $3,
-            updated_at              = NOW()
-      WHERE id = $4
-      RETURNING ai_summary, ai_summary_generated_at, ai_summary_model`,
-    [summaryResult.summary, summaryResult.model, sourceHash, projectId],
-  );
+    const updated = await pool.query(
+      `UPDATE projects
+          SET ai_summary              = $1,
+              ai_summary_generated_at = NOW(),
+              ai_summary_model        = $2,
+              ai_summary_source_hash  = $3,
+              updated_at              = NOW()
+        WHERE id = $4
+        RETURNING ai_summary, ai_summary_generated_at, ai_summary_model`,
+      [summaryResult.summary, summaryResult.model, sourceHash, projectId],
+    );
 
-  const row = updated.rows[0];
-  if (!row) return; // project was deleted while job was queued
+    const row = updated.rows[0];
+    if (!row) return; // project was deleted while job was queued
 
-  if (io) {
-    io.emit("ai_summary_ready", {
-      projectId,
-      aiSummary:            row.ai_summary,
-      aiSummaryGeneratedAt: new Date(row.ai_summary_generated_at).toISOString(),
-      aiSummaryModel:       row.ai_summary_model,
+    if (io) {
+      io.emit("ai_summary_ready", {
+        projectId,
+        aiSummary:            row.ai_summary,
+        aiSummaryGeneratedAt: new Date(row.ai_summary_generated_at).toISOString(),
+        aiSummaryModel:       row.ai_summary_model,
+      });
+    }
+
+    logAdminAction({
+      actor: adminAddress || "system",
+      action: "project.summary.generated",
+      targetType: "project",
+      targetId: projectId,
+      metadata: { model: summaryResult.model },
+      ipAddress: null,
     });
-  }
 
-  logAdminAction({
-    actor: adminAddress || "system",
-    action: "project.summary.generated",
-    targetType: "project",
-    targetId: projectId,
-    metadata: { model: summaryResult.model },
-    ipAddress: null,
+    jobLogger.info({ msg: "summary job completed", model: summaryResult.model });
   });
 }
 
@@ -133,12 +151,14 @@ async function handlePermanentFailure(jobs) {
 async function recordPermanentFailure(job) {
   const { projectId, ...payload } = job.data || {};
   const error = job.output || {};
+  const correlationId = payload.correlationId;
 
-  console.error(
-    "[summaryQueue] job permanently failed after exhausting retries:",
-    projectId,
-    error.message || "unknown error",
-  );
+  const failLogger = logger.child({ projectId, ...(correlationId && { correlationId }) });
+
+  failLogger.error({
+    msg: "job permanently failed after exhausting retries",
+    error: error.message || "unknown error",
+  });
 
   try {
     await pool.query(
@@ -147,7 +167,7 @@ async function recordPermanentFailure(job) {
       [uuid(), projectId, JSON.stringify(payload), error.message || null, error.stack || null],
     );
   } catch (err) {
-    console.error("[summaryQueue] failed to record permanent job failure:", err.message);
+    failLogger.error({ msg: "failed to record permanent job failure", error: err.message });
   }
 
   await module.exports.notifyRepeatedFailure({
@@ -167,7 +187,7 @@ async function recordPermanentFailure(job) {
  */
 async function notifyRepeatedFailure({ projectId, errorMessage, retryLimit }) {
   if (!ALERT_WEBHOOK_URL) {
-    console.warn("[summaryQueue] SUMMARY_FAILURE_ALERT_WEBHOOK_URL not set — skipping alert");
+    logger.warn({ msg: "SUMMARY_FAILURE_ALERT_WEBHOOK_URL not set — skipping alert", projectId });
     return;
   }
 
@@ -183,7 +203,7 @@ async function notifyRepeatedFailure({ projectId, errorMessage, retryLimit }) {
       }),
     });
   } catch (err) {
-    console.error("[summaryQueue] failed to deliver failure alert:", err.message);
+    logger.error({ msg: "failed to deliver failure alert", error: err.message });
   }
 }
 
@@ -198,11 +218,16 @@ async function enqueueAISummary(projectId, projectData) {
   if (!boss) {
     throw new Error("summaryQueue not started — call start(io) first");
   }
+  // Capture the correlation id from the current HTTP-request context
+  // (AsyncLocalStorage) and embed it in the job payload so the background
+  // worker can re-enter the same context even sessions later.
+  const correlationId = getCorrelationId();
   const jobId = await boss.send(
     QUEUE,
-    { projectId, ...projectData },
+    { projectId, ...projectData, ...(correlationId && { correlationId }) },
     { retryLimit: RETRY_LIMIT, retryDelay: RETRY_DELAY, deadLetter: DEAD_LETTER_QUEUE },
   );
+  logger.info({ msg: "AI summary job enqueued", projectId, jobId });
   return jobId;
 }
 

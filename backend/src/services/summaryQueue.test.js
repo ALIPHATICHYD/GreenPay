@@ -22,9 +22,26 @@ jest.mock("./audit", () => ({
   logAdminAction: jest.fn(),
 }));
 
+// Stub the logger so console output stays quiet during tests but we can
+// verify that log calls carry the expected structure.
+jest.mock("../utils/logger", () => {
+  const loggerMock = {
+    info:  jest.fn(),
+    warn:  jest.fn(),
+    error: jest.fn(),
+    child: jest.fn().mockImplementation(() => loggerMock),
+  };
+  return {
+    logger: loggerMock,
+    getCorrelationId: jest.fn().mockReturnValue(undefined),
+    runWithCorrelationId: jest.fn().mockImplementation((_id, fn) => fn()),
+  };
+});
+
 const pool = require("../db/pool");
 const PgBoss = require("pg-boss");
 const { generateProjectSummary } = require("./claude");
+const { getCorrelationId } = require("../utils/logger");
 const summaryQueue = require("./summaryQueue");
 
 function getBossInstance() {
@@ -69,6 +86,38 @@ describe("summaryQueue", () => {
         expect.objectContaining({ projectId: "project-1", name: "Reef Cleanup" }),
         expect.objectContaining({ retryLimit: 3, retryDelay: 10, deadLetter: "ai-summary-dlq" }),
       );
+    });
+
+    it("includes correlationId in the job payload when one is present in context", async () => {
+      // Simulate a request context where a correlation id has been set.
+      getCorrelationId.mockReturnValueOnce("cid-enqueue-test");
+
+      await summaryQueue.start(null);
+      const boss = getBossInstance();
+
+      await summaryQueue.enqueueAISummary("project-2", {
+        name: "Solar",
+        category: "energy",
+        description: "Solar panels",
+      });
+
+      expect(boss.send).toHaveBeenCalledWith(
+        "ai-summary",
+        expect.objectContaining({ projectId: "project-2", correlationId: "cid-enqueue-test" }),
+        expect.any(Object),
+      );
+    });
+
+    it("omits correlationId from the payload when no context is set", async () => {
+      getCorrelationId.mockReturnValue(undefined);
+
+      await summaryQueue.start(null);
+      const boss = getBossInstance();
+
+      await summaryQueue.enqueueAISummary("project-3", { name: "x", category: "x", description: "x" });
+
+      const sentPayload = boss.send.mock.calls.at(-1)[1];
+      expect(sentPayload).not.toHaveProperty("correlationId");
     });
   });
 
