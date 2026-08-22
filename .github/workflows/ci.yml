@@ -307,6 +307,12 @@ jobs:
       - uses: ./.github/actions/setup-node-install
         with:
           working-directory: frontend
+      # The frontend build compiles shared/i18n, which resolves its own
+      # dependencies from shared/node_modules. Without this the build fails on
+      # a missing intl-messageformat, exactly as it does in the frontend job.
+      - name: Install shared dependencies
+        run: npm install
+        working-directory: shared
       - name: Backend real-transaction integration test
         working-directory: backend
         run: npx jest src/services/indexerService.integration.test.js src/routes/leaderboard.integration.test.js --runInBand
