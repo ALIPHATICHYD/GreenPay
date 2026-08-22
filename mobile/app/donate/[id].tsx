@@ -257,12 +257,20 @@ export default function DonateScreen() {
       const server = new StellarServer(HORIZON_URL);
       const sourceAccount = await server.loadAccount(publicKey);
 
-      const transaction = buildDonationPaymentTransaction({
-        sourceAccount,
-        destination: selectedProject.walletAddress,
-        amount: formattedAmount,
-        projectId: selectedProject.id,
-      });
+      const transaction = new TransactionBuilder(sourceAccount, {
+        fee: '100',
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          Operation.payment({
+            destination: selectedProject.walletAddress,
+            asset: Asset.native(),
+            amount: formattedAmount,
+          })
+        )
+        .addMemo(Memo.text(`GreenPay:${selectedProject.id.slice(0, 16)}`))
+        .setTimeout(60)
+        .build();
 
       transaction.sign(keypair);
 
@@ -389,9 +397,7 @@ export default function DonateScreen() {
     <ScrollView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Donate to {selectedProject?.name || 'a project'}</Text>
-        <Text style={styles.subtitle}>
-          Choose a project and donate XLM on {getExpectedNetworkDisplayName()}.
-        </Text>
+        <Text style={styles.subtitle}>Choose a project and donate XLM on {manifest.network}.</Text>
       </View>
 
       <View style={styles.selectorCard}>
