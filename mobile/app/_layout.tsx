@@ -14,6 +14,7 @@ import { useFonts, Lora_700Bold } from '@expo-google-fonts/lora';
 import { useColorScheme } from 'react-native';
 import { ThemeProvider, themes } from './theme';
 import { useDeepLink } from '../hooks/useDeepLink';
+import { useRecurringReminders } from '../hooks/useRecurringReminders';
 import { AppInitProvider, useAppInit } from '../src/context/AppInitContext';
 import { assertStellarNetworkConfigConsistency } from '../utils/stellarNetwork';
 
@@ -24,6 +25,7 @@ import { SecurityWarningBanner } from '../components/SecurityWarningBanner';
 
 function DeepLinkHandler() {
   useDeepLink();
+  useRecurringReminders();
   return null;
 }
 
