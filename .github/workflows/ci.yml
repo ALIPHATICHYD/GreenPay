@@ -25,6 +25,9 @@ jobs:
       # docs/getting-started.md §7 still exists. No toolchains needed — this only
       # checks that the commands the doc names are still declared.
       - run: node scripts/check-documented-commands.js
+      # Guards against source files committed in a non-UTF-8 encoding, which
+      # silently breaks parsers while still looking like text in a diff.
+      - run: node scripts/check-source-encoding.js
 
   frontend:
     name: Frontend (Next.js)
