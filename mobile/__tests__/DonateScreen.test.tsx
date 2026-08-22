@@ -236,7 +236,12 @@ describe('DonateScreen – offline queueing', () => {
 // the real signing path (only `Server` is mocked, per @stellar/stellar-sdk
 // jest.mock above), unlike the offline-queueing tests which never reach
 // Keypair.fromSecret().
-const REAL_KEYPAIR = Keypair.fromSecret('SBI47VVMEHV2IC6NKD6RYGOURFGZK5CN7ARSODC4VDKGJZM7DYAQLJIB');
+//
+// Derived from a fixed all-zero seed rather than a literal secret string, so
+// the suite stays deterministic without committing a usable Stellar secret to
+// the repository. Anyone can reproduce it: Keypair.fromRawEd25519Seed of 32
+// zero bytes.
+const REAL_KEYPAIR = Keypair.fromRawEd25519Seed(Buffer.alloc(32));
 const REAL_PUBLIC_KEY = REAL_KEYPAIR.publicKey();
 
 describe('DonateScreen – completing a queued donation ("Complete now")', () => {

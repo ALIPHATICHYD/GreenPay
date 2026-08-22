@@ -30,3 +30,21 @@ paths = [
 regexes = [
   '''(?i)(mock|dummy|fixture|example|test|aaaaaaaa|bbbbbbbb|cccccccc)''',
 ]
+
+# Stellar secret seeds are this project's most sensitive credential type and
+# the default ruleset does not detect them at all — verified by planting one
+# and watching a full scan report no leaks.
+[[rules]]
+id = "stellar-secret-seed"
+description = "Stellar secret seed (ed25519 private key)"
+regex = '''\bS[A-Z2-7]{55}\b'''
+keywords = ["S"]
+
+[[rules.allowlists]]
+description = """
+The logger's redaction guard tests need a secret-shaped fixture to prove that
+private keys are scrubbed. This is a sequential-alphabet dummy, not a
+checksum-valid seed, and is matched by its exact literal value.
+"""
+regexTarget = "match"
+regexes = ['''SABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW''']
