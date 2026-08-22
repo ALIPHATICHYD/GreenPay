@@ -25,7 +25,7 @@ export default function AISummaryFailuresPage() {
     setLoading(true);
     setError(null);
     fetchAISummaryFailures()
-      .then((res) => setFailures(res.data))
+      .then(setFailures)
       .catch((e: unknown) => setError((e as Error).message || "Failed to load failed jobs"))
       .finally(() => setLoading(false));
   }, []);
