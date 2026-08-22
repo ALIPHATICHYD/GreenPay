@@ -68,10 +68,28 @@ describe("POST /api/admin/login", () => {
   });
 
   it("returns 503 when ADMIN_PASSWORD is not configured", async () => {
+    const saved = process.env.ADMIN_PASSWORD;
     delete process.env.ADMIN_PASSWORD;
-    const res = await request(app).post("/api/admin/login").send({ username: "admin", password: "testpass" });
+
+    // config/env validates and freezes the environment the first time it is
+    // required, so clearing the variable on an already-built router has no
+    // effect. Rebuild it in a fresh module registry to observe the change.
+    let unconfiguredApp;
+    jest.isolateModules(() => {
+      const { apiEnvelope: envelope, errorHandler: handler } = require("../middleware/apiEnvelope");
+      unconfiguredApp = express();
+      unconfiguredApp.use(express.json());
+      unconfiguredApp.use(envelope);
+      unconfiguredApp.use("/api/admin", require("./admin"));
+      unconfiguredApp.use(handler);
+    });
+
+    const res = await request(unconfiguredApp)
+      .post("/api/admin/login")
+      .send({ username: "admin", password: "testpass" });
     expect(res.status).toBe(503);
-    process.env.ADMIN_PASSWORD = "testpass";
+
+    process.env.ADMIN_PASSWORD = saved;
   });
 });
 

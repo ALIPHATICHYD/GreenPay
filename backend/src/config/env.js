@@ -66,7 +66,7 @@ const schema = {
     required: false,
     type: "boolean-string",
     description:
-      'Enable/disable SSL for PostgreSQL (auto-enabled in production for remote hosts if not explicitly set)',
+      "Enable/disable SSL for PostgreSQL (auto-enabled in production for remote hosts if not explicitly set)",
   },
 
   // ── Stellar Network ───────────────────────────────────────────────────────

@@ -157,10 +157,10 @@ async function startServer() {
     logger.error({ msg: "indexer startup error", error: err.message })
   );
 
-  server.listen(PORT, () => {
+  server.listen(env.port, () => {
     logger.info({
       msg: "server started",
-      port: PORT,
+      port: env.port,
       network: env.stellarNetwork,
     });
   });

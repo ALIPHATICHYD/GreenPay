@@ -2165,6 +2165,14 @@ mod tests {
     fn test_double_resolve_fails() {
         let (env, cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &0u32);
+
+        // Cast one eligible vote so the first resolve clears the quorum check
+        // and actually resolves the proposal. Without a vote the first call
+        // panics on quorum and the second call is never reached.
+        let voter = Address::generate(&env);
+        grant_badge_with_amount(&env, &cid, &voter, 100 * STROOP);
+        client.vote_verify_project(&voter, &pid, &true);
+
         extend_ttl(&env, &cid);
         env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
         client.resolve_proposal(&pid);
