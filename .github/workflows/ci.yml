@@ -37,6 +37,9 @@ jobs:
       - uses: ./.github/actions/setup-node-install
         with:
           working-directory: frontend
+      - name: Install shared dependencies
+        run: npm install
+        working-directory: shared
       - name: npm audit (fail on high/critical)
         run: npx --yes audit-ci@7.1.0 --high --package-manager npm --config .audit-ci.json
       - run: npm run type-check
@@ -58,6 +61,9 @@ jobs:
       - uses: ./.github/actions/setup-node-install
         with:
           working-directory: frontend
+      - name: Install shared dependencies
+        run: npm install
+        working-directory: shared
       - run: npx playwright install chromium
       - run: npm run build
         env:
@@ -365,7 +371,7 @@ jobs:
             context: ./backend
             dockerfile: ./backend/Dockerfile
           - image: greenpay-frontend
-            context: ./frontend
+            context: .
             dockerfile: ./frontend/Dockerfile
           - image: greenpay-scheduler
             context: ./scheduler
