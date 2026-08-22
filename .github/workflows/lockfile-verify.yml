@@ -80,3 +80,8 @@ jobs:
           test -f backend/Dockerfile
           test -f frontend/Dockerfile
           test -f scheduler/Dockerfile
+
+      - name: Verify go.mod and go.sum clean working tree
+        run: |
+          cd scheduler
+          git diff --exit-code go.mod go.sum
