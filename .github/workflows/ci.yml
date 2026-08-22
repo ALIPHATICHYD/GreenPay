@@ -124,6 +124,10 @@ jobs:
           key: ${{ runner.os }}-cargo-contracts-${{ hashFiles('contracts/**/Cargo.lock') }}
       - run: cargo check --workspace
       - run: cargo test --workspace
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Rust vulnerability scan
+        run: cargo audit
       - run: cargo build --workspace --target wasm32-unknown-unknown --release
       - uses: actions/upload-artifact@v4
         with:
@@ -151,6 +155,15 @@ jobs:
             exit 1
           fi
       - run: go vet ./...
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      # NOTE: as of this PR, this step is expected to fail — scheduler has
+      # ~50 known findings, most anchored on k8s.io/kubernetes and Go
+      # stdlib patch versions. Tracked as a follow-up (needs a
+      # k8s.io/kubernetes major-version bump, out of scope for this
+      # CI-hygiene PR). See PR description for detail.
+      - name: Go vulnerability scan
+        run: govulncheck ./...
       - run: go test -v ./...
       - run: go build -v ./...
 

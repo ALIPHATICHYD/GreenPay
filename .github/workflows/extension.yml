@@ -26,6 +26,10 @@ jobs:
         with:
           working-directory: extension
 
+      - name: npm audit (fail on high/critical)
+        working-directory: extension
+        run: npx --yes audit-ci@7.1.0 --high --package-manager npm
+
       - name: Simulate service-worker termination and test recovery
         working-directory: extension
         run: npm test
