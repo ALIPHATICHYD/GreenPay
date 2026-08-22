@@ -26,7 +26,7 @@ mod fuzz_tests;
  */
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, IntoVal,
-    String, TryFromVal, Val,
+    String, TryFromVal, Val, Vec,
 };
 
 // ─── Badge tiers (on-chain) ───────────────────────────────────────────────────
@@ -85,12 +85,19 @@ pub struct ImpactNFT {
 }
 
 /// A community voting proposal to verify a project.
+///
+/// Vote weights use `i128` to accumulate `total_donated` values (stored in
+/// stroops) without overflow risk.  A voter contributing 2 000 XLM
+/// (EarthGuardian) supplies 2 000 × 10_000_000 = 2×10¹⁰ weight units, still
+/// orders of magnitude below i128::MAX even across thousands of voters.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct VoteProposal {
     pub project_id: String,
-    pub votes_for: u32,
-    pub votes_against: u32,
+    /// Sum of `total_donated` (stroops) of all voters who approved.
+    pub votes_for: i128,
+    /// Sum of `total_donated` (stroops) of all voters who rejected.
+    pub votes_against: i128,
     pub deadline_ledger: u32,
     pub resolved: bool,
 }
@@ -116,6 +123,14 @@ pub enum DataKey {
     // Set once by admin via `set_dao_contract`; only that address may call
     // `verify_project` directly (bypassing the legacy badge-holder voting).
     DaoContract,
+    // Impact NFT token registry (SEP-41-inspired minimal NFT interface — see
+    // `name`/`symbol`/`decimals`/`balance_of`/`owner_of`/`transfer`).
+    // `NftCount` is a single contract-wide counter (instance storage); the
+    // per-token and per-owner records grow unbounded and, like every other
+    // per-entity key, live in persistent storage.
+    NftCount,
+    NftMeta(u32),
+    NftOwnerTokens(Address),
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -150,6 +165,29 @@ pub const MAX_CO2_PER_XLM: u32 = STROOP as u32;
 
 /// Largest single donation exercised in property tests (1 billion XLM).
 pub const MAX_REALISTIC_DONATION_STROOPS: i128 = 1_000_000_000 * STROOP;
+
+/// Minimum `total_donated` (in stroops) required to participate in
+/// project-verification voting.
+///
+/// # Sybil-resistance rationale
+///
+/// The legacy Seedling threshold (10 XLM) allowed an attacker to acquire
+/// voting weight for ~$1–3 per address.  Raising the eligibility bar to
+/// 100 XLM (Tree tier) increases the per-Sybil cost by 10× while keeping
+/// genuine community donors eligible.  Combined with *weighting* every vote
+/// by the voter's `total_donated` value, a single large donor now
+/// economically outweighs many minimum-threshold Sybil accounts:
+///
+///   • 1 address with 2 000 XLM (EarthGuardian) contributes 2 000 × STROOP
+///     weight units.
+///   • 20 Sybil addresses each at exactly 100 XLM contribute only
+///     20 × 100 × STROOP = 2 000 × STROOP — a tie rather than a win.
+///
+/// Cost-of-attack at the Tree threshold (100 XLM ≈ $10–30 at typical XLM
+/// prices): to out-vote a single 2 000 XLM donor, an attacker must deploy
+/// > 20 funded addresses, costing > 2 000 XLM — identical to simply being a
+/// large donor, eliminating the asymmetric advantage of Sybil identities.
+pub const VOTE_ELIGIBILITY_STROOP: i128 = 100 * STROOP; // 100 XLM (Tree tier)
 
 // 7 days × 24 h × 3600 s ÷ 5 s per ledger ≈ 120_960 ledgers — used as the
 // default when `create_proposal` is called without an explicit duration.
@@ -188,7 +226,28 @@ fn calculate_badge(total_stroops: i128) -> BadgeTier {
     }
 }
 
-// ─── Persistent storage helpers ───────────────────────────────────────────────
+/// Returns the vote weight for a donor whose `total_donated` (in stroops) is
+/// `total_donated`.
+///
+/// Weight equals the donor's cumulative `total_donated` value (stroops), so a
+/// voter who has donated twice as much always carries twice the vote weight.
+/// Donors below the Tree tier (< 100 XLM / `VOTE_ELIGIBILITY_STROOP`) are
+/// ineligible and receive weight 0; callers must reject them before counting.
+///
+/// # Overflow analysis
+/// `total_donated` is bounded by the `DonationCount` u32 counter ×
+/// `MAX_REALISTIC_DONATION_STROOPS` (1 billion XLM = 10¹⁶ stroops).  Even
+/// at u32::MAX donations of 1 billion XLM each the product would exceed i128
+/// capacity, but `DonationCount` is a u32 so the aggregate is safely within
+/// i128 for any realistic scenario.  The `VoteProposal.votes_for/against`
+/// accumulators use `checked_add` to surface any theoretical overflow.
+fn vote_weight_for_donor(total_donated: i128) -> i128 {
+    if total_donated < VOTE_ELIGIBILITY_STROOP {
+        0
+    } else {
+        total_donated
+    }
+}
 //
 // Per-entity records (Project, DonorStats, ImpactNFT, HasDonated, Proposal,
 // HasVoted) live in *persistent* storage, not instance storage. Instance storage
@@ -274,6 +333,117 @@ where
     env.storage()
         .persistent()
         .extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND);
+}
+
+// ─── Impact NFT registry ─────────────────────────────────────────────────────
+//
+// Every minted badge is a real, independently-addressable non-fungible token
+// identified by a monotonically increasing `u32` token id. Three pieces of
+// storage make the token discoverable through the standard NFT interface
+// (`name`/`symbol`/`decimals`/`balance_of`/`owner_of`/`transfer`):
+//
+//   `DataKey::NftCount`                  — total minted; also the next id (1-based).
+//   `DataKey::NftMeta(u32)`              — canonical per-token metadata (owner +
+//                                          badge provenance: tier, total_donated
+//                                          at mint, minted_at_ledger).
+//   `DataKey::NftOwnerTokens(Address)`   — ownership index (ids owned by `Address`).
+//
+// The legacy `DataKey::ImpactNFT(Address, BadgeTier)` entry is still written on
+// mint (it is the pre-interface layout that `has_nft` used to read) and is
+// lazily backfilled into the registry on first query, so badges minted before
+// this interface existed remain visible to `balance_of`, `owner_of`, and
+// `transfer`.
+
+/// Create a new badge token for `donor` at `tier` and return its token id.
+///
+/// Registers the metadata, updates the owner's token index, and keeps the
+/// legacy `ImpactNFT(donor, tier)` marker in sync so pre-interface readers
+/// (and `has_nft`) keep working.
+fn mint_badge_token(
+    env: &Env,
+    donor: &Address,
+    tier: &BadgeTier,
+    total_donated: i128,
+    minted_at_ledger: u32,
+) -> u32 {
+    let count: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::NftCount)
+        .unwrap_or(0);
+    let token_id = count.checked_add(1).expect("NFT token id overflow");
+    env.storage().instance().set(&DataKey::NftCount, &token_id);
+
+    let meta = ImpactNFT {
+        owner: donor.clone(),
+        tier: tier.clone(),
+        total_donated,
+        minted_at_ledger,
+    };
+    write_persistent(env, &DataKey::NftMeta(token_id), &meta);
+    write_persistent(
+        env,
+        &DataKey::ImpactNFT(donor.clone(), tier.clone()),
+        &meta,
+    );
+
+    let mut owned: Vec<u32> = read_persistent(env, &DataKey::NftOwnerTokens(donor.clone()))
+        .unwrap_or_else(|| Vec::new(env));
+    owned.push_back(token_id);
+    write_persistent(env, &DataKey::NftOwnerTokens(donor.clone()), &owned);
+
+    token_id
+}
+
+/// Resolve the token id for a `(donor, tier)` badge, or `None`.
+///
+/// Checks the ownership index first so the answer stays correct after a
+/// transfer. If the badge only exists as a legacy `ImpactNFT(donor, tier)`
+/// marker (pre-interface layout), it is transparently backfilled into the
+/// token registry and the new token id is returned.
+fn find_token_id(env: &Env, donor: &Address, tier: &BadgeTier) -> Option<u32> {
+    let owned_opt: Option<Vec<u32>> =
+        read_persistent(env, &DataKey::NftOwnerTokens(donor.clone()));
+    if let Some(owned) = owned_opt {
+        for id in owned.iter() {
+            let meta: ImpactNFT =
+                read_persistent(env, &DataKey::NftMeta(id)).expect("owned token metadata missing");
+            if &meta.tier == tier {
+                return Some(id);
+            }
+        }
+    }
+    if has_persistent(env, &DataKey::ImpactNFT(donor.clone(), tier.clone())) {
+        let meta: ImpactNFT =
+            read_persistent(env, &DataKey::ImpactNFT(donor.clone(), tier.clone()))
+                .expect("legacy NFT marker disappeared");
+        return Some(mint_badge_token(
+            env,
+            donor,
+            tier,
+            meta.total_donated,
+            meta.minted_at_ledger,
+        ));
+    }
+    None
+}
+
+/// Read the ownership index for `owner` (empty when no entry exists).
+fn owned_token_ids(env: &Env, owner: &Address) -> Vec<u32> {
+    read_persistent(env, &DataKey::NftOwnerTokens(owner.clone())).unwrap_or_else(|| Vec::new(env))
+}
+
+/// Backfill any pre-interface badges owned by `owner` into the token registry
+/// (at most one badge per tier — the four known tiers).
+fn backfill_legacy_badges(env: &Env, owner: &Address) {
+    for tier in [
+        BadgeTier::Seedling,
+        BadgeTier::Tree,
+        BadgeTier::Forest,
+        BadgeTier::EarthGuardian,
+    ] {
+        find_token_id(env, owner, &tier);
+    }
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -474,17 +644,19 @@ impl GreenPayContract {
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
         write_persistent(&env, &DataKey::DonorStats(donor.clone()), &donor_stats);
 
-        // Auto-mint an Impact NFT when a donor reaches a new badge tier.
+        // Auto-mint an Impact NFT when a donor reaches a new badge tier. The
+        // mint registers the badge in the NFT token registry so it is
+        // discoverable through the standard NFT interface (see
+        // `balance_of`/`owner_of`/`transfer`), not just `has_nft`.
         if donor_stats.badge != BadgeTier::None && donor_stats.badge != prev_badge {
-            let nft_key = DataKey::ImpactNFT(donor.clone(), donor_stats.badge.clone());
-            if !has_persistent(&env, &nft_key) {
-                let nft = ImpactNFT {
-                    owner: donor.clone(),
-                    tier: donor_stats.badge.clone(),
-                    total_donated: donor_stats.total_donated,
-                    minted_at_ledger: env.ledger().sequence(),
-                };
-                write_persistent(&env, &nft_key, &nft);
+            if find_token_id(&env, &donor, &donor_stats.badge).is_none() {
+                mint_badge_token(
+                    &env,
+                    &donor,
+                    &donor_stats.badge,
+                    donor_stats.total_donated,
+                    env.ledger().sequence(),
+                );
                 env.events().publish(
                     (symbol_short!("nft_mint"), donor.clone()),
                     donor_stats.badge.clone(),
@@ -593,8 +765,20 @@ impl GreenPayContract {
             .expect("Not initialized")
     }
 
-    // ─── Placeholders ─────────────────────────────────────────────────────────
+    // ─── Impact NFT interface ─────────────────────────────────────────────────
+    //
+    // A minimal non-fungible-token interface in the spirit of SEP-41 (the
+    // Soroban Token Interface). Unlike a fungible token, each minted badge is
+    // a distinct, non-fungible token addressed by a `u32` token id, so the
+    // interface exposes the NFT-style `owner_of` / `balance_of` / `transfer`
+    // operations that wallets, explorers, and marketplaces expect. Metadata is
+    // stored fully on-chain — see `token_metadata`. `mint_impact_nft` and
+    // `has_nft` remain as the product-specific badge helpers; both delegate to
+    // the same registry.
 
+    /// Mint the donor's badge NFT for `tier` on demand (auto-mint in
+    /// `donate` normally covers this). The minted badge is a real token in the
+    /// NFT registry, so wallets and marketplaces can discover it.
     pub fn mint_impact_nft(env: Env, donor: Address, tier: BadgeTier) {
         donor.require_auth();
         if tier == BadgeTier::None {
@@ -614,25 +798,151 @@ impl GreenPayContract {
         if stats.badge != tier {
             panic!("Tier does not match donor's current badge");
         }
-
-        let key = DataKey::ImpactNFT(donor.clone(), tier.clone());
-        if has_persistent(&env, &key) {
+        if find_token_id(&env, &donor, &tier).is_some() {
             panic!("NFT already minted for this tier");
         }
 
-        let nft = ImpactNFT {
-            owner: donor.clone(),
-            tier: tier.clone(),
-            total_donated: stats.total_donated,
-            minted_at_ledger: env.ledger().sequence(),
-        };
-        write_persistent(&env, &key, &nft);
+        mint_badge_token(
+            &env,
+            &donor,
+            &tier,
+            stats.total_donated,
+            env.ledger().sequence(),
+        );
         env.events()
             .publish((symbol_short!("nft_mint"), donor), tier);
     }
 
+    /// Whether `donor` holds a badge token for `tier`. Stays correct across
+    /// transfers and sees pre-interface badges via the legacy backfill.
     pub fn has_nft(env: Env, donor: Address, tier: BadgeTier) -> bool {
-        has_persistent(&env, &DataKey::ImpactNFT(donor, tier))
+        find_token_id(&env, &donor, &tier).is_some()
+    }
+
+    /// Collection name (SEP-41-style metadata).
+    pub fn name(env: Env) -> String {
+        String::from_str(&env, "GreenPay Impact Badge")
+    }
+
+    /// Collection symbol (SEP-41-style metadata).
+    pub fn symbol(env: Env) -> String {
+        String::from_str(&env, "GPB")
+    }
+
+    /// Decimals are 0: badge tokens are indivisible (SEP-41-style metadata).
+    pub fn decimals(_env: Env) -> u32 {
+        0
+    }
+
+    /// Number of badge tokens minted so far.
+    pub fn total_supply(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::NftCount)
+            .unwrap_or(0)
+    }
+
+    /// Number of badge tokens owned by `owner`. Pre-interface badges are
+    /// counted too (lazy legacy backfill).
+    pub fn balance_of(env: Env, owner: Address) -> u32 {
+        backfill_legacy_badges(&env, &owner);
+        owned_token_ids(&env, &owner).len()
+    }
+
+    /// Address currently owning `token_id`.
+    pub fn owner_of(env: Env, token_id: u32) -> Address {
+        let meta: ImpactNFT =
+            read_persistent(&env, &DataKey::NftMeta(token_id)).expect("Token does not exist");
+        meta.owner
+    }
+
+    /// Token ids owned by `owner`. Pre-interface badges are included via the
+    /// lazy legacy backfill.
+    pub fn tokens_of(env: Env, owner: Address) -> Vec<u32> {
+        backfill_legacy_badges(&env, &owner);
+        owned_token_ids(&env, &owner)
+    }
+
+    /// Full on-chain metadata for `token_id` (owner, tier, total_donated,
+    /// minted_at_ledger).
+    pub fn token_metadata(env: Env, token_id: u32) -> ImpactNFT {
+        read_persistent(&env, &DataKey::NftMeta(token_id)).expect("Token does not exist")
+    }
+
+    /// Badge tier represented by `token_id` (convenience for display).
+    pub fn token_tier(env: Env, token_id: u32) -> BadgeTier {
+        let meta: ImpactNFT =
+            read_persistent(&env, &DataKey::NftMeta(token_id)).expect("Token does not exist");
+        meta.tier
+    }
+
+    /// Resolve the token id for a donor's `tier` badge, if minted. Works for
+    /// pre-interface badges too (legacy backfill). Returns `None` when the
+    /// badge has been transferred away or never minted.
+    pub fn get_token_id(env: Env, donor: Address, tier: BadgeTier) -> Option<u32> {
+        find_token_id(&env, &donor, &tier)
+    }
+
+    /// Transfer a badge token to a new owner. Only the current owner may
+    /// transfer. Emits an `nft_xfr` event.
+    pub fn transfer(env: Env, from: Address, to: Address, token_id: u32) {
+        from.require_auth();
+        if from == to {
+            return;
+        }
+        let mut meta: ImpactNFT =
+            read_persistent(&env, &DataKey::NftMeta(token_id)).expect("Token does not exist");
+        if meta.owner != from {
+            panic!("Only the token owner can transfer it");
+        }
+        // Materialize any pre-interface badges the recipient already owns so a
+        // same-tier badge they earned themselves is never clobbered by the
+        // legacy-marker move below.
+        backfill_legacy_badges(&env, &to);
+        let tier = meta.tier.clone();
+        meta.owner = to.clone();
+        write_persistent(&env, &DataKey::NftMeta(token_id), &meta);
+
+        // Remove the token from the sender's ownership index.
+        let mut from_tokens: Vec<u32> = read_persistent(&env, &DataKey::NftOwnerTokens(from.clone()))
+            .expect("Sender does not own any tokens");
+        let mut removed = false;
+        for i in 0..from_tokens.len() {
+            if from_tokens.get(i) == Some(token_id) {
+                from_tokens.remove(i);
+                removed = true;
+                break;
+            }
+        }
+        assert!(removed, "Sender does not own token");
+        if from_tokens.is_empty() {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::NftOwnerTokens(from.clone()));
+        } else {
+            write_persistent(&env, &DataKey::NftOwnerTokens(from.clone()), &from_tokens);
+        }
+
+        // Add the token to the recipient's ownership index.
+        let mut to_tokens: Vec<u32> =
+            read_persistent(&env, &DataKey::NftOwnerTokens(to.clone())).unwrap_or_else(|| {
+                Vec::new(&env)
+            });
+        to_tokens.push_back(token_id);
+        write_persistent(&env, &DataKey::NftOwnerTokens(to.clone()), &to_tokens);
+
+        // Keep the legacy marker consistent so pre-interface readers of
+        // `ImpactNFT(donor, tier)` (and `has_nft`) follow the new owner.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::ImpactNFT(from.clone(), tier.clone()));
+        write_persistent(
+            &env,
+            &DataKey::ImpactNFT(to.clone(), tier.clone()),
+            &meta,
+        );
+
+        env.events().publish((symbol_short!("nft_xfr"), from, to), token_id);
     }
 
     // ─── DAO Integration ──────────────────────────────────────────────────────
@@ -793,7 +1103,19 @@ impl GreenPayContract {
 
     /// **DEPRECATED** — use `verify_project` via DAO governance instead.
     ///
-    /// Badge holders (≥ Seedling) cast a vote. One vote per address per proposal.
+    /// Casts a **weighted** vote on a project-verification proposal.
+    ///
+    /// # Sybil resistance
+    ///
+    /// Vote weight equals the voter's cumulative `total_donated` value in
+    /// stroops, so a donor who contributed 1 000 XLM carries 10× the weight
+    /// of a donor who contributed 100 XLM.  The eligibility threshold is
+    /// raised to `VOTE_ELIGIBILITY_STROOP` (100 XLM, Tree tier) — an
+    /// attacker must spend 100 XLM *per Sybil address* rather than 10 XLM,
+    /// and each address only contributes proportional weight, so the total
+    /// cost to out-vote a large legitimate donor equals that donor's own
+    /// stake.  One vote (of any weight) per address per proposal is still
+    /// enforced to prevent double-counting.
     pub fn vote_verify_project(env: Env, voter: Address, project_id: String, approve: bool) {
         voter.require_auth();
 
@@ -804,8 +1126,11 @@ impl GreenPayContract {
                 badge: BadgeTier::None,
                 co2_offset_grams: 0,
             });
-        if stats.badge == BadgeTier::None {
-            panic!("Only badge holders (Seedling or above) can vote");
+
+        // Compute weight; rejects donors below the Tree-tier eligibility bar.
+        let weight = vote_weight_for_donor(stats.total_donated);
+        if weight == 0 {
+            panic!("Insufficient donation stake to vote (Tree tier / 100 XLM minimum)");
         }
 
         let mut proposal: VoteProposal =
@@ -827,12 +1152,12 @@ impl GreenPayContract {
         if approve {
             proposal.votes_for = proposal
                 .votes_for
-                .checked_add(1)
+                .checked_add(weight)
                 .expect("votes_for overflow");
         } else {
             proposal.votes_against = proposal
                 .votes_against
-                .checked_add(1)
+                .checked_add(weight)
                 .expect("votes_against overflow");
         }
         write_persistent(&env, &DataKey::Proposal(project_id.clone()), &proposal);
@@ -842,8 +1167,13 @@ impl GreenPayContract {
 
     /// **DEPRECATED** — use `verify_project` via DAO governance instead.
     ///
-    /// Callable by anyone after the deadline. Resolves based on majority.
-    /// Emits proj_ver on approval, prop_rej on rejection.
+    /// Callable by anyone after the deadline. Resolves based on weighted
+    /// majority: `votes_for > votes_against` approves the project.
+    /// Emits `proj_ver` on approval, `prop_rej` on rejection (including ties).
+    ///
+    /// Requires that combined weight (`votes_for + votes_against`) is at least
+    /// `VOTE_ELIGIBILITY_STROOP` (i.e. at least one eligible vote was cast)
+    /// so a proposal with zero participation cannot silently self-approve.
     pub fn resolve_proposal(env: Env, project_id: String) {
         let mut proposal: VoteProposal =
             read_persistent(&env, &DataKey::Proposal(project_id.clone()))
@@ -853,6 +1183,14 @@ impl GreenPayContract {
         }
         if env.ledger().sequence() <= proposal.deadline_ledger {
             panic!("Voting window not yet closed");
+        }
+        // Require at least one eligible vote to have been cast.
+        let total_weight = proposal
+            .votes_for
+            .checked_add(proposal.votes_against)
+            .expect("total weight overflow");
+        if total_weight < VOTE_ELIGIBILITY_STROOP {
+            panic!("Quorum not reached: no eligible votes cast");
         }
         proposal.resolved = true;
         if proposal.votes_for > proposal.votes_against {
@@ -902,7 +1240,7 @@ mod tests {
     use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
     use soroban_sdk::{
         testutils::{Address as _, Ledger as _},
-        Address, Env, String,
+        vec, Address, Env, String,
     };
 
     // ─── Existing tests ───────────────────────────────────────────────────────
@@ -1272,15 +1610,41 @@ mod tests {
         (env, cid, client, admin, pid)
     }
 
-    /// Inject a Seedling badge directly into persistent storage for a voter.
+    /// Inject a Tree-tier badge directly into persistent storage for a voter.
+    ///
+    /// Uses 100 XLM (`VOTE_ELIGIBILITY_STROOP`) — the minimum stake required
+    /// by the weighted-voting system.  Tests that need a specific amount
+    /// should call `grant_badge_with_amount` instead.
     fn grant_badge(env: &Env, cid: &soroban_sdk::Address, voter: &Address) {
+        grant_badge_with_amount(env, cid, voter, 100 * STROOP);
+    }
+
+    /// Inject a donor record with an explicit `total_donated` (stroops) and
+    /// matching badge tier so governance tests can express precise vote weights.
+    fn grant_badge_with_amount(
+        env: &Env,
+        cid: &soroban_sdk::Address,
+        voter: &Address,
+        total_donated: i128,
+    ) {
+        let badge = if total_donated >= 2000 * STROOP {
+            BadgeTier::EarthGuardian
+        } else if total_donated >= 500 * STROOP {
+            BadgeTier::Forest
+        } else if total_donated >= 100 * STROOP {
+            BadgeTier::Tree
+        } else if total_donated >= 10 * STROOP {
+            BadgeTier::Seedling
+        } else {
+            BadgeTier::None
+        };
         env.as_contract(cid, || {
             env.storage().persistent().set(
                 &DataKey::DonorStats(voter.clone()),
                 &DonorStats {
-                    total_donated: 10 * STROOP,
+                    total_donated,
                     donation_count: 1,
-                    badge: BadgeTier::Seedling,
+                    badge,
                     co2_offset_grams: 0,
                 },
             );
@@ -1680,8 +2044,8 @@ mod tests {
         let (env, _cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &0u32);
         let p = client.get_proposal(&pid);
-        assert_eq!(p.votes_for, 0);
-        assert_eq!(p.votes_against, 0);
+        assert_eq!(p.votes_for, 0i128);
+        assert_eq!(p.votes_against, 0i128);
         assert!(!p.resolved);
         assert!(p.deadline_ledger > env.ledger().sequence());
     }
@@ -1699,20 +2063,32 @@ mod tests {
         let (env, cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &0u32);
         let voter = Address::generate(&env);
-        grant_badge(&env, &cid, &voter);
+        grant_badge(&env, &cid, &voter); // 100 XLM = 100 * STROOP weight
         client.vote_verify_project(&voter, &pid, &true);
         let p = client.get_proposal(&pid);
-        assert_eq!(p.votes_for, 1);
-        assert_eq!(p.votes_against, 0);
+        assert_eq!(p.votes_for, 100 * STROOP);
+        assert_eq!(p.votes_against, 0i128);
     }
 
     #[test]
-    #[should_panic(expected = "Only badge holders (Seedling or above) can vote")]
+    #[should_panic(expected = "Insufficient donation stake to vote (Tree tier / 100 XLM minimum)")]
     fn test_non_badge_holder_cannot_vote() {
         let (env, _cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &0u32);
         let non_donor = Address::generate(&env);
         client.vote_verify_project(&non_donor, &pid, &true);
+    }
+
+    /// A Seedling-tier donor (10 XLM, below the Tree threshold) must also be
+    /// rejected — it satisfies the old badge check but not the new stake bar.
+    #[test]
+    #[should_panic(expected = "Insufficient donation stake to vote (Tree tier / 100 XLM minimum)")]
+    fn test_seedling_holder_cannot_vote() {
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&admin, &pid, &0u32);
+        let seedling_donor = Address::generate(&env);
+        grant_badge_with_amount(&env, &cid, &seedling_donor, 10 * STROOP); // only 10 XLM
+        client.vote_verify_project(&seedling_donor, &pid, &true);
     }
 
     #[test]
@@ -1730,10 +2106,10 @@ mod tests {
     fn test_resolve_proposal_approved() {
         let (env, cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &0u32);
-        // 2 approve, 1 rejects
+        // 2 approve (100 XLM each = 200 * STROOP for), 1 rejects (100 XLM = 100 * STROOP against)
         for i in 0..3u32 {
             let voter = Address::generate(&env);
-            grant_badge(&env, &cid, &voter);
+            grant_badge(&env, &cid, &voter); // each voter has 100 XLM
             client.vote_verify_project(&voter, &pid, &(i < 2));
         }
         extend_ttl(&env, &cid);
@@ -1741,18 +2117,18 @@ mod tests {
         client.resolve_proposal(&pid);
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 2);
-        assert_eq!(p.votes_against, 1);
+        assert_eq!(p.votes_for, 200 * STROOP);
+        assert_eq!(p.votes_against, 100 * STROOP);
     }
 
     #[test]
     fn test_resolve_proposal_rejected() {
         let (env, cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &0u32);
-        // 1 approves, 2 reject
+        // 1 approves (100 XLM = 100 * STROOP for), 2 reject (100 XLM each = 200 * STROOP against)
         for i in 0..3u32 {
             let voter = Address::generate(&env);
-            grant_badge(&env, &cid, &voter);
+            grant_badge(&env, &cid, &voter); // each voter has 100 XLM
             client.vote_verify_project(&voter, &pid, &(i == 0));
         }
         extend_ttl(&env, &cid);
@@ -1760,8 +2136,8 @@ mod tests {
         client.resolve_proposal(&pid);
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 1);
-        assert_eq!(p.votes_against, 2);
+        assert_eq!(p.votes_for, 100 * STROOP);
+        assert_eq!(p.votes_against, 200 * STROOP);
     }
 
     #[test]
@@ -1769,6 +2145,18 @@ mod tests {
     fn test_resolve_before_deadline_fails() {
         let (_env, _cid, client, admin, pid) = setup();
         client.create_proposal(&admin, &pid, &0u32);
+        client.resolve_proposal(&pid);
+    }
+
+    /// Resolving a proposal that received zero votes must panic with the
+    /// quorum message rather than silently approving or rejecting.
+    #[test]
+    #[should_panic(expected = "Quorum not reached: no eligible votes cast")]
+    fn test_resolve_with_no_votes_fails_quorum() {
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&admin, &pid, &0u32);
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
         client.resolve_proposal(&pid);
     }
 
@@ -1783,6 +2171,103 @@ mod tests {
         // Extend again so the second call reaches our panic, not an archive error
         extend_ttl(&env, &cid);
         client.resolve_proposal(&pid);
+    }
+
+    // ─── Sybil-resistance tests (Issue #113) ─────────────────────────────────
+
+    /// **Core Sybil scenario**: N addresses each staking the minimum 100 XLM
+    /// (Tree tier) all vote FOR, while a single large donor stakes MORE than
+    /// the entire Sybil coalition and votes AGAINST.  The large donor must win.
+    ///
+    /// Setup:
+    ///   • 20 Sybil addresses × 100 XLM each → 20 × 100 × STROOP FOR weight
+    ///   • 1 legitimate donor  × 2 100 XLM   →      2 100 × STROOP AGAINST weight
+    ///
+    /// Result: votes_against (2 100 * STROOP) > votes_for (2 000 * STROOP) →
+    /// proposal rejected despite the Sybil majority of *address count*.
+    #[test]
+    fn test_sybil_many_minimum_donors_lose_to_one_large_donor() {
+        const SYBIL_COUNT: u32 = 20;
+        const SYBIL_STAKE_XLM: i128 = 100; // exactly at the Tree threshold
+        const WHALE_STAKE_XLM: i128 = 2_100; // just above 20 × 100
+
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&admin, &pid, &0u32);
+
+        // 20 Sybil addresses each vote FOR with minimum eligible stake.
+        for _ in 0..SYBIL_COUNT {
+            let sybil = Address::generate(&env);
+            grant_badge_with_amount(&env, &cid, &sybil, SYBIL_STAKE_XLM * STROOP);
+            client.vote_verify_project(&sybil, &pid, &true);
+        }
+
+        // One large legitimate donor votes AGAINST with stake exceeding the
+        // entire Sybil coalition combined.
+        let whale = Address::generate(&env);
+        grant_badge_with_amount(&env, &cid, &whale, WHALE_STAKE_XLM * STROOP);
+        client.vote_verify_project(&whale, &pid, &false);
+
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
+        client.resolve_proposal(&pid);
+
+        let p = client.get_proposal(&pid);
+        assert!(p.resolved);
+
+        let expected_for: i128 = SYBIL_COUNT as i128 * SYBIL_STAKE_XLM * STROOP;
+        let expected_against: i128 = WHALE_STAKE_XLM * STROOP;
+        assert_eq!(p.votes_for, expected_for,
+            "FOR weight should equal 20 × 100 XLM = {} stroops", expected_for);
+        assert_eq!(p.votes_against, expected_against,
+            "AGAINST weight should equal 2100 XLM = {} stroops", expected_against);
+
+        // The whale outweighs all 20 Sybil addresses combined → proposal rejected.
+        assert!(
+            p.votes_against > p.votes_for,
+            "whale ({}s) must outweigh {} Sybil voters ({}s)",
+            p.votes_against,
+            SYBIL_COUNT,
+            p.votes_for
+        );
+    }
+
+    /// **Symmetrical Sybil scenario**: N Sybil addresses each at the minimum
+    /// 100 XLM vote FOR; a counter-coalition with the *same* total stake but
+    /// concentrated in fewer addresses also votes AGAINST.  Result is a tie,
+    /// which resolves as rejection (votes_for <= votes_against rule).
+    #[test]
+    fn test_sybil_equal_stake_resolves_as_rejection() {
+        const SYBIL_COUNT: u32 = 10;
+        const SYBIL_STAKE_XLM: i128 = 100;
+        // Opposing side uses same total stake in a single address.
+        const COUNTER_STAKE_XLM: i128 = SYBIL_COUNT as i128 * SYBIL_STAKE_XLM; // 1 000 XLM
+
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&admin, &pid, &0u32);
+
+        for _ in 0..SYBIL_COUNT {
+            let sybil = Address::generate(&env);
+            grant_badge_with_amount(&env, &cid, &sybil, SYBIL_STAKE_XLM * STROOP);
+            client.vote_verify_project(&sybil, &pid, &true);
+        }
+
+        let counter = Address::generate(&env);
+        grant_badge_with_amount(&env, &cid, &counter, COUNTER_STAKE_XLM * STROOP);
+        client.vote_verify_project(&counter, &pid, &false);
+
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
+        client.resolve_proposal(&pid);
+
+        let p = client.get_proposal(&pid);
+        assert!(p.resolved);
+        assert_eq!(p.votes_for, p.votes_against,
+            "stakes are equal so this should be a tie");
+        // Ties resolve as rejection (votes_for <= votes_against).
+        assert!(
+            p.votes_for <= p.votes_against,
+            "a tie must not approve the project"
+        );
     }
 
     // ─── Configurable voting-duration tests ───────────────────────────────────
@@ -1967,5 +2452,185 @@ mod tests {
         assert_eq!(client_v2.get_global_total(), total_before);
         assert_eq!(client_v2.get_donation_count(), count_before);
         assert_eq!(client_v2.get_project(&pid).total_raised, amount);
+    }
+
+    // ─── Impact NFT interface tests (Issue #114) ────────────────────────────
+
+    /// After earning a badge, the badge is discoverable through the standard
+    /// NFT interface (`name`/`symbol`/`decimals`/`balance_of`/`owner_of`/
+    /// `tokens_of`/`token_metadata`), not just through the contract's custom
+    /// `has_nft` getter.
+    #[test]
+    fn test_nft_interface_discoverability() {
+        let (env, _cid, client, _admin, pid, token, token_client) = setup_donation();
+        let donor = Address::generate(&env);
+        let amount = 10 * STROOP; // Seedling tier
+        mint_to(&env, &token_client, &donor, amount);
+        client.donate(&token, &donor, &pid, &amount, &0u32);
+
+        // Collection metadata.
+        assert_eq!(client.name(), String::from_str(&env, "GreenPay Impact Badge"));
+        assert_eq!(client.symbol(), String::from_str(&env, "GPB"));
+        assert_eq!(client.decimals(), 0);
+
+        // The badge is a real, addressable token: it has an id, an owner, a
+        // balance, and full on-chain metadata.
+        let token_id = client
+            .get_token_id(&donor, &BadgeTier::Seedling)
+            .expect("earned badge must have a token id");
+        assert_eq!(client.total_supply(), 1);
+        assert_eq!(client.balance_of(&donor), 1);
+        assert_eq!(client.owner_of(&token_id), donor);
+        assert_eq!(client.tokens_of(&donor), vec![&env, token_id]);
+        assert_eq!(client.token_tier(&token_id), BadgeTier::Seedling);
+
+        let meta = client.token_metadata(&token_id);
+        assert_eq!(meta.owner, donor);
+        assert_eq!(meta.tier, BadgeTier::Seedling);
+        assert_eq!(meta.total_donated, amount);
+        assert_eq!(meta.minted_at_ledger, env.ledger().sequence());
+
+        // A donor with no badges has no tokens.
+        let stranger = Address::generate(&env);
+        assert_eq!(client.balance_of(&stranger), 0);
+        assert_eq!(client.tokens_of(&stranger).len(), 0);
+    }
+
+    /// Badge tokens transfer to a new owner: balances, ownership, and
+    /// `has_nft`/`get_token_id` all follow the new owner.
+    #[test]
+    fn test_nft_transfer() {
+        let (env, _cid, client, _admin, pid, token, token_client) = setup_donation();
+        let donor = Address::generate(&env);
+        let friend = Address::generate(&env);
+        let amount = 10 * STROOP;
+        mint_to(&env, &token_client, &donor, amount);
+        client.donate(&token, &donor, &pid, &amount, &0u32);
+
+        let token_id = client
+            .get_token_id(&donor, &BadgeTier::Seedling)
+            .expect("badge must be minted");
+        client.transfer(&donor, &friend, &token_id);
+
+        assert_eq!(client.balance_of(&donor), 0);
+        assert_eq!(client.balance_of(&friend), 1);
+        assert_eq!(client.owner_of(&token_id), friend);
+        assert_eq!(client.token_metadata(&token_id).owner, friend);
+        assert!(!client.has_nft(&donor, &BadgeTier::Seedling));
+        assert!(client.has_nft(&friend, &BadgeTier::Seedling));
+        assert_eq!(client.get_token_id(&donor, &BadgeTier::Seedling), None);
+        assert_eq!(
+            client.get_token_id(&friend, &BadgeTier::Seedling),
+            Some(token_id)
+        );
+        assert_eq!(client.tokens_of(&friend), vec![&env, token_id]);
+
+        // The original donor's badge tier is unchanged — the badge tier
+        // reflects giving history, not token ownership.
+        assert_eq!(client.get_badge(&donor), BadgeTier::Seedling);
+    }
+
+    /// A transfer to a recipient who earned the same tier themselves keeps
+    /// both tokens: the recipient ends up owning their own badge and the
+    /// transferred one.
+    #[test]
+    fn test_nft_transfer_preserves_recipients_own_same_tier_badge() {
+        let (env, _cid, client, _admin, pid, token, token_client) = setup_donation();
+        let donor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let amount = 10 * STROOP; // Seedling
+        mint_to(&env, &token_client, &donor, amount);
+        client.donate(&token, &donor, &pid, &amount, &0u32);
+        let donor_token = client
+            .get_token_id(&donor, &BadgeTier::Seedling)
+            .expect("donor badge must be minted");
+
+        // The recipient earned Seedling too.
+        mint_to(&env, &token_client, &recipient, amount);
+        client.donate(&token, &recipient, &pid, &amount, &0u32);
+        let recipient_token = client
+            .get_token_id(&recipient, &BadgeTier::Seedling)
+            .expect("recipient badge must be minted");
+        assert_ne!(donor_token, recipient_token);
+        assert_eq!(client.balance_of(&recipient), 1);
+
+        // The donor transfers their badge to the recipient.
+        client.transfer(&donor, &recipient, &donor_token);
+
+        assert_eq!(client.balance_of(&donor), 0);
+        assert_eq!(client.balance_of(&recipient), 2);
+        assert_eq!(client.owner_of(&recipient_token), recipient);
+        assert_eq!(client.owner_of(&donor_token), recipient);
+        assert_eq!(
+            client.tokens_of(&recipient),
+            vec![&env, recipient_token, donor_token]
+        );
+        assert!(client.has_nft(&recipient, &BadgeTier::Seedling));
+    }
+
+    /// Only the current owner may transfer a badge token.
+    #[test]
+    #[should_panic(expected = "Only the token owner can transfer it")]
+    fn test_nft_transfer_rejects_non_owner() {
+        let (env, _cid, client, _admin, pid, token, token_client) = setup_donation();
+        let donor = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        let other = Address::generate(&env);
+        let amount = 10 * STROOP;
+        mint_to(&env, &token_client, &donor, amount);
+        client.donate(&token, &donor, &pid, &amount, &0u32);
+
+        let token_id = client
+            .get_token_id(&donor, &BadgeTier::Seedling)
+            .expect("badge must be minted");
+        // `attacker` is not the owner; the transfer must panic before any
+        // state change.
+        client.transfer(&attacker, &other, &token_id);
+    }
+
+    /// Badges minted before the NFT interface existed (legacy
+    /// `ImpactNFT(donor, tier)` markers only) are discovered and materialized
+    /// by the standard interface on first query — `balance_of`, `owner_of`,
+    /// and `transfer` all see them, not just `has_nft`.
+    #[test]
+    fn test_nft_legacy_marker_discoverable_via_interface() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, GreenPayContract);
+        let client = GreenPayContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        let donor = Address::generate(&env);
+
+        // Simulate a pre-interface deployment: only the legacy marker exists,
+        // with no token registry entries.
+        env.as_contract(&cid, || {
+            env.storage().persistent().set(
+                &DataKey::ImpactNFT(donor.clone(), BadgeTier::Seedling),
+                &ImpactNFT {
+                    owner: donor.clone(),
+                    tier: BadgeTier::Seedling,
+                    total_donated: 10 * STROOP,
+                    minted_at_ledger: 1,
+                },
+            );
+        });
+
+        // The standard interface discovers it and materializes a real token.
+        assert_eq!(client.balance_of(&donor), 1);
+        let token_id = client
+            .get_token_id(&donor, &BadgeTier::Seedling)
+            .expect("legacy badge must backfill into the token registry");
+        assert_eq!(client.owner_of(&token_id), donor);
+        assert_eq!(client.token_metadata(&token_id).total_donated, 10 * STROOP);
+        assert_eq!(client.total_supply(), 1);
+
+        // And it is transferable like any other token.
+        let friend = Address::generate(&env);
+        client.transfer(&donor, &friend, &token_id);
+        assert_eq!(client.owner_of(&token_id), friend);
+        assert_eq!(client.balance_of(&donor), 0);
+        assert_eq!(client.balance_of(&friend), 1);
+        assert!(client.has_nft(&friend, &BadgeTier::Seedling));
     }
 }

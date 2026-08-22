@@ -4,6 +4,7 @@ import RecurringScreen from '../app/recurring';
 import * as recurringDonations from '../utils/recurringDonations';
 
 jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: jest.fn() }),
   useFocusEffect: (cb: any) => {
     React.useEffect(() => {
       const cleanup = cb();

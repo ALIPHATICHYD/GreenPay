@@ -4,8 +4,8 @@
 #
 # This file exists so CI can render the *committed* mainnet overlay end-to-end
 # and assert it contains no testnet leakage. It is never used for a real
-# deploy, and it contains no credentials — mainnet secrets come from the
-# pre-existing Kubernetes Secret named in values-mainnet.yaml.
+# deploy, and it contains no credentials — mainnet secrets come from AWS
+# Secrets Manager / Vault via External Secrets Operator.
 
 config:
   contractId: CADPZJDGZXQCZM4E4C3P42TRPCXOJTHOI4RTZQCV3IOMHFXQPBHQ7UGH

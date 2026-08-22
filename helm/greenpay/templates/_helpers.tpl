@@ -1,9 +1,11 @@
 {{/*
 Name of the Secret the workloads read their credentials from.
 
-When .Values.secrets.existingSecret is set the chart renders no Secret of its
-own and every workload references the operator-managed one instead — this is
-how mainnet keeps production credentials out of the values files.
+When secrets.provider is external, External Secrets Operator materializes
+this Secret from AWS Secrets Manager or Vault. When secrets.existingSecret
+is set with provider=inline, the chart renders no Secret and every workload
+references the operator-managed name instead. Nothing production-shaped is
+ever committed in values files.
 */}}
 {{- define "greenpay.secretName" -}}
 {{- default "greenpay-secrets" .Values.secrets.existingSecret -}}

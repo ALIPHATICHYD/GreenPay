@@ -5,6 +5,7 @@
 const { Expo } = require("expo-server-sdk");
 const PgBoss = require("pg-boss");
 const pool = require("../db/pool");
+const { env } = require("../config/env");
 
 // Create a new Expo SDK client
 const expo = new Expo();
@@ -23,15 +24,28 @@ let boss = null;
  * Must be called once before sendUpdatePushNotifications can queue receipt checks.
  */
 async function start() {
-  const connectionString =
-    process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/greenpay";
+  const connectionString = env.databaseUrl;
 
   boss = new PgBoss(connectionString);
   boss.on("error", (err) => console.error("[Push] pg-boss error:", err.message));
 
   await boss.start();
-  await boss.work(RECEIPT_QUEUE, { teamSize: 1, teamConcurrency: 1 }, async (job) => {
-    await checkPushReceipts(job.data.receipts);
+  // pg-boss v10 requires a queue to be created before send()/work() do
+  // anything with it.
+  await boss.createQueue(RECEIPT_QUEUE);
+  // pg-boss v10 always invokes a work() callback with an array of jobs (the
+  // fetched batch), even when exactly one job was fetched — never a bare job.
+  await boss.work(RECEIPT_QUEUE, { teamSize: 1, teamConcurrency: 1 }, async (jobs) => {
+    for (const job of jobs) {
+      const { receipts } = job.data;
+      try {
+        await checkPushReceipts(receipts);
+      } catch (error) {
+        const ticketIds = receipts.map((r) => r.ticketId);
+        console.error(`[Push] Error checking receipts for tickets [${ticketIds.join(", ")}]:`, error);
+        throw error; // pg-boss will retry according to retryLimit
+      }
+    }
   });
 
   console.log("[Push] pg-boss started, worker registered on queue:", RECEIPT_QUEUE);
