@@ -6,7 +6,10 @@ jest.mock('expo-notifications', () => ({
   getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
   getExpoPushTokenAsync: jest.fn(),
+  scheduleNotificationAsync: jest.fn().mockResolvedValue('notif-test'),
+  cancelScheduledNotificationAsync: jest.fn().mockResolvedValue(undefined),
   addNotificationReceivedListener: jest.fn(() => ({ remove: jest.fn() })),
+  addNotificationResponseReceivedListener: jest.fn(() => ({ remove: jest.fn() })),
 }));
 
 const store = (AsyncStorage as any).__store as Record<string, string>;
