@@ -1,7 +1,7 @@
 /**
  * lib/stellar.ts — Stellar SDK helpers for GreenPay
  */
-import { Horizon, Networks, Asset, Operation, TransactionBuilder, Transaction, Memo, rpc, Contract, scValToNative, Address, nativeToScVal, Account, xdr } from "@stellar/stellar-sdk";
+import { Horizon, Networks, Asset, Operation, TransactionBuilder, Transaction, Memo, rpc, Contract, scValToNative, Address, nativeToScVal, Account, xdr, StrKey } from "@stellar/stellar-sdk";
 import { parseToStroops } from "@/utils/amount";
 
 export const NETWORK = (process.env.NEXT_PUBLIC_STELLAR_NETWORK || "testnet") as "testnet" | "mainnet";
@@ -449,7 +449,14 @@ export async function submitAndConfirmDonation(signedXDR: string): Promise<{ has
   );
 }
 
-export function isValidStellarAddress(a: string): boolean { return /^G[A-Z0-9]{55}$/.test(a); }
+export function isValidStellarAddress(a: string): boolean {
+  if (!address || typeof address !== "string") {
+    return false;
+  }
+  // Full validation: checks format AND CRC16 checksum
+  return StrKey.isValidEd25519PublicKey(address);
+}
+
 export function explorerUrl(hash: string): string {
   return `https://stellar.expert/explorer/${NETWORK === "mainnet" ? "public" : "testnet"}/tx/${hash}`;
 }
