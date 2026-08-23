@@ -1,12 +1,7 @@
-# Fingerprint-scoped exclusions for confirmed false positives. Each entry pins
-# one finding in one commit, so the rule that produced it keeps protecting
-# every other file and every future commit.
-
-# A Stellar *public* key constant (VALID_KEY) used to test address validation.
-# Public keys are derived from a secret and published on the ledger by design;
-# they trip the generic high-entropy rule purely because of their shape.
+# Known false positives: Stellar public keys/addresses misidentified as
+# generic API keys by the entropy heuristic — these are public blockchain
+# identifiers (a test-fixture keypair address and a public token contract
+# address), not secrets. One fingerprint per line — see `gitleaks detect
+# --verbose` output for the Fingerprint field.
 e48ba2e645e43ca8c6f953c686b0dd5970d479ed:mobile/__tests__/useWallet.test.ts:generic-api-key:14
-
-# A high-entropy match inside a localStorage recovery block that contains no
-# credential at all — the surrounding lines are setState calls and a catch.
 b693a49024fbe281c7436e6e5e90ad547f06a9ce:frontend/components/DonateForm.tsx:generic-api-key:89
