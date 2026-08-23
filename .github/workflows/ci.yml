@@ -28,6 +28,9 @@ jobs:
       # Guards against source files committed in a non-UTF-8 encoding, which
       # silently breaks parsers while still looking like text in a diff.
       - run: node scripts/check-source-encoding.js
+      # Asserts backend/.env.example documents every variable the env schema
+      # declares. The script existed but no workflow ran it.
+      - run: node scripts/check-env-example.js
 
   frontend:
     name: Frontend (Next.js)
