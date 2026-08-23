@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
@@ -187,6 +188,19 @@ func (p *MLWorkloadPreemption) PostFilter(
 		}
 	}
 
+	pdbTracker := NewPDBTracker(pdbs)
+
+	// Precompute selector matching for all pods across all candidate nodes once per PostFilter
+	var allPods []*corev1.Pod
+	for _, nodeInfo := range nodeInfos {
+		for _, pInfo := range nodeInfo.Pods {
+			if pInfo != nil && pInfo.Pod != nil {
+				allPods = append(allPods, pInfo.Pod)
+			}
+		}
+	}
+	pdbTracker.PrecomputePodMatches(allPods)
+
 	var bestCost *nodePreemptionCost
 	filterPlugin := &GPUHardwareFilter{}
 
@@ -242,6 +256,7 @@ func (p *MLWorkloadPreemption) PostFilter(
 		})
 
 		// Select victims required to meet GPU/VRAM demands
+		nodeBudget := pdbTracker.NewNodeBudget()
 		var selectedVictims []*corev1.Pod
 		var freedVRAM int64
 		var freedGPUs int64
@@ -249,7 +264,7 @@ func (p *MLWorkloadPreemption) PostFilter(
 		for _, vInfo := range candidateVictims {
 			vPod := vInfo.Pod
 
-			if IsPDBViolated(vPod, pdbs) {
+			if !nodeBudget.CanDisrupt(vPod) {
 				logger.V(4).Info("MLWorkloadPreemption: skipping victim due to PDB protection", "victim", klog.KObj(vPod), "node", node.Name)
 				continue
 			}
@@ -260,6 +275,7 @@ func (p *MLWorkloadPreemption) PostFilter(
 				continue
 			}
 
+			nodeBudget.ConsumeBudget(vPod)
 			selectedVictims = append(selectedVictims, vPod)
 			freedVRAM += vFreedVRAM
 			freedGPUs += vFreedGPUs
@@ -298,20 +314,126 @@ func isImmutableHardwareMismatch(reason string) bool {
 		strings.Contains(msg, "no gpu")
 }
 
-func IsPDBViolated(pod *corev1.Pod, pdbs []*policyv1.PodDisruptionBudget) bool {
+// PDBTracker tracks and decrements PodDisruptionBudget allocations during preemption victim selection.
+type PDBTracker struct {
+	pdbs           []*policyv1.PodDisruptionBudget
+	selectors      []labels.Selector
+	initialBudgets []int32
+	podMatches     map[types.UID][]int
+}
+
+// NewPDBTracker initializes a PDBTracker and precomputes label selectors for all provided PDBs.
+// PDBs with nil or invalid selectors are safely ignored.
+func NewPDBTracker(pdbs []*policyv1.PodDisruptionBudget) *PDBTracker {
+	tracker := &PDBTracker{
+		podMatches: make(map[types.UID][]int),
+	}
 	for _, pdb := range pdbs {
-		if pdb == nil || pdb.Namespace != pod.Namespace {
+		if pdb == nil {
+			continue
+		}
+		if pdb.Spec.Selector == nil {
 			continue
 		}
 		selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
 		if err != nil || selector == nil {
 			continue
 		}
-		if selector.Matches(labels.Set(pod.Labels)) {
-			if pdb.Status.DisruptionsAllowed <= 0 {
-				return true
-			}
+		tracker.pdbs = append(tracker.pdbs, pdb)
+		tracker.selectors = append(tracker.selectors, selector)
+		tracker.initialBudgets = append(tracker.initialBudgets, pdb.Status.DisruptionsAllowed)
+	}
+	return tracker
+}
+
+// PrecomputePodMatches precomputes which PDBs match each pod in the provided list of pods.
+func (pt *PDBTracker) PrecomputePodMatches(pods []*corev1.Pod) {
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		if pod.UID != "" {
+			pt.podMatches[pod.UID] = pt.matchingPDBIndices(pod)
 		}
 	}
-	return false
+}
+
+func (pt *PDBTracker) matchingPDBIndices(pod *corev1.Pod) []int {
+	if pod == nil {
+		return nil
+	}
+	podLabels := labels.Set(pod.Labels)
+	var matches []int
+	for i, pdb := range pt.pdbs {
+		if pdb.Namespace != pod.Namespace {
+			continue
+		}
+		if pt.selectors[i] != nil && pt.selectors[i].Matches(podLabels) {
+			matches = append(matches, i)
+		}
+	}
+	return matches
+}
+
+// GetMatchingPDBIndices returns the indices of all PDBs matching the given pod.
+func (pt *PDBTracker) GetMatchingPDBIndices(pod *corev1.Pod) []int {
+	if pod == nil {
+		return nil
+	}
+	if pod.UID != "" {
+		if matches, ok := pt.podMatches[pod.UID]; ok {
+			return matches
+		}
+	}
+	return pt.matchingPDBIndices(pod)
+}
+
+// NodePDBBudget represents a deep-copied disruption budget state for evaluating a single candidate node.
+type NodePDBBudget struct {
+	tracker *PDBTracker
+	budgets []int32
+}
+
+// NewNodeBudget creates a deep-copied budget state from the tracker's initial budgets.
+func (pt *PDBTracker) NewNodeBudget() *NodePDBBudget {
+	b := make([]int32, len(pt.initialBudgets))
+	copy(b, pt.initialBudgets)
+	return &NodePDBBudget{
+		tracker: pt,
+		budgets: b,
+	}
+}
+
+// CanDisrupt returns true if all matching PDBs have DisruptionsAllowed > 0.
+// If no PDBs match the pod, it returns true.
+func (nb *NodePDBBudget) CanDisrupt(pod *corev1.Pod) bool {
+	if nb == nil || nb.tracker == nil {
+		return true
+	}
+	matching := nb.tracker.GetMatchingPDBIndices(pod)
+	for _, idx := range matching {
+		if nb.budgets[idx] <= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ConsumeBudget decrements DisruptionsAllowed for all matching PDBs.
+func (nb *NodePDBBudget) ConsumeBudget(pod *corev1.Pod) {
+	if nb == nil || nb.tracker == nil {
+		return
+	}
+	matching := nb.tracker.GetMatchingPDBIndices(pod)
+	for _, idx := range matching {
+		nb.budgets[idx]--
+	}
+}
+
+// IsPDBViolated checks whether evicting pod violates any PDB in pdbs.
+// Maintained for direct callers and backwards compatibility.
+func IsPDBViolated(pod *corev1.Pod, pdbs []*policyv1.PodDisruptionBudget) bool {
+	tracker := NewPDBTracker(pdbs)
+	nodeBudget := tracker.NewNodeBudget()
+	return !nodeBudget.CanDisrupt(pod)
 }
