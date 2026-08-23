@@ -869,4 +869,3 @@ func makePDB(namespace, name string, matchLabels map[string]string, disruptionsA
 func parseResourceQuantity(val string) resource.Quantity {
 	return resource.MustParse(val)
 }
-
