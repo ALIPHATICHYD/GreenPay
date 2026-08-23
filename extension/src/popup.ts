@@ -1,4 +1,6 @@
 import {
+  getNetwork,
+  getNetworkDetails,
   getUserInfo,
   isAllowed,
   setAllowed,
@@ -7,12 +9,13 @@ import {
 import {
   Asset,
   Horizon,
-  Networks,
+  Keypair,
   Operation,
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
 import { isBadSequenceError } from './horizon-errors';
 import type { BackgroundRequest, BackgroundResponse } from './messages';
+import { activeManifest } from './network-config';
 import { recoverPopupSession, type PopupRecoveryClient } from './popup-session';
 import { SearchCoordinator } from './popup-search';
 import {
@@ -22,7 +25,7 @@ import {
   type WalletSession,
 } from './session-state';
 
-const server = new Horizon.Server('https://horizon-testnet.stellar.org');
+export const server = new Horizon.Server(activeManifest.horizonUrl);
 function getSessionArea(): StorageArea {
   if (typeof chrome !== 'undefined' && chrome.storage?.session) {
     return chrome.storage.session;
@@ -362,12 +365,73 @@ export async function connectWallet() {
   }
 }
 
+export async function verifyFreighterNetwork(): Promise<void> {
+  let checked = false;
+  try {
+    const details = await getNetworkDetails();
+    if (details && typeof details === 'object') {
+      if (details.networkPassphrase) {
+        checked = true;
+        if (details.networkPassphrase !== activeManifest.networkPassphrase) {
+          throw new Error(
+            `Freighter is connected to "${details.network || 'another network'}", but GreenPay requires "${activeManifest.network.toUpperCase()}". Please switch networks in Freighter.`
+          );
+        }
+        return;
+      }
+      if (details.network) {
+        checked = true;
+        const activeUpper = activeManifest.network.toUpperCase();
+        const freighterUpper = details.network.toUpperCase();
+        const isMatch =
+          freighterUpper === activeUpper ||
+          (activeUpper === 'MAINNET' && freighterUpper === 'PUBLIC') ||
+          (activeUpper === 'TESTNET' && freighterUpper === 'TESTNET');
+        if (!isMatch) {
+          throw new Error(
+            `Freighter is connected to "${details.network}", but GreenPay requires "${activeUpper}". Please switch networks in Freighter.`
+          );
+        }
+        return;
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('switch networks')) {
+      throw error;
+    }
+  }
+
+  if (!checked) {
+    try {
+      const network = await getNetwork();
+      if (network && typeof network === 'string') {
+        const activeUpper = activeManifest.network.toUpperCase();
+        const freighterUpper = network.toUpperCase();
+        const isMatch =
+          freighterUpper === activeUpper ||
+          (activeUpper === 'MAINNET' && freighterUpper === 'PUBLIC') ||
+          (activeUpper === 'TESTNET' && freighterUpper === 'TESTNET');
+        if (!isMatch) {
+          throw new Error(
+            `Freighter is connected to "${network}", but GreenPay requires "${activeUpper}". Please switch networks in Freighter.`
+          );
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('switch networks')) {
+        throw error;
+      }
+    }
+  }
+}
+
 export async function buildDonationTransaction(project: ProjectSummary, amount: number) {
   if (!currentWallet) throw new Error('Connect your wallet first.');
+  await verifyFreighterNetwork();
   const account = await server.loadAccount(currentWallet.publicKey);
   const transaction = new TransactionBuilder(account, {
     fee: (await server.fetchBaseFee()).toString(),
-    networkPassphrase: Networks.TESTNET,
+    networkPassphrase: activeManifest.networkPassphrase,
   })
     .addOperation(
       Operation.payment({
@@ -386,11 +450,45 @@ export async function submitDonation(
   amount: number,
   retryCount = 0
 ): Promise<{ hash: string }> {
+  if (!currentWallet) throw new Error('Connect your wallet first.');
+  const expectedPublicKey = currentWallet.publicKey;
+
   const xdr = await buildDonationTransaction(project, amount);
   const signedXdr = await signTransaction(xdr, {
-    networkPassphrase: Networks.TESTNET,
+    networkPassphrase: activeManifest.networkPassphrase,
+    network: activeManifest.network.toUpperCase(),
+    accountToSign: expectedPublicKey,
   });
-  const transaction = TransactionBuilder.fromXDR(signedXdr, Networks.TESTNET);
+
+  if (!signedXdr || typeof signedXdr !== 'string') {
+    throw new Error('Signing was cancelled or returned an empty transaction.');
+  }
+
+  const transaction = TransactionBuilder.fromXDR(signedXdr, activeManifest.networkPassphrase);
+
+  if (transaction.source !== expectedPublicKey) {
+    throw new Error('Transaction source account does not match active session wallet.');
+  }
+
+  const keypair = Keypair.fromPublicKey(expectedPublicKey);
+  const isSignedByExpectedAccount = transaction.signatures.some((sig) => {
+    try {
+      return keypair.verify(transaction.hash(), sig.signature());
+    } catch {
+      return false;
+    }
+  });
+
+  if (!isSignedByExpectedAccount) {
+    throw new Error('Transaction was signed with a different account than expected.');
+  }
+
+  const currentPublicKey = await probeWallet();
+  if (currentPublicKey && currentPublicKey !== expectedPublicKey) {
+    await recoveryClient.clearWallet();
+    renderWallet(null);
+    throw new Error('Wallet account changed during signing. Reconnect to continue.');
+  }
 
   try {
     return await server.submitTransaction(transaction);
@@ -408,6 +506,7 @@ export async function donate() {
   setInteractive(false);
   showStatus('Confirm the donation in Freighter…');
   try {
+    await verifyFreighterNetwork();
     const currentPublicKey = await probeWallet();
     if (currentPublicKey !== currentWallet.publicKey) {
       await recoveryClient.clearWallet();
