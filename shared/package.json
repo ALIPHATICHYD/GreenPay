@@ -9,7 +9,7 @@
     "./locales/*": "./locales/*"
   },
   "dependencies": {
-    "intl-messageformat": "^10.5.14"
+    "intl-messageformat": "^10.7.18"
   },
   "devDependencies": {
     "@types/intl-messageformat": "^3.0.0"
