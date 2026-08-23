@@ -35,6 +35,10 @@ jobs:
       # the function-ordering regression that broke nightly backups for months,
       # which `bash -n` cannot catch, and needs no database.
       - run: bash scripts/tests/test-backup-restore.sh
+      # Cluster-free consistency checks over k8s/: kustomization coverage,
+      # Ingress backends resolving to real Services, PDB selectors matching a
+      # workload, and default-deny paired with allow rules.
+      - run: python3 scripts/check-k8s-manifests.py
 
   frontend:
     name: Frontend (Next.js)
