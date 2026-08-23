@@ -9,7 +9,7 @@
     "./locales/*": "./locales/*"
   },
   "dependencies": {
-    "intl-messageformat": "^10.5.14"
+    "intl-messageformat": "^11.2.14"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
