@@ -31,6 +31,10 @@ jobs:
       # Asserts backend/.env.example documents every variable the env schema
       # declares. The script existed but no workflow ran it.
       - run: node scripts/check-env-example.js
+      # docs/database.md states this runs on every push. It did not. It guards
+      # the function-ordering regression that broke nightly backups for months,
+      # which `bash -n` cannot catch, and needs no database.
+      - run: bash scripts/tests/test-backup-restore.sh
 
   frontend:
     name: Frontend (Next.js)
