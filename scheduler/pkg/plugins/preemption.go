@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"sort"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -202,7 +201,6 @@ func (p *MLWorkloadPreemption) PostFilter(
 	pdbTracker.PrecomputePodMatches(allPods)
 
 	var bestCost *nodePreemptionCost
-	filterPlugin := &GPUHardwareFilter{}
 
 	for _, nodeInfo := range nodeInfos {
 		node := nodeInfo.Node()
@@ -210,11 +208,10 @@ func (p *MLWorkloadPreemption) PostFilter(
 			continue
 		}
 
-		// Check if node passes basic hardware constraints
-		filterStatus := filterPlugin.Filter(ctx, state, pod, nodeInfo)
-		if filterStatus != nil && filterStatus.Code() == framework.Unschedulable {
-			if isImmutableHardwareMismatch(filterStatus.Message()) {
-				logger.V(4).Info("MLWorkloadPreemption: node immutable hardware mismatch", "node", node.Name, "reason", filterStatus.Message())
+		if len(filteredNodeStatusMap) > 0 {
+			status, ok := filteredNodeStatusMap[node.Name]
+			if !ok || status.Code() == framework.UnschedulableAndUnresolvable || status.Code() == framework.Error {
+				logger.V(4).Info("MLWorkloadPreemption: skipping node due to unresolvable/error filter status", "node", node.Name)
 				continue
 			}
 		}
@@ -291,6 +288,22 @@ func (p *MLWorkloadPreemption) PostFilter(
 			continue
 		}
 
+		// Re-validate the candidate node against the full filter chain with victims removed
+		clonedNodeInfo := nodeInfo.Snapshot()
+		for _, v := range selectedVictims {
+			if err := clonedNodeInfo.RemovePod(logger, v); err != nil {
+				logger.V(4).Info("MLWorkloadPreemption: failed to remove pod from cloned NodeInfo", "pod", klog.KObj(v), "err", err)
+			}
+		}
+
+		if p.handle != nil {
+			filterStatus := p.handle.RunFilterPluginsWithNominatedPods(ctx, state, pod, clonedNodeInfo)
+			if !filterStatus.IsSuccess() {
+				logger.V(4).Info("MLWorkloadPreemption: target node failed filter chain re-validation after victim removal", "node", node.Name, "status", filterStatus.Message())
+				continue
+			}
+		}
+
 		cost := computeNodePreemptionCost(node.Name, selectedVictims)
 		if bestCost == nil || cost.betterThan(*bestCost) {
 			bestCost = &cost
@@ -303,15 +316,6 @@ func (p *MLWorkloadPreemption) PostFilter(
 	}
 
 	return nil, framework.NewStatus(framework.Unschedulable, "insufficient capacity for preemption on any node")
-}
-
-func isImmutableHardwareMismatch(reason string) bool {
-	msg := strings.ToLower(reason)
-	return strings.Contains(msg, "vendor") ||
-		strings.Contains(msg, "model") ||
-		strings.Contains(msg, "zone") ||
-		strings.Contains(msg, "bandwidth") ||
-		strings.Contains(msg, "no gpu")
 }
 
 // PDBTracker tracks and decrements PodDisruptionBudget allocations during preemption victim selection.
