@@ -1,169 +1,78 @@
-/**
- * hooks/__tests__/useDonationSocket.test.ts
- *
- * Unit tests for useDonationSocket:
- * - Runtime schema validation & rejection of malformed events
- * - Idempotent deduplication (asserts duplicate events do NOT double-count)
- * - Reconnection reconciliation hook
- * - Filtering by projectId
- */
 import { renderHook } from "@testing-library/react";
-import { useDonationSocket } from "../useDonationSocket";
-import { SOCKET_EVENTS } from "@/lib/socketEvents";
-
-// Mock socket client
-const mockListeners: Record<string, ((...args: unknown[]) => void)[]> = {};
-
-const mockSocket = {
-  on: jest.fn((event: string, cb: (...args: unknown[]) => void) => {
-    if (!mockListeners[event]) mockListeners[event] = [];
-    mockListeners[event].push(cb);
-  }),
-  off: jest.fn((event: string, cb: (...args: unknown[]) => void) => {
-    if (mockListeners[event]) {
-      mockListeners[event] = mockListeners[event].filter((fn) => fn !== cb);
-    }
-  }),
-};
+import { EventEmitter } from "events";
+import { useDonationSocket, type DonationSocketPayload } from "../useDonationSocket";
+import { getSocket } from "@/lib/socket";
 
 jest.mock("@/lib/socket", () => ({
-  getSocket: () => mockSocket,
+  getSocket: jest.fn(),
 }));
 
-function emitSocketEvent(event: string, payload?: unknown) {
-  if (mockListeners[event]) {
-    mockListeners[event].forEach((cb) => cb(payload));
-  }
+function makeFakeSocket() {
+  const emitter = new EventEmitter();
+  return {
+    on: (event: string, handler: (...args: any[]) => void) => emitter.on(event, handler),
+    off: (event: string, handler: (...args: any[]) => void) => emitter.off(event, handler),
+    emit: (event: string, payload: unknown) => emitter.emit(event, payload),
+  };
+}
+
+function payload(overrides: Partial<DonationSocketPayload> = {}): DonationSocketPayload {
+  return {
+    projectId: "project-1",
+    donorAddress: "GDONOR",
+    amountXLM: 10,
+    transactionHash: "tx-1",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
 }
 
 describe("useDonationSocket", () => {
-  const targetProjectId = "8d9ac19b-52eb-42f7-80d9-19a88ba59e43";
-  const validDonation = {
-    projectId: targetProjectId,
-    donorAddress: "GDYO6GEXKXPU3UH5SWGTAVHMBBZZEKUHWHXUJ33PL2TJJVHZB7CG6BI5",
-    amountXLM: 50,
-    transactionHash: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-    timestamp: "2026-08-21T09:00:00.000Z",
-  };
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    Object.keys(mockListeners).forEach((k) => delete mockListeners[k]);
-    jest.spyOn(console, "warn").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  test("subscribes to donation_event on mount and unsubscribes on unmount", () => {
+  it("does not subscribe when projectId is undefined", () => {
+    const socket = makeFakeSocket();
+    (getSocket as jest.Mock).mockReturnValue(socket);
     const onDonation = jest.fn();
-    const { unmount } = renderHook(() => useDonationSocket(targetProjectId, onDonation));
 
-    expect(mockSocket.on).toHaveBeenCalledWith(SOCKET_EVENTS.DONATION_EVENT, expect.any(Function));
-    expect(mockSocket.on).toHaveBeenCalledWith("connect", expect.any(Function));
+    renderHook(() => useDonationSocket(undefined, onDonation));
+    socket.emit("donation_event", payload());
 
+    expect(onDonation).not.toHaveBeenCalled();
+  });
+
+  it("filters events to the given projectId", () => {
+    const socket = makeFakeSocket();
+    (getSocket as jest.Mock).mockReturnValue(socket);
+    const onDonation = jest.fn();
+
+    renderHook(() => useDonationSocket("project-1", onDonation));
+    socket.emit("donation_event", payload({ projectId: "project-2" }));
+    expect(onDonation).not.toHaveBeenCalled();
+
+    socket.emit("donation_event", payload({ projectId: "project-1" }));
+    expect(onDonation).toHaveBeenCalledTimes(1);
+  });
+
+  it("receives every broadcast donation when projectId is null", () => {
+    const socket = makeFakeSocket();
+    (getSocket as jest.Mock).mockReturnValue(socket);
+    const onDonation = jest.fn();
+
+    renderHook(() => useDonationSocket(null, onDonation));
+    socket.emit("donation_event", payload({ projectId: "project-1" }));
+    socket.emit("donation_event", payload({ projectId: "project-2" }));
+
+    expect(onDonation).toHaveBeenCalledTimes(2);
+  });
+
+  it("unsubscribes on unmount", () => {
+    const socket = makeFakeSocket();
+    (getSocket as jest.Mock).mockReturnValue(socket);
+    const onDonation = jest.fn();
+
+    const { unmount } = renderHook(() => useDonationSocket(null, onDonation));
     unmount();
-
-    expect(mockSocket.off).toHaveBeenCalledWith(SOCKET_EVENTS.DONATION_EVENT, expect.any(Function));
-    expect(mockSocket.off).toHaveBeenCalledWith("connect", expect.any(Function));
-  });
-
-  test("invokes onDonation when receiving a valid event matching projectId", () => {
-    const onDonation = jest.fn();
-    renderHook(() => useDonationSocket(targetProjectId, onDonation));
-
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, validDonation);
-
-    expect(onDonation).toHaveBeenCalledTimes(1);
-    expect(onDonation).toHaveBeenCalledWith(expect.objectContaining({
-      projectId: targetProjectId,
-      amountXLM: 50,
-      transactionHash: validDonation.transactionHash,
-    }));
-  });
-
-  test("rejects malformed events at runtime without invoking onDonation or corrupting state", () => {
-    const onDonation = jest.fn();
-    renderHook(() => useDonationSocket(targetProjectId, onDonation));
-
-    // Malformed: missing transactionHash
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, {
-      projectId: targetProjectId,
-      donorAddress: validDonation.donorAddress,
-      amountXLM: 10,
-      timestamp: validDonation.timestamp,
-    });
-
-    // Malformed: negative amount
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, {
-      ...validDonation,
-      amountXLM: -25,
-    });
-
-    // Malformed: non-Stellar public key
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, {
-      ...validDonation,
-      donorAddress: "invalid-key",
-    });
-
-    // Malformed: invalid timestamp
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, {
-      ...validDonation,
-      timestamp: "not-a-date",
-    });
+    socket.emit("donation_event", payload());
 
     expect(onDonation).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
-  });
-
-  test("[GUARD] receiving the same event twice is idempotent and does NOT double-count", () => {
-    const onDonation = jest.fn();
-    renderHook(() => useDonationSocket(targetProjectId, onDonation));
-
-    // First emission
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, validDonation);
-    expect(onDonation).toHaveBeenCalledTimes(1);
-
-    // Duplicate emission with exact same transactionHash
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, validDonation);
-    expect(onDonation).toHaveBeenCalledTimes(1); // STILL 1 — no double counting!
-
-    // Duplicate emission with slightly modified amount but same hash
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, { ...validDonation, amountXLM: 100 });
-    expect(onDonation).toHaveBeenCalledTimes(1); // STILL 1!
-  });
-
-  test("ignores events destined for other projects", () => {
-    const onDonation = jest.fn();
-    renderHook(() => useDonationSocket(targetProjectId, onDonation));
-
-    const otherProjectEvent = {
-      ...validDonation,
-      projectId: "4d57d6cb-5e8e-4647-a5f0-acfbb9f0ce10",
-      transactionHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    };
-
-    emitSocketEvent(SOCKET_EVENTS.DONATION_EVENT, otherProjectEvent);
-
-    expect(onDonation).not.toHaveBeenCalled();
-  });
-
-  test("triggers onReconnect callback on socket reconnection", () => {
-    const onDonation = jest.fn();
-    const onReconnect = jest.fn();
-    renderHook(() => useDonationSocket(targetProjectId, onDonation, { onReconnect }));
-
-    // Initial connect
-    emitSocketEvent("connect");
-    expect(onReconnect).not.toHaveBeenCalled(); // First connection is initial mount
-
-    // Reconnect after network drop
-    emitSocketEvent("connect");
-    expect(onReconnect).toHaveBeenCalledTimes(1);
-
-    // Subsequent reconnect
-    emitSocketEvent("connect");
-    expect(onReconnect).toHaveBeenCalledTimes(2);
   });
 });

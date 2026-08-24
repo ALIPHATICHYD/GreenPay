@@ -1,21 +1,4 @@
-/**
- * hooks/useDonationSocket.ts
- *
- * Subscribes to the backend's realtime donation broadcast over Socket.IO.
- *
- * Contract & Delivery Guarantees
- * ──────────────────────────────
- * 1. Runtime validation: Every incoming event is parsed and validated against
- *    the canonical shared schema (validateDonationPayload). Malformed or corrupt
- *    events are dropped with a warning without mutating client state.
- * 2. Idempotency (At-Least-Once Delivery): Uses a hash set of seen transaction
- *    hashes (O(1) lookup) to ensure duplicate broadcasts (e.g. from multiple
- *    server emitters, replay, or retries) never double-count.
- * 3. Reconnect Reconciliation: When the socket disconnects and reconnects,
- *    an optional `onReconnect` / `reconcile` callback is invoked so the client
- *    can re-fetch the latest REST view to fill any gap during offline downtime.
- */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getSocket } from "@/lib/socket";
 import {
   SOCKET_EVENTS,
@@ -25,70 +8,52 @@ import {
 
 export type { DonationSocketPayload };
 
-export interface UseDonationSocketOptions {
-  /**
-   * Optional reconciliation hook called when the socket reconnects after being
-   * disconnected. Use this to backfill any donations missed while offline.
-   */
-  onReconnect?: () => void;
-  /**
-   * Maximum number of transaction hashes to track in the deduplication cache.
-   * Defaults to 500.
-   */
-  maxDeduplicationEntries?: number;
+
+export interface DonationSocketPayload {
+  projectId: string;
+  donorAddress: string;
+  amountXLM: number;
+  transactionHash: string;
+  timestamp: string;
 }
 
-/**
- * Subscribes to the backend's "donation_event" Socket.IO broadcast, validates
- * payloads, deduplicates by transactionHash, and invokes `onDonation` for events
- * matching `projectId`.
- *
- * @param projectId - Target project ID to filter events for, or undefined to skip.
- * @param onDonation - Callback invoked with validated, deduplicated donation payloads.
- * @param options - Optional configuration (reconnect callback, deduplication limits).
- */
-export function useDonationSocket(
-  projectId: string | undefined,
-  onDonation: (payload: DonationSocketPayload) => void,
-  options: UseDonationSocketOptions = {}
-) {
-  const { onReconnect, maxDeduplicationEntries = 500 } = options;
-  const onDonationRef = useRef(onDonation);
-  const onReconnectRef = useRef(onReconnect);
-  const seenTxHashesRef = useRef<Set<string>>(new Set());
-  const hasConnectedBeforeRef = useRef(false);
+export type SocketStatus = "connecting" | "connected" | "disconnected" | "error"
 
+/**
+ * Subscribes to the backend's "donation_event" Socket.io broadcast and invokes
+ * `onDonation` for events matching `projectId`.
+ *
+ * Exposes the connection `status` so consumers can observe socket connectivity.
+ */
+
+export function useDonationSocket(
+    projectId: string | undefined | null,
+    onDonation: (payload: DonationSocketPayload) => void
+) {
+  const socket = getSocket();
+
+  // Track status state
+  const [status, setStatus] = useState<SocketStatus>(
+      socket.connected ? "connected" : "connecting"
+  );
+
+  // Store latest callback in a ref to keep subscription stable across re-renders
+  const onDonationRef = useRef(onDonation);
   useEffect(() => {
     onDonationRef.current = onDonation;
   }, [onDonation]);
 
   useEffect(() => {
-    onReconnectRef.current = onReconnect;
-  }, [onReconnect]);
+    if (projectId === undefined) return;
 
-  useEffect(() => {
-    if (!projectId) return;
+    // Track status events
+    const handleConnect = () => setStatus("connected");
+    const handleDisconnect = () => setStatus("disconnected");
+    const handleConnectError = () => setStatus("error");
 
-    const socket = getSocket();
-
-    const handleEvent = (rawPayload: unknown) => {
-      // 1. Runtime schema validation
-      const validation = validateDonationPayload(rawPayload);
-      if (!validation.success) {
-        console.warn("[useDonationSocket] Dropped malformed donation event:", validation.error, rawPayload);
-        return;
-      }
-
-      const payload = validation.data;
-
-      // Filter for target project
-      if (payload.projectId !== projectId) {
-        return;
-      }
-
-      // 2. Idempotent deduplication (DSA: O(1) Hash Set lookup & pruning)
-      if (seenTxHashesRef.current.has(payload.transactionHash)) {
-        return;
+    const handleEvent = (payload: DonationSocketPayload) => {
+      if (projectId === null || payload.projectId === projectId) {
+        onDonationRef.current(payload);
       }
 
       // Prune if set exceeds max size to prevent unbounded memory growth
@@ -104,20 +69,25 @@ export function useDonationSocket(
       onDonationRef.current(payload);
     };
 
-    // 4. Reconnection handler: reconcile with REST view if we were disconnected
-    const handleConnect = () => {
-      if (hasConnectedBeforeRef.current) {
-        onReconnectRef.current?.();
-      }
-      hasConnectedBeforeRef.current = true;
-    };
-
-    socket.on(SOCKET_EVENTS.DONATION_EVENT, handleEvent);
+    // Attach listeners
     socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
+    socket.on("connect_error", handleConnectError);
+    socket.on("donation_event", handleEvent);
 
+    // Initial state check in case it connected before listeners attached
+    if (socket.connected) {
+      setStatus("connected");
+    }
+
+    // Cleanup listeners on unmount or projectId change
     return () => {
-      socket.off(SOCKET_EVENTS.DONATION_EVENT, handleEvent);
       socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("connect_error", handleConnectError);
+      socket.off("donation_event", handleEvent);
     };
-  }, [projectId, maxDeduplicationEntries]);
+  }, [projectId, socket]);
+
+  return { status };
 }

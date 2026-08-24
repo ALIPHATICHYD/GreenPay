@@ -131,13 +131,19 @@ export default function SyncConflictsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      let cancelled = false;
-      (async () => {
+      let isActive = true;
+
+      const runRefresh = async () => {
         await refresh();
-        if (!cancelled) setLoading(false);
-      })();
+        if (isActive) {
+          setLoading(false);
+        }
+      };
+
+      runRefresh();
+
       return () => {
-        cancelled = true;
+        isActive = false;
       };
     }, [refresh])
   );
