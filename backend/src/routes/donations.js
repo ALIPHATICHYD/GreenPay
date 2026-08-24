@@ -12,6 +12,7 @@ const { z } = require("zod");
 const { validateBody, validate } = require("../middleware/validate");
 const { DonationCreateSchema } = require("../schemas/donations");
 const { stellarPublicKey } = require("../schemas/common");
+const { SOCKET_EVENTS } = require("../schemas/socketEvents");
 const donorKeyParamsSchema = z.object({ publicKey: stellarPublicKey });
 const { computeBadges, mapDonationRow } = require("../services/store");
 // Layered: a coarse per-IP floor (so donors behind a shared NAT/carrier egress

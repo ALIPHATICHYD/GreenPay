@@ -26,10 +26,8 @@ export default function DonationFeed({ projectId, walletAddress, refreshKey = 0,
   const latestPagingTokenRef = useRef<HorizonPagingToken | null>(null);
   const seenTxHashesRef = useRef<Set<string>>(new Set());
 
-  // Load initial donation data from the backend API. Note: `d.id` is a
-  // backend database identifier, not a Horizon paging token, so it must
-  // never seed the SSE cursor below.
-  useEffect(() => {
+  // Load initial donation data from the backend API.
+  const loadInitialDonations = useCallback(() => {
     setLoading(true);
     fetchProjectDonations(projectId, 10)
       .then(({ donations: data, nextCursor: cursor }) => {
