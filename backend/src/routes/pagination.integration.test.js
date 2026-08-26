@@ -86,6 +86,62 @@ describeIfDb("Keyset Pagination Real-DB Integration & Latency Benchmarks", () =>
     await pool.query("TRUNCATE TABLE donations, projects, donor_stats, profiles CASCADE;");
   });
 
+  describe("Filtered and localized pages execute against the real schema", () => {
+    // The route builds its SQL by string concatenation, and every other suite
+    // mocks the pool — so a query that is a perfectly good string but invalid
+    // against the actual schema (a predicate qualified with an alias the FROM
+    // clause never declares, say) passes every mocked test and fails on the
+    // first real request. These cases exist to run each branch of that builder
+    // through Postgres, which is the only thing that will reject it.
+    const FILTER_CASES = [
+      ["no filters", {}],
+      ["status", { status: "active" }],
+      ["category", { category: "Solar Energy" }],
+      ["verified", { verified: "true" }],
+      ["search", { search: "Reef" }],
+      ["language", { lang: "es" }],
+      ["every filter at once", { status: "active", category: "Solar Energy", verified: "true", search: "Reef", lang: "es" }],
+    ];
+
+    beforeEach(async () => {
+      const rows = [];
+      for (let i = 0; i < 6; i++) {
+        rows.push(
+          pool.query(
+            `INSERT INTO projects (id, name, description, category, location, wallet_address, goal_xlm, status, verified, created_at)
+             VALUES ($1, $2, 'Reef restoration work', 'Solar Energy', 'Loc', 'wallet', 100, 'active', true, $3)`,
+            [uuid(), `Reef Project ${i}`, new Date(Date.now() - i * 1000).toISOString()]
+          )
+        );
+      }
+      await Promise.all(rows);
+    });
+
+    it.each(FILTER_CASES)("serves page one and a cursor continuation with %s", async (_label, query) => {
+      const first = await request(app).get("/api/projects").query({ ...query, limit: 2 });
+      expect(first.status).toBe(200);
+      expect(first.body.data.length).toBeGreaterThan(0);
+
+      const cursor = first.body.meta.nextCursor;
+      expect(cursor).toBeTruthy();
+
+      // The cursor predicate is a separate branch of the same builder, so it
+      // has to be exercised against the schema too, not just page one.
+      const second = await request(app).get("/api/projects").query({ ...query, limit: 2, cursor });
+      expect(second.status).toBe(200);
+
+      const firstIds = first.body.data.map((r) => r.id);
+      const secondIds = second.body.data.map((r) => r.id);
+      expect(secondIds.filter((id) => firstIds.includes(id))).toEqual([]);
+    });
+
+    it("rejects an unsupported language before running any query", async () => {
+      const res = await request(app).get("/api/projects").query({ lang: "fr" });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("CONTENT_LANGUAGE_INVALID");
+    });
+  });
+
   describe("Mid-pagination mutation safety (insert/delete between page fetches)", () => {
     it("asserts no row is duplicated or skipped when rows are inserted and deleted mid-pagination", async () => {
       // 1. Seed initial 10 projects

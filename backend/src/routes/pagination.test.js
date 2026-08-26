@@ -82,7 +82,9 @@ describe("Keyset Pagination & Cursor Stability", () => {
       await request(app).get("/api/projects");
 
       const sql = pool.query.mock.calls[0][0];
-      expect(sql).toMatch(/ORDER BY created_at DESC, id DESC/);
+      // The alias is optional: the list query joins for localization and so
+      // qualifies its columns, but the tiebreaker is what is under test.
+      expect(sql).toMatch(/ORDER BY (?:p\.)?created_at DESC, (?:p\.)?id DESC/);
     });
 
     it("includes id tiebreaker in donation messages queries", async () => {

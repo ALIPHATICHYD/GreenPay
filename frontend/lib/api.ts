@@ -264,6 +264,7 @@ export async function fetchProjects(params?: {
   search?: string;
   limit?: number;
   cursor?: string;
+  lang?: "en" | "es" | "ar";
 }) {
   const { data } = await api.get<ClimateProject[]>(
     "/api/projects",

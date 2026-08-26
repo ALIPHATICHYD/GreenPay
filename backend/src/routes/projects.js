@@ -196,6 +196,9 @@ router.get("/", async (req, res, next) => {
   try {
     const { category, status, verified, search, cursor } = req.query;
     const parsedLimit = Math.min(Number.parseInt(req.query.limit, 10) || 50, 100);
+    // Validates before any query runs, so an unsupported `lang` is a 400 rather
+    // than content silently served under the wrong language label.
+    const language = requestedLanguage(req);
     const where = [];
     const values = [];
 
@@ -237,16 +240,27 @@ router.get("/", async (req, res, next) => {
     if (cursorObj) {
       if (cursorObj.createdAt && cursorObj.id) {
         values.push(cursorObj.createdAt, cursorObj.id);
-        where.push(`(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+        where.push(`(p.created_at, p.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
       } else if (cursorObj.createdAt) {
         values.push(cursorObj.createdAt);
-        where.push(`created_at < $${values.length}::timestamptz`);
+        where.push(`p.created_at < $${values.length}::timestamptz`);
       }
     }
 
+    let languageParam = null;
+    if (language) {
+      values.push(language);
+      languageParam = `$${values.length}`;
+    }
+    // At most one approved translation per (project, language), so the join
+    // cannot fan out rows — which keyset paging relies on, since the page is
+    // sized by counting the rows the query returns.
+    const localization = projectLocalizationSelect(languageParam);
+
     values.push(parsedLimit + 1);
     const whereClause = where.length ? `WHERE ${where.join(" AND ")} ` : "";
-    const query = `SELECT * FROM projects ${whereClause}ORDER BY created_at DESC, id DESC LIMIT $${values.length}`;
+    const query = `SELECT p.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
+      FROM projects p${localization.join} ${whereClause}ORDER BY p.created_at DESC, p.id DESC LIMIT $${values.length}`;
 
     const result = await pool.query(query, values);
     const { data, meta } = formatPaginatedResponse({

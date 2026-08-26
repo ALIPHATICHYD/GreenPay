@@ -54,25 +54,38 @@ router.get("/:projectId", async (req, res, next) => {
   try {
     const { cursor } = req.query;
     const parsedLimit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    // Validated up front so an unsupported `lang` is rejected rather than
+    // quietly served as source-language content under the requested label.
+    const language = req.query.lang === undefined ? null : requireContentLanguage(req.query.lang);
     const cursorObj = decodeCursor(cursor);
 
-    const where = ["project_id = $1"];
+    const where = ["u.project_id = $1"];
     const values = [req.params.projectId];
 
     if (cursorObj) {
       if (cursorObj.createdAt && cursorObj.id) {
         values.push(cursorObj.createdAt, cursorObj.id);
-        where.push(`(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+        where.push(`(u.created_at, u.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
       } else if (cursorObj.createdAt) {
         values.push(cursorObj.createdAt);
-        where.push(`created_at < $${values.length}::timestamptz`);
+        where.push(`u.created_at < $${values.length}::timestamptz`);
       }
     }
 
+    let languageParam = null;
+    if (language) {
+      values.push(language);
+      languageParam = `$${values.length}`;
+    }
+    // At most one approved translation per (update, language), so the join
+    // cannot fan out rows and change what a page of `limit` rows means.
+    const localization = updateLocalizationSelect(languageParam);
+
     values.push(parsedLimit + 1);
-    const query = `SELECT * FROM project_updates
+    const query = `SELECT u.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
+       FROM project_updates u${localization.join}
        WHERE ${where.join(" AND ")}
-       ORDER BY created_at DESC, id DESC
+       ORDER BY u.created_at DESC, u.id DESC
        LIMIT $${values.length}`;
 
     const result = await pool.query(query, values);
