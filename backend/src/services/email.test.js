@@ -72,7 +72,11 @@ describe("enqueueUpdateNotifications", () => {
     expect(boss.send).toHaveBeenCalledTimes(1);
     expect(boss.send).toHaveBeenCalledWith(
       "update-email-notify",
-      { project, update, emails: ["a@example.com", "b@example.com"] },
+      expect.objectContaining({
+        project,
+        emails: ["a@example.com", "b@example.com"],
+        language: "en",
+      }),
       expect.objectContaining({ retryLimit: expect.any(Number), retryDelay: expect.any(Number) }),
     );
   });
@@ -103,7 +107,35 @@ describe("enqueueUpdateNotifications", () => {
     const boss = getBossInstance();
     expect(boss.send).toHaveBeenCalledTimes(2);
     // Second page's query starts from the last id seen on the first page.
-    expect(pool.query.mock.calls[1][1]).toEqual([project.id, "sub-049", 50]);
+    expect(pool.query.mock.calls[1][1].slice(0, 3)).toEqual([project.id, "sub-049", 50]);
+  });
+
+  it("groups recipients by preferred language and uses approved localized content", async () => {
+    await email.start();
+    pool.query.mockResolvedValueOnce({
+      rows: [{
+        id: "sub-1",
+        email: "donante@example.com",
+        preferred_language: "es",
+        localized_project_name: "Limpieza del arrecife",
+        localized_update_title: "Fotos nuevas",
+        localized_update_body: "Gran progreso este mes",
+        machine_translated: true,
+      }],
+    });
+
+    await email.enqueueUpdateNotifications({ project, update });
+
+    expect(getBossInstance().send).toHaveBeenCalledWith(
+      "update-email-notify",
+      expect.objectContaining({
+        language: "es",
+        emails: ["donante@example.com"],
+        project: expect.objectContaining({ name: "Limpieza del arrecife" }),
+        update: expect.objectContaining({ title: "Fotos nuevas", machineTranslated: true }),
+      }),
+      expect.any(Object),
+    );
   });
 });
 
@@ -134,6 +166,20 @@ describe("sendUpdateNotifications", () => {
       "https://api.resend.com/emails",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("renders the recipient language and machine-translation label", async () => {
+    global.fetch.mockResolvedValueOnce({ ok: true });
+    await email.sendUpdateNotifications({
+      project: { ...project, name: "Limpieza del arrecife" },
+      update: { ...update, body: "Progreso", machineTranslated: true },
+      emails: ["donante@example.com"],
+      language: "es",
+    });
+    const payload = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(payload.subject).toContain("Actualización del proyecto");
+    expect(payload.html).toContain("lang=\"es\"");
+    expect(payload.html).toContain("Traducción automática");
   });
 
   it("throws when Resend returns a non-ok response, so pg-boss retries the job", async () => {

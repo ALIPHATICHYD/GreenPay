@@ -16,9 +16,15 @@ const { createLayeredRateLimiter } = require("../middleware/rateLimiter");
 const { mapProjectUpdateRow, mapProjectRow } = require("../services/store");
 const { enqueueUpdateNotifications } = require("../services/email");
 const { sendUpdatePushNotifications } = require("../services/push");
+const { logAdminAction } = require("../services/audit");
 
 const { adminRequired } = require("../middleware/auth");
 const { createApiError } = require("../middleware/apiEnvelope");
+const {
+  TRANSLATION_STATUSES,
+  requireContentLanguage,
+  updateLocalizationSelect,
+} = require("../services/contentLanguage");
 
 // Rate limiter for admin update creation: an IP floor plus the real cap on the
 // authenticated subject, so the same admin account is bounded regardless of
@@ -87,7 +93,10 @@ router.get("/:projectId", async (req, res, next) => {
 // Rate-limited to prevent update spam
 router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) => {
   try {
-    const { projectId, title, body } = req.body;
+    const { projectId, title, body } = req.body || {};
+    const sourceLanguage = req.body?.sourceLanguage === undefined
+      ? "en"
+      : requireContentLanguage(req.body.sourceLanguage);
 
     if (!projectId || typeof projectId !== "string") {
       throw createApiError(400, "PROJECT_ID_REQUIRED", "projectId is required");
@@ -109,10 +118,10 @@ router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) =>
     // Insert update
     const id = uuidv4();
     const insertResult = await pool.query(
-      `INSERT INTO project_updates (id, project_id, title, body)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO project_updates (id, project_id, title, body, source_language)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [id, projectId, title.trim(), body.trim()],
+      [id, projectId, title.trim(), body.trim(), sourceLanguage],
     );
     const update = mapProjectUpdateRow(insertResult.rows[0]);
 
