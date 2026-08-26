@@ -19,6 +19,11 @@ const { Contract, TransactionBuilder } = require("@stellar/stellar-sdk");
 const { validate } = require("../middleware/validate");
 const { createApiError } = require("../middleware/apiEnvelope");
 const { ProjectStatusUpdateSchema } = require("../schemas/projects");
+const {
+  TRANSLATION_STATUSES,
+  requireContentLanguage,
+  projectLocalizationSelect,
+} = require("../services/contentLanguage");
 
 // Layered rate limiters — see middleware/rateLimiter.js for the dimensions.
 // Every project mutation is wallet-identity-tied (adminAddress / matcherAddress)
@@ -81,8 +86,25 @@ const VALID_CATEGORIES = [
  * Returns the project with the highest donorCount (active projects only).
  * Result is cached in memory for 24 hours.
  */
-let featuredCache = null;
-let featuredCacheExpiry = 0;
+const featuredCache = new Map();
+
+function requestedLanguage(req) {
+  if (req.query.lang === undefined) return null;
+  return requireContentLanguage(req.query.lang);
+}
+
+function validateTranslatedProject(body) {
+  const fields = ["name", "description", "category", "location"];
+  const result = {};
+  for (const field of fields) {
+    if (typeof body?.[field] !== "string" || !body[field].trim()) {
+      throw createApiError(400, "TRANSLATION_FIELD_REQUIRED", `${field} is required`);
+    }
+    result[field] = body[field].trim();
+  }
+  result.machineTranslated = body.machineTranslated === true;
+  return result;
+}
 
 function mapCampaignRow(row) {
   const now = Date.now();
@@ -134,25 +156,37 @@ async function fetchCampaignsForProject(projectId) {
 
 router.get("/featured", async (req, res, next) => {
   try {
+    const language = requestedLanguage(req);
+    const cacheKey = language || "source";
     const now = Date.now();
-    if (featuredCache && now < featuredCacheExpiry) {
-      return res.json({ ...featuredCache, serverNow: Date.now() });
+    const cached = featuredCache.get(cacheKey);
+    if (cached && now < cached.expiresAt) {
+      return res.json({ ...cached.project, serverNow: Date.now() });
     }
 
+    const values = [];
+    let languageParam = null;
+    if (language) {
+      values.push(language);
+      languageParam = `$${values.length}`;
+    }
+    const localization = projectLocalizationSelect(languageParam);
     const result = await pool.query(
-      `SELECT * FROM projects
-       WHERE status = 'active'
-       ORDER BY donor_count DESC, raised_xlm DESC
+      `SELECT p.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
+       FROM projects p${localization.join}
+       WHERE p.status = 'active'
+       ORDER BY p.donor_count DESC, p.raised_xlm DESC
        LIMIT 1`,
+      values,
     );
 
     if (!result.rows[0]) {
       throw createApiError(404, "FEATURED_PROJECT_NOT_FOUND", "No featured project found");
     }
 
-    featuredCache = mapProjectRow(result.rows[0]);
-    featuredCacheExpiry = now + 24 * 60 * 60 * 1000; // 24 hours
-    res.json({ ...featuredCache, serverNow: Date.now() });
+    const project = mapProjectRow(result.rows[0]);
+    featuredCache.set(cacheKey, { project, expiresAt: now + 24 * 60 * 60 * 1000 });
+    res.json({ ...project, serverNow: Date.now() });
   } catch (e) {
     next(e);
   }
@@ -160,13 +194,59 @@ router.get("/featured", async (req, res, next) => {
 
 router.get("/", async (req, res, next) => {
   try {
-    const ranking = loadRankingConfig();
-    const { rows, meta } = await searchProjects(pool, req.query, ranking);
+    const { category, status, verified, search, limit = 50 } = req.query;
+    const language = requestedLanguage(req);
+    const where = [];
+    const values = [];
 
-    res.apiMeta({
-      ...meta,
-      latencyBudgetMs: SEARCH_LATENCY_BUDGET_MS,
-    });
+    if (status && VALID_STATUSES.includes(status)) {
+      values.push(status);
+      where.push(`p.status = $${values.length}`);
+    }
+    if (category && VALID_CATEGORIES.includes(category)) {
+      values.push(category);
+      where.push(`p.category = $${values.length}`);
+    }
+    if (verified === "true") {
+      where.push("p.verified = true");
+    }
+    if (search && typeof search === "string") {
+      values.push(`%${search}%`);
+      where.push(`(
+        p.name ILIKE $${values.length}
+        OR p.description ILIKE $${values.length}
+        OR p.location ILIKE $${values.length}
+        OR EXISTS (
+          SELECT 1
+          FROM unnest(p.tags) AS tag
+          WHERE tag ILIKE $${values.length}
+        )
+        OR EXISTS (
+          SELECT 1 FROM project_translations search_translation
+          WHERE search_translation.project_id = p.id
+            AND search_translation.moderation_status = 'approved'
+            AND (search_translation.name ILIKE $${values.length}
+              OR search_translation.description ILIKE $${values.length}
+              OR search_translation.category ILIKE $${values.length}
+              OR search_translation.location ILIKE $${values.length})
+        )
+      )`);
+    }
+
+    let languageParam = null;
+    if (language) {
+      values.push(language);
+      languageParam = `$${values.length}`;
+    }
+    const localization = projectLocalizationSelect(languageParam);
+
+    values.push(Math.min(Number.parseInt(limit, 10) || 50, 100));
+
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")} ` : "";
+    const query = `SELECT p.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
+      FROM projects p${localization.join} ${whereClause}ORDER BY p.created_at DESC LIMIT $${values.length}`;
+
+    const result = await pool.query(query, values);
 
     res.json(rows.map(row => ({ ...mapProjectRow(row), serverNow: Date.now() })));
   } catch (e) {
@@ -428,9 +508,98 @@ router.post("/admin/confirm", onChainAdminLimiter, async (req, res, next) => {
   }
 });
 
+router.put("/:id/translations/:language", adminRequired, projectMutationLimiter, async (req, res, next) => {
+  try {
+    const language = requireContentLanguage(req.params.language);
+    const translated = validateTranslatedProject(req.body);
+    const projectResult = await pool.query("SELECT id, source_language FROM projects WHERE id = $1", [req.params.id]);
+    if (!projectResult.rows[0]) {
+      throw createApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    }
+    if (language === projectResult.rows[0].source_language) {
+      throw createApiError(409, "SOURCE_LANGUAGE_TRANSLATION", "A translation cannot replace the original language");
+    }
+    const result = await pool.query(
+      `INSERT INTO project_translations
+        (id, project_id, language, name, description, category, location, machine_translated, moderation_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+       ON CONFLICT (project_id, language) DO UPDATE SET
+         name = EXCLUDED.name, description = EXCLUDED.description,
+         category = EXCLUDED.category, location = EXCLUDED.location,
+         machine_translated = EXCLUDED.machine_translated,
+         impact_claims_reviewed = FALSE, moderation_status = 'pending', updated_at = NOW()
+       RETURNING *`,
+      [uuid(), req.params.id, language, translated.name, translated.description,
+        translated.category, translated.location, translated.machineTranslated],
+    );
+    featuredCache.clear();
+    logAdminAction({
+      actor: req.admin.sub,
+      action: "project.translation.submitted",
+      targetType: "project_translation",
+      targetId: result.rows[0].id,
+      metadata: { projectId: req.params.id, language },
+      ipAddress: req.ip,
+    });
+    res.status(201).json(result.rows[0]);
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.patch("/:id/translations/:language/moderation", adminRequired, statusLimiter, async (req, res, next) => {
+  try {
+    const language = requireContentLanguage(req.params.language);
+    const { status, impactClaimsReviewed = false } = req.body || {};
+    if (!TRANSLATION_STATUSES.includes(status)) {
+      throw createApiError(400, "TRANSLATION_STATUS_INVALID", `status must be one of: ${TRANSLATION_STATUSES.join(", ")}`);
+    }
+    const existing = await pool.query(
+      "SELECT * FROM project_translations WHERE project_id = $1 AND language = $2",
+      [req.params.id, language],
+    );
+    if (!existing.rows[0]) {
+      throw createApiError(404, "PROJECT_TRANSLATION_NOT_FOUND", "Project translation not found");
+    }
+    if (status === "approved" && existing.rows[0].machine_translated && impactClaimsReviewed !== true) {
+      throw createApiError(400, "IMPACT_CLAIMS_REVIEW_REQUIRED", "Machine-translated impact claims require human review before approval");
+    }
+    const result = await pool.query(
+      `UPDATE project_translations SET moderation_status = $1,
+         impact_claims_reviewed = $2, updated_at = NOW()
+       WHERE project_id = $3 AND language = $4 RETURNING *`,
+      [status, impactClaimsReviewed === true, req.params.id, language],
+    );
+    featuredCache.clear();
+    logAdminAction({
+      actor: req.admin.sub,
+      action: `project.translation.${status}`,
+      targetType: "project_translation",
+      targetId: result.rows[0].id,
+      metadata: { projectId: req.params.id, language, impactClaimsReviewed: impactClaimsReviewed === true },
+      ipAddress: req.ip,
+    });
+    res.json(result.rows[0]);
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.get("/:id", async (req, res, next) => {
   try {
-    const projectResult = await pool.query("SELECT * FROM projects WHERE id = $1", [req.params.id]);
+    const language = requestedLanguage(req);
+    const values = [req.params.id];
+    let languageParam = null;
+    if (language) {
+      values.push(language);
+      languageParam = `$${values.length}`;
+    }
+    const localization = projectLocalizationSelect(languageParam);
+    const projectResult = await pool.query(
+      `SELECT p.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
+       FROM projects p${localization.join} WHERE p.id = $1`,
+      values,
+    );
     if (!projectResult.rows[0]) {
       throw createApiError(404, "PROJECT_NOT_FOUND", "Project not found");
     }

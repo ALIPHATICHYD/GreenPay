@@ -15,7 +15,7 @@ import { useI18n } from "@/lib/i18n";
 
 export default function ProjectsPage() {
   const router = useRouter();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [projects, setProjects] = useState<ClimateProject[]>([]);
   const [searchMeta, setSearchMeta] = useState<ProjectSearchMeta | null>(null);
   const [loading, setLoading] = useState(true);
@@ -30,11 +30,13 @@ export default function ProjectsPage() {
     isOpen: isAutocompleteOpen,
     setIsOpen: setIsAutocompleteOpen,
     activeIndex,
-    handleKeyDown,
-  } = useAutocomplete<ClimateProject>(async (q) => {
-    const { projects: data } = await fetchProjects({ search: q, limit: 5 });
-    return data;
-  });
+    handleKeyDown
+  } = useAutocomplete<ClimateProject>(
+    async (q) => {
+      const data = await fetchProjects({ search: q, limit: 5, lang: locale });
+      return data;
+    }
+  );
 
   const category = (router.query.category as string) || "";
   const status = (router.query.status as string) || "active";
@@ -62,6 +64,7 @@ export default function ProjectsPage() {
         verified: verified || undefined,
         search: search || undefined,
         limit: 50,
+        lang: locale,
       })
         .then(({ projects: data, meta }) => {
           setProjects(data);
@@ -72,7 +75,7 @@ export default function ProjectsPage() {
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [category, status, verified, search]);
+  }, [category, status, verified, search, locale]);
 
   useEffect(() => {
     if (!compareQuery || projects.length === 0) return;
@@ -165,6 +168,51 @@ export default function ProjectsPage() {
         activeIndex={activeIndex}
         onKeyDown={handleKeyDown}
       />
+      {/* Search */}
+      <div className="relative mb-6" ref={searchRef}>
+        <span className="absolute start-4 top-1/2 -translate-y-1/2 text-[#547454] z-10">
+          🔍
+        </span>
+        <input
+          type="text"
+          value={search}
+          onChange={handleSearchChange}
+          onKeyDown={(e) => {
+            handleKeyDown(e);
+            if (e.key === 'Enter' && activeIndex >= 0) {
+              handleSelectProject(autocompleteResults[activeIndex]);
+            }
+          }}
+          onFocus={() => search.length >= 2 && setIsAutocompleteOpen(true)}
+          placeholder="Search projects by name, location, or keyword..."
+          className="input-field ps-10 relative z-10"
+        />
+
+        {/* Autocomplete Dropdown */}
+        {isAutocompleteOpen && (
+          <div className="absolute top-full start-0 end-0 mt-2 bg-white border border-forest-200 rounded-xl shadow-xl z-50 overflow-hidden animate-fade-in">
+            {autocompleteResults.map((p, i) => (
+              <div
+                key={p.id}
+                onClick={() => handleSelectProject(p)}
+                className={clsx(
+                  "flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors border-b border-forest-50 last:border-0",
+                  i === activeIndex ? "bg-forest-100" : "hover:bg-forest-50"
+                )}
+              >
+                <div className="w-8 h-8 rounded-lg bg-forest-100 flex items-center justify-center text-lg flex-shrink-0">
+                  {CATEGORY_ICONS[(p.sourceCategory || p.category) as keyof typeof CATEGORY_ICONS] || "🌿"}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-forest-900 truncate">{p.name}</p>
+                  <p className="text-xs text-[#547454] font-body truncate">{p.location} · {p.category}</p>
+                </div>
+                <div className="text-xs font-bold text-forest-500 uppercase tracking-widest opacity-40">View →</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="flex gap-6">
         <ProjectSearchFacets

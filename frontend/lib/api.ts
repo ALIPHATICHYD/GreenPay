@@ -287,6 +287,9 @@ export async function fetchProjects(params?: {
   limit?: number;
 }): Promise<ProjectListResponse> {
   const response = await api.get<ClimateProject[]>(
+  lang?: "en" | "es" | "ar";
+}) {
+  const { data } = await api.get<ClimateProject[]>(
     "/api/projects",
     { params },
   );
@@ -296,9 +299,10 @@ export async function fetchProjects(params?: {
   };
 }
 
-export async function fetchProject(id: string) {
+export async function fetchProject(id: string, lang?: "en" | "es" | "ar") {
   const { data } = await api.get<ClimateProject>(
     `/api/projects/${id}`,
+    { params: lang && lang !== "en" ? { lang } : undefined },
   );
   return data;
 }
@@ -464,9 +468,10 @@ export async function completeJobRelease(
 }
 
 // ── Project Updates ─────────────────────────────────────────────
-export async function fetchProjectUpdates(projectId: string) {
+export async function fetchProjectUpdates(projectId: string, lang?: "en" | "es" | "ar") {
   const { data } = await api.get<ProjectUpdate[]>(
     `/api/updates/${projectId}`,
+    { params: lang && lang !== "en" ? { lang } : undefined },
   );
   return data;
 }
@@ -489,6 +494,7 @@ export async function subscribeToProject(payload: {
   projectId: string;
   email: string;
   donorAddress?: string;
+  preferredLanguage?: "en" | "es" | "ar";
 }) {
   const { data } = await api.post<{ message: string }>(
     "/api/subscriptions",
@@ -613,10 +619,11 @@ export async function fetchUpdateLikes(updateId: string, donorAddress?: string) 
 }
 
 // ── Featured Project ─────────────────────────────────────────────
-export async function fetchFeaturedProject(): Promise<ClimateProject | null> {
+export async function fetchFeaturedProject(lang?: "en" | "es" | "ar"): Promise<ClimateProject | null> {
   try {
     const { data } = await api.get<ClimateProject>(
       "/api/projects/featured",
+      { params: lang && lang !== "en" ? { lang } : undefined },
     );
     return data;
   } catch {

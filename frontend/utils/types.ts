@@ -29,7 +29,8 @@ export interface ClimateProject {
   id: string;
   name: string;
   description: string;
-  category: ProjectCategory;
+  category: string;
+  sourceCategory?: ProjectCategory;
   location: string;
   imageUrl?: string;
   walletAddress: string;       // Stellar address that receives donations
@@ -62,6 +63,12 @@ export interface ClimateProject {
   aiSummaryModel?: string | null;
   aiSummarySourceHash?: string | null;
   serverNow?: number;
+  sourceLanguage?: "en" | "es" | "ar";
+  contentLanguage?: "en" | "es" | "ar";
+  contentDirection?: "ltr" | "rtl";
+  requestedLanguage?: "en" | "es" | "ar" | null;
+  usedFallback?: boolean;
+  machineTranslated?: boolean;
 }
 
 /**
@@ -165,6 +172,12 @@ export interface ProjectUpdate {
   body: string;
   imageUrl?: string;
   createdAt: string;
+  sourceLanguage?: "en" | "es" | "ar";
+  contentLanguage?: "en" | "es" | "ar";
+  contentDirection?: "ltr" | "rtl";
+  requestedLanguage?: "en" | "es" | "ar" | null;
+  usedFallback?: boolean;
+  machineTranslated?: boolean;
 }
 
 /**

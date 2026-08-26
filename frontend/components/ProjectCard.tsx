@@ -8,6 +8,7 @@ import CircularProgress from "./CircularProgress";
 import { useXlmPriceInfo } from "@/lib/priceContext";
 import { useWishlist } from "@/hooks/useWishlist";
 import { useI18n } from "@/lib/i18n";
+import ContentLanguageNotice from "./ContentLanguageNotice";
 
 export default function ProjectCard({ project }: { project: ClimateProject }) {
   const pct = progressPercent(project.raisedXLM, project.goalXLM);
@@ -20,14 +21,14 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
   return (
     <div className="relative group">
       <Link href={`/projects/${project.id}`}>
-        <div className="card-hover group animate-fade-in flex flex-col h-full relative overflow-hidden">
+        <div data-testid="project-card" className="card-hover group animate-fade-in flex flex-col h-full relative overflow-hidden">
           {/* Category icon + badges */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <div className="w-10 h-10 rounded-xl bg-forest-100 flex items-center justify-center text-xl border border-forest-200">
-                {CATEGORY_ICONS[project.category] || "🌿"}
+                {CATEGORY_ICONS[(project.sourceCategory || project.category) as keyof typeof CATEGORY_ICONS] || "🌿"}
               </div>
-              <div>
+              <div dir={project.contentDirection} lang={project.contentLanguage}>
                 <p className="text-xs text-[#4b654b] font-body">
                   {project.category}
                 </p>
@@ -61,12 +62,15 @@ export default function ProjectCard({ project }: { project: ClimateProject }) {
           </div>
 
           {/* Name & description */}
-          <h3 className="font-display font-semibold text-forest-900 text-base leading-snug mb-2 group-hover:text-forest-600 transition-colors line-clamp-2">
-            {project.name}
-          </h3>
-          <p className="text-[#4b654b] text-sm leading-relaxed line-clamp-3 mb-4 flex-1 font-body">
-            {project.description}
-          </p>
+          <div dir={project.contentDirection} lang={project.contentLanguage} className="text-start">
+            <h3 className="font-display font-semibold text-forest-900 text-base leading-snug mb-2 group-hover:text-forest-600 transition-colors line-clamp-2">
+              {project.name}
+            </h3>
+            <p className="text-[#4b654b] text-sm leading-relaxed line-clamp-3 mb-3 flex-1 font-body">
+              {project.description}
+            </p>
+          </div>
+          <div className="mb-4"><ContentLanguageNotice content={project} /></div>
 
         {/* Progress */}
         <div className="mb-4">

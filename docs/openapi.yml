@@ -86,6 +86,9 @@ components:
           type: string
         category:
           type: string
+          description: Localized category label. Use sourceCategory for the stable filter value.
+        sourceCategory:
+          type: string
           enum: [Reforestation, Solar Energy, Ocean Conservation, Clean Water, Wildlife Protection, Carbon Capture, Wind Energy, Sustainable Agriculture, Other]
         status:
           type: string
@@ -117,6 +120,23 @@ components:
         updatedAt:
           type: string
           format: date-time
+        sourceLanguage:
+          type: string
+          enum: [en, es, ar]
+        contentLanguage:
+          type: string
+          enum: [en, es, ar]
+        requestedLanguage:
+          type: string
+          enum: [en, es, ar]
+          nullable: true
+        contentDirection:
+          type: string
+          enum: [ltr, rtl]
+        usedFallback:
+          type: boolean
+        machineTranslated:
+          type: boolean
 
     Campaign:
       type: object
@@ -286,6 +306,12 @@ components:
         createdAt:
           type: string
           format: date-time
+        sourceLanguage: { type: string, enum: [en, es, ar] }
+        contentLanguage: { type: string, enum: [en, es, ar] }
+        contentDirection: { type: string, enum: [ltr, rtl] }
+        requestedLanguage: { type: string, enum: [en, es, ar], nullable: true }
+        usedFallback: { type: boolean }
+        machineTranslated: { type: boolean }
 
     ProjectSearchFacets:
       type: object
@@ -422,6 +448,12 @@ components:
         offset:
           type: integer
 
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   parameters:
     projectId:
       name: id
@@ -503,11 +535,12 @@ paths:
             type: integer
             default: 50
             maximum: 100
-        - name: offset
+        - name: lang
           in: query
+          description: Preferred donor-content language. Falls back to the labelled original.
           schema:
-            type: integer
-            default: 0
+            type: string
+            enum: [en, es, ar]
       responses:
         '200':
           description: List of projects with optional search metadata
@@ -530,6 +563,12 @@ paths:
       tags: [Projects]
       summary: Get featured project
       operationId: getFeaturedProject
+      parameters:
+        - name: lang
+          in: query
+          schema:
+            type: string
+            enum: [en, es, ar]
       description: Returns the active project with the highest donor count. Cached for 24 hours.
       responses:
         '200':
@@ -632,6 +671,11 @@ paths:
       operationId: getProject
       parameters:
         - $ref: '#/components/parameters/projectId'
+        - name: lang
+          in: query
+          schema:
+            type: string
+            enum: [en, es, ar]
       responses:
         '200':
           description: Project detail with campaigns, milestones, ratings
@@ -668,6 +712,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/projects/{id}/translations/{language}:
+    put:
+      tags: [Projects]
+      summary: Create or replace a pending project translation without changing the original
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - name: language
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [en, es, ar]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, description, category, location]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                category: { type: string }
+                location: { type: string }
+                machineTranslated: { type: boolean, default: false }
+      responses:
+        '201': { description: Translation saved in pending moderation }
+
+  /api/projects/{id}/translations/{language}/moderation:
+    patch:
+      tags: [Projects]
+      summary: Moderate project translation content
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [pending, approved, rejected] }
+                impactClaimsReviewed: { type: boolean, default: false }
+      responses:
+        '200': { description: Translation moderation state updated }
+        '400': { description: Human impact-claim review is required before approving machine translation }
 
   /api/projects/{id}/status:
     patch:
@@ -1370,6 +1470,10 @@ paths:
             type: integer
             default: 20
             maximum: 100
+        - name: lang
+          in: query
+          description: Preferred update-content language with labelled source fallback.
+          schema: { type: string, enum: [en, es, ar] }
       responses:
         '200':
           description: Paginated project updates
@@ -1415,6 +1519,10 @@ paths:
                   type: string
                 body:
                   type: string
+                sourceLanguage:
+                  type: string
+                  enum: [en, es, ar]
+                  default: en
       responses:
         '201':
           description: Update created and subscribers notified
@@ -1445,6 +1553,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/updates/{updateId}/translations/{language}:
+    put:
+      tags: [Updates]
+      summary: Create or replace a pending update translation
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: updateId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, body]
+              properties:
+                title: { type: string }
+                body: { type: string }
+                machineTranslated: { type: boolean, default: false }
+      responses:
+        '201': { description: Translation saved in pending moderation }
+
+  /api/updates/{updateId}/translations/{language}/moderation:
+    patch:
+      tags: [Updates]
+      summary: Moderate update translation content
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: updateId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [pending, approved, rejected] }
+                impactClaimsReviewed: { type: boolean, default: false }
+      responses:
+        '200': { description: Translation moderation state updated }
+        '400': { description: Human impact-claim review is required before approving machine translation }
 
   /api/updates/{updateId}/like:
     post:
@@ -1555,6 +1719,10 @@ paths:
                   format: email
                 donorAddress:
                   type: string
+                preferredLanguage:
+                  type: string
+                  enum: [en, es, ar]
+                  default: en
       responses:
         '201':
           description: Subscribed successfully

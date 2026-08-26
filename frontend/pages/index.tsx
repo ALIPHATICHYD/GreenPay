@@ -16,6 +16,7 @@ import { formatCO2, formatXLM, progressPercent } from "@/utils/format";
 import { useI18n } from "@/lib/i18n";
 import type { GlobalStats, CategoryStats } from "@/lib/api";
 import type { ClimateProject } from "@/utils/types";
+import ContentLanguageNotice from "@/components/ContentLanguageNotice";
 
 interface HomeProps {
   publicKey: string | null;
@@ -82,6 +83,7 @@ function getCategoryIcon(category: string): string {
 }
 
 export default function Home({ publicKey, onConnect }: HomeProps) {
+  const { locale } = useI18n();
   const [showConnect, setShowConnect] = useState(false);
   const [globalStats, setGlobalStats] = useState<GlobalStats | null>(null);
   const [featuredProject, setFeaturedProject] = useState<ClimateProject | null>(
@@ -98,7 +100,7 @@ export default function Home({ publicKey, onConnect }: HomeProps) {
     fetchGlobalStats()
       .then(setGlobalStats)
       .catch(() => null);
-    fetchFeaturedProject()
+    fetchFeaturedProject(locale)
       .then(setFeaturedProject)
       .catch(() => null);
     fetchCategoryStats()
@@ -107,12 +109,14 @@ export default function Home({ publicKey, onConnect }: HomeProps) {
 
     fetchProjects({ limit: 100 })
       .then(({ projects }) => {
+    fetchProjects({ limit: 100, lang: locale })
+      .then((projects) => {
         projectNamesRef.current = new Map(
           projects.map((project) => [project.id, project.name]),
         );
       })
       .catch(() => null);
-  }, []);
+  }, [locale]);
 
   const handleDonationEvent = useCallback((payload: DonationSocketPayload) => {
     const projectName = projectNamesRef.current.get(payload.projectId);
@@ -457,12 +461,15 @@ function FeaturedProjectCard({ project }: { project: ClimateProject }) {
                 {project.category}
               </span>
             </div>
-            <h3 className="font-display text-2xl font-bold text-forest-900 mb-2">
-              {project.name}
-            </h3>
-            <p className="text-[#4b654b] text-sm leading-relaxed font-body mb-4 line-clamp-3">
-              {project.description}
-            </p>
+            <div dir={project.contentDirection} lang={project.contentLanguage} className="text-start">
+              <h3 className="font-display text-2xl font-bold text-forest-900 mb-2">
+                {project.name}
+              </h3>
+              <p className="text-[#4b654b] text-sm leading-relaxed font-body mb-3 line-clamp-3">
+                {project.description}
+              </p>
+            </div>
+            <div className="mb-4"><ContentLanguageNotice content={project} /></div>
             <div className="flex flex-wrap gap-4 text-sm mb-5">
               <span className="flex items-center gap-1 text-forest-700 font-body">
                 👥 <strong>{t("project.donorsCount", { count: project.donorCount })}</strong>
