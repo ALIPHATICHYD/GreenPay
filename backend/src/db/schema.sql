@@ -55,6 +55,90 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_summary_source_hash  TEXT;
 -- Set by PATCH /api/projects/:id/status when an admin rejects a project;
 -- read back by store.js's mapProjectRow as rejectionReason.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS rejection_reason        TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMPTZ;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS verification_revoked_at TIMESTAMPTZ;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS verification_revocation_reason TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS verification_decision_tx_hash TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS verification_decision_contract_id TEXT;
+
+CREATE TABLE IF NOT EXISTS project_verification_applications (
+  id UUID PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  submitted_by_wallet TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'wallet_proof_pending'
+    CHECK (status IN (
+      'wallet_proof_pending',
+      'submitted',
+      'under_review',
+      'community_vote',
+      'approved',
+      'rejected',
+      'revoked',
+      'expired'
+    )),
+  attestation_summary TEXT,
+  wallet_challenge TEXT,
+  wallet_challenge_expires_at TIMESTAMPTZ,
+  wallet_verified_at TIMESTAMPTZ,
+  submitted_at TIMESTAMPTZ,
+  community_vote_opens_at TIMESTAMPTZ,
+  community_vote_closes_at TIMESTAMPTZ,
+  approved_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revocation_reason TEXT,
+  decision_tx_hash TEXT,
+  decision_contract_id TEXT,
+  latest_rationale TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_verification_applications_project
+  ON project_verification_applications (project_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_verification_applications_status
+  ON project_verification_applications (status);
+
+CREATE TABLE IF NOT EXISTS project_verification_evidence (
+  id UUID PRIMARY KEY,
+  application_id UUID NOT NULL REFERENCES project_verification_applications(id) ON DELETE CASCADE,
+  evidence_type TEXT NOT NULL
+    CHECK (evidence_type IN (
+      'wallet_control',
+      'legal_identity',
+      'project_documentation',
+      'impact_evidence',
+      'other'
+    )),
+  attestation_type TEXT NOT NULL
+    CHECK (attestation_type IN ('cryptographic_proof', 'human_attestation')),
+  document_hash TEXT NOT NULL,
+  storage_uri TEXT,
+  private BOOLEAN NOT NULL DEFAULT TRUE,
+  submitted_by TEXT NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_verification_evidence_application
+  ON project_verification_evidence (application_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_verification_events (
+  id UUID PRIMARY KEY,
+  application_id UUID NOT NULL REFERENCES project_verification_applications(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL,
+  actor_type TEXT NOT NULL
+    CHECK (actor_type IN ('project_wallet', 'platform_admin', 'dao', 'system')),
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  rationale TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_verification_events_application
+  ON project_verification_events (application_id, created_at ASC);
 
 CREATE TABLE IF NOT EXISTS donations (
   id UUID PRIMARY KEY,

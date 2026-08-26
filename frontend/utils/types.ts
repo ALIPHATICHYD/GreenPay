@@ -45,6 +45,11 @@ export interface ClimateProject {
   onChainVerified?: boolean;
   contractRegisteredAt?: number | null;
   totalRaisedOnChain?: string;
+  verificationExpiresAt?: string | null;
+  verificationRevokedAt?: string | null;
+  verificationRevocationReason?: string | null;
+  verificationDecisionTxHash?: string | null;
+  verificationDecisionContractId?: string | null;
   tags: string[];
   createdAt: string;
   updatedAt: string;
@@ -69,6 +74,86 @@ export interface ClimateProject {
   requestedLanguage?: "en" | "es" | "ar" | null;
   usedFallback?: boolean;
   machineTranslated?: boolean;
+}
+
+export type ProjectVerificationStatus =
+  | "wallet_proof_pending"
+  | "submitted"
+  | "under_review"
+  | "community_vote"
+  | "approved"
+  | "rejected"
+  | "revoked"
+  | "expired";
+
+export interface ProjectVerificationApplication {
+  id: string;
+  projectId: string;
+  submittedByWallet: string;
+  status: ProjectVerificationStatus;
+  attestationSummary?: string | null;
+  walletChallengeExpiresAt?: string | null;
+  walletVerifiedAt?: string | null;
+  submittedAt?: string | null;
+  communityVoteOpensAt?: string | null;
+  communityVoteClosesAt?: string | null;
+  approvedAt?: string | null;
+  expiresAt?: string | null;
+  revokedAt?: string | null;
+  revocationReason?: string | null;
+  decisionTxHash?: string | null;
+  decisionContractId?: string | null;
+  latestRationale?: string | null;
+  evidenceCount: number;
+  proofCount: number;
+  attestationCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectVerificationEvidence {
+  id: string;
+  applicationId: string;
+  evidenceType: "wallet_control" | "legal_identity" | "project_documentation" | "impact_evidence" | "other";
+  attestationType: "cryptographic_proof" | "human_attestation";
+  documentHash: string;
+  storageUri?: string | null;
+  private: boolean;
+  submittedBy: string;
+  notes?: string | null;
+  createdAt: string;
+}
+
+export interface ProjectVerificationEvent {
+  id: string;
+  applicationId: string;
+  actor: string;
+  actorType: "project_wallet" | "platform_admin" | "dao" | "system";
+  fromStatus?: ProjectVerificationStatus | null;
+  toStatus: ProjectVerificationStatus;
+  rationale?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ProjectVerificationStatusResponse {
+  projectId: string;
+  walletAddress: string;
+  verified: boolean;
+  onChainVerified: boolean;
+  verificationExpiresAt?: string | null;
+  verificationRevokedAt?: string | null;
+  verificationRevocationReason?: string | null;
+  verificationDecisionTxHash?: string | null;
+  verificationDecisionContractId?: string | null;
+  badgeExpired?: boolean;
+  badgeRevoked?: boolean;
+  currentStatus?: ProjectVerificationStatus | null;
+  contractRegisteredAt?: number | null;
+  totalRaisedOnChain?: string;
+  latestApplication?: ProjectVerificationApplication | null;
+  timeline: ProjectVerificationEvent[];
+  publicEvidence?: ProjectVerificationEvidence[];
 }
 
 /**
