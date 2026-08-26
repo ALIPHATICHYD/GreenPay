@@ -75,11 +75,24 @@ describe("projectSearch", () => {
       expect(sql).toContain("ts_rank_cd");
     });
 
-    it("falls back to created_at when no search term", () => {
+    it("falls back to created_at with id tiebreaker when no search term", () => {
       const filters = parseFilters({ limit: 10 });
-      const { sql } = buildListingQuery(filters, DEFAULT_RANKING);
-      expect(sql).toContain("ORDER BY p.created_at DESC");
+      const { sql, values } = buildListingQuery(filters, DEFAULT_RANKING);
+      expect(sql).toContain("ORDER BY p.created_at DESC, p.id DESC");
       expect(sql).not.toContain("ts_rank_cd");
+      expect(values).toContain(11);
+    });
+
+    it("adds a keyset cursor predicate to listing queries only", () => {
+      const filters = parseFilters({
+        limit: 10,
+        cursor: "v1.eyJjcmVhdGVkQXQiOiIyMDI2LTA4LTI2VDEyOjAwOjAwWiIsImlkIjoiMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIn0",
+      });
+      const { sql, values } = buildListingQuery(filters, DEFAULT_RANKING);
+      expect(sql).toContain("(p.created_at, p.id) <");
+      expect(values).toEqual(
+        expect.arrayContaining(["11111111-1111-1111-1111-111111111111", 11]),
+      );
     });
   });
 

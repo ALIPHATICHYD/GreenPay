@@ -46,6 +46,7 @@ function searchRankClause(paramIndex) {
 }
 
 const { projectLocalizationSelect } = require("./contentLanguage");
+const { decodeCursor, formatPaginatedResponse } = require("../utils/pagination");
 
 const VALID_STATUSES = ["active", "completed", "paused"];
 const VALID_CATEGORIES = [
@@ -90,14 +91,43 @@ function parseFilters(query) {
     ? query.lang.trim().toLowerCase()
     : null;
 
+  let cursor = null;
+  if (query.cursor) {
+    cursor = decodeCursor(query.cursor);
+  }
+
   return {
     category: VALID_CATEGORIES.includes(query.category) ? query.category : null,
     status: VALID_STATUSES.includes(query.status) ? query.status : null,
     verified: query.verified === "true" ? true : query.verified === "false" ? false : null,
     search: sanitizeSearchTerm(query.search),
     lang,
+    cursor,
     limit,
   };
+}
+
+/**
+ * Append keyset cursor predicates to the listing query only (not facet counts).
+ */
+function appendListingCursor(filters, whereSql, values) {
+  if (!filters.cursor) {
+    return whereSql;
+  }
+
+  if (filters.cursor.createdAt && filters.cursor.id) {
+    values.push(filters.cursor.createdAt, filters.cursor.id);
+    const clause = `(p.created_at, p.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`;
+    return whereSql ? `${whereSql} AND ${clause}` : `WHERE ${clause}`;
+  }
+
+  if (filters.cursor.createdAt) {
+    values.push(filters.cursor.createdAt);
+    const clause = `p.created_at < $${values.length}::timestamptz`;
+    return whereSql ? `${whereSql} AND ${clause}` : `WHERE ${clause}`;
+  }
+
+  return whereSql;
 }
 
 /**
@@ -139,6 +169,7 @@ function buildWhereClause(filters) {
  */
 function buildListingQuery(filters, ranking) {
   const { whereSql, values, searchParamIndex } = buildWhereClause(filters);
+  const listingWhereSql = appendListingCursor(filters, whereSql, values);
 
   let localizationJoin = "";
   let localizationColumns = "";
@@ -151,12 +182,13 @@ function buildListingQuery(filters, ranking) {
   }
 
   const limitIndex = values.length + 1;
-  values.push(filters.limit);
+  values.push(filters.limit + 1);
 
   let orderBy;
   let rankSelect = "0 AS rank_score";
+  const hasSearchRanking = Boolean(filters.search && searchParamIndex);
 
-  if (filters.search && searchParamIndex) {
+  if (hasSearchRanking) {
     const idx = searchParamIndex;
     rankSelect = `(
       $${limitIndex + 1}::float8 * (
@@ -179,19 +211,33 @@ function buildListingQuery(filters, ranking) {
       ranking.donorCountBoost,
     );
 
-    orderBy = "rank_score DESC, p.created_at DESC";
+    orderBy = "rank_score DESC, created_at DESC, id DESC";
   } else {
-    orderBy = "p.created_at DESC";
+    orderBy = "p.created_at DESC, p.id DESC";
   }
 
-  const sql = `
-    SELECT p.*, ${rankSelect}${localizationColumns}
-    FROM projects p
-    ${localizationJoin}
-    ${whereSql}
-    ORDER BY ${orderBy}
-    LIMIT $${limitIndex}
-  `;
+  let sql;
+  if (hasSearchRanking) {
+    sql = `
+      SELECT * FROM (
+        SELECT p.*, ${rankSelect}${localizationColumns}
+        FROM projects p
+        ${localizationJoin}
+        ${listingWhereSql}
+      ) AS listing
+      ORDER BY ${orderBy}
+      LIMIT $${limitIndex}
+    `;
+  } else {
+    sql = `
+      SELECT p.*, ${rankSelect}${localizationColumns}
+      FROM projects p
+      ${localizationJoin}
+      ${listingWhereSql}
+      ORDER BY ${orderBy}
+      LIMIT $${limitIndex}
+    `;
+  }
 
   return { sql, values };
 }
@@ -276,11 +322,22 @@ async function searchProjects(pool, queryParams, ranking) {
     ]);
 
   const latencyMs = Date.now() - started;
+  const totalCount = totalResult.rows[0]?.count ?? 0;
+  const { data, meta: paginationMeta } = formatPaginatedResponse({
+    rows: listResult.rows,
+    limit: filters.limit,
+    getCursorPayload: (row) => ({
+      createdAt: row.created_at,
+      id: row.id,
+    }),
+    totalCount,
+    isTotalExact: true,
+  });
 
   return {
-    rows: listResult.rows,
+    rows: data,
     meta: {
-      total: totalResult.rows[0]?.count ?? 0,
+      total: totalCount,
       search: filters.search || null,
       latencyMs,
       ranking: filters.search ? ranking : null,
@@ -291,6 +348,7 @@ async function searchProjects(pool, queryParams, ranking) {
         location: rowsToCountMap(locationResult.rows),
         fundingProgress: rowsToCountMap(fundingResult.rows),
       },
+      ...paginationMeta,
     },
     filters,
   };

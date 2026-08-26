@@ -178,8 +178,6 @@ router.get("/featured", async (req, res, next) => {
   }
 });
 
-const { decodeCursor, formatPaginatedResponse } = require("../utils/pagination");
-
 router.get("/", async (req, res, next) => {
   try {
     const language = requestedLanguage(req);
