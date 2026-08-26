@@ -243,3 +243,4 @@ lifecycle. Verified idempotent across repeated runs.
 (`elapsed < 200ms`, logging ~124ms). It failed once under CPU contention and passed
 7/7 in isolation. Pre-existing and unrelated to this PR, but a real CI flake risk —
 happy to convert it to relative assertions in a follow-up.
+..
