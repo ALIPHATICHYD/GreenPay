@@ -17,6 +17,31 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Original donor-facing copy remains on projects for backwards compatibility.
+-- source_language identifies that immutable language context; approved
+-- translations are separate moderated user-content records.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_language TEXT NOT NULL DEFAULT 'en';
+
+CREATE TABLE IF NOT EXISTS project_translations (
+  id UUID PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  language TEXT NOT NULL CHECK (language IN ('en', 'es', 'ar')),
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  category TEXT NOT NULL,
+  location TEXT NOT NULL,
+  machine_translated BOOLEAN NOT NULL DEFAULT FALSE,
+  impact_claims_reviewed BOOLEAN NOT NULL DEFAULT FALSE,
+  moderation_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (moderation_status IN ('pending', 'approved', 'rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(project_id, language)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_translations_search
+  ON project_translations(project_id, language, moderation_status);
+
 -- AI summary cache: filled on demand by POST /api/projects/:id/generate-summary,
 -- read by GET /api/projects/:id and rendered as a highlighted card on the
 -- project detail page. ai_summary_source_hash stores a SHA-256 of the
@@ -80,6 +105,26 @@ CREATE TABLE IF NOT EXISTS project_updates (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE project_updates ADD COLUMN IF NOT EXISTS source_language TEXT NOT NULL DEFAULT 'en';
+
+CREATE TABLE IF NOT EXISTS project_update_translations (
+  id UUID PRIMARY KEY,
+  update_id UUID NOT NULL REFERENCES project_updates(id) ON DELETE CASCADE,
+  language TEXT NOT NULL CHECK (language IN ('en', 'es', 'ar')),
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  machine_translated BOOLEAN NOT NULL DEFAULT FALSE,
+  impact_claims_reviewed BOOLEAN NOT NULL DEFAULT FALSE,
+  moderation_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (moderation_status IN ('pending', 'approved', 'rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(update_id, language)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_update_translations_lookup
+  ON project_update_translations(update_id, language, moderation_status);
+
 CREATE TABLE IF NOT EXISTS project_subscriptions (
   id UUID PRIMARY KEY,
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -88,6 +133,8 @@ CREATE TABLE IF NOT EXISTS project_subscriptions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(project_id, email)
 );
+
+ALTER TABLE project_subscriptions ADD COLUMN IF NOT EXISTS preferred_language TEXT NOT NULL DEFAULT 'en';
 
 CREATE TABLE IF NOT EXISTS jobs (
   id UUID PRIMARY KEY,
@@ -325,3 +372,51 @@ CREATE TABLE IF NOT EXISTS matching_processed_donations (
 
 CREATE INDEX IF NOT EXISTS idx_matching_processed_donations_tx_hash
   ON matching_processed_donations (original_tx_hash);
+
+-- ============================================================
+-- Project search indexes (issue #500)
+-- Full-text + trigram for ranked discovery; no leading-wildcard scans.
+-- Multilingual: 'simple' config avoids mis-stemming non-English descriptions.
+-- ============================================================
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS search_vector tsvector;
+
+CREATE OR REPLACE FUNCTION projects_search_vector_update() RETURNS trigger AS $$
+BEGIN
+  -- English stemming on primary narrative fields; simple tokenization on the
+  -- rest so multilingual category/location/tags are not mis-stemmed.
+  NEW.search_vector :=
+    setweight(to_tsvector('english', coalesce(NEW.name, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(NEW.name, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(NEW.category, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(NEW.location, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(array_to_string(NEW.tags, ' '), '')), 'C') ||
+    setweight(to_tsvector('english', coalesce(NEW.description, '')), 'D') ||
+    setweight(to_tsvector('simple', coalesce(NEW.description, '')), 'D');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS projects_search_vector_trigger ON projects;
+CREATE TRIGGER projects_search_vector_trigger
+  BEFORE INSERT OR UPDATE OF name, description, category, location, tags ON projects
+  FOR EACH ROW EXECUTE FUNCTION projects_search_vector_update();
+
+UPDATE projects SET
+  search_vector =
+    setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(name, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(category, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(location, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(array_to_string(tags, ' '), '')), 'C') ||
+    setweight(to_tsvector('english', coalesce(description, '')), 'D') ||
+    setweight(to_tsvector('simple', coalesce(description, '')), 'D')
+WHERE search_vector IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_projects_search_vector ON projects USING GIN (search_vector);
+CREATE INDEX IF NOT EXISTS idx_projects_name_trgm ON projects USING GIN (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_projects_location_trgm ON projects USING GIN (location gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_projects_category ON projects (category);
+CREATE INDEX IF NOT EXISTS idx_projects_status ON projects (status);
+CREATE INDEX IF NOT EXISTS idx_projects_verified ON projects (verified);

@@ -41,6 +41,7 @@ function createShutdownHandler({
   pool,
   shutdownEventSourcing,
   stopIndexer,
+  shutdownRealtime,
   timeoutMs = 25000,
   exit = process.exit,
   logger = console,
@@ -65,6 +66,11 @@ function createShutdownHandler({
       logger.log("[Shutdown] HTTP server closed");
 
       if (stopIndexer) await stopIndexer();
+
+      // The realtime adapter holds two long-lived Redis connections. They keep
+      // the event loop alive, so without closing them the process sits until
+      // the timeout above forces a non-zero exit on every rolling deploy.
+      if (shutdownRealtime) await shutdownRealtime();
 
       await shutdownEventSourcing();
       await pool.end();

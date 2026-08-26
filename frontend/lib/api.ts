@@ -256,6 +256,28 @@ export async function parseApiFetchResponse<T>(response: Response): Promise<T> {
   throw new ApiClientError(body.error, response.status, response);
 }
 
+export interface ProjectSearchFacets {
+  category: Record<string, number>;
+  status: Record<string, number>;
+  verified: Record<string, number>;
+  location: Record<string, number>;
+  fundingProgress: Record<string, number>;
+}
+
+export interface ProjectSearchMeta {
+  total: number;
+  search: string | null;
+  latencyMs: number;
+  latencyBudgetMs?: number;
+  facets: ProjectSearchFacets;
+  ranking?: Record<string, number> | null;
+}
+
+export interface ProjectListResponse {
+  projects: ClimateProject[];
+  meta?: ProjectSearchMeta;
+}
+
 // ── Projects ──────────────────────────────────────────────────────────────────
 export async function fetchProjects(params?: {
   category?: string;
@@ -263,17 +285,23 @@ export async function fetchProjects(params?: {
   verified?: boolean;
   search?: string;
   limit?: number;
-}) {
-  const { data } = await api.get<ClimateProject[]>(
+  cursor?: string;
+  lang?: "en" | "es" | "ar";
+}): Promise<ProjectListResponse> {
+  const response = await api.get<ClimateProject[]>(
     "/api/projects",
     { params },
   );
-  return data;
+  return {
+    projects: response.data,
+    meta: responseMeta(response) as ProjectSearchMeta | undefined,
+  };
 }
 
-export async function fetchProject(id: string) {
+export async function fetchProject(id: string, lang?: "en" | "es" | "ar") {
   const { data } = await api.get<ClimateProject>(
     `/api/projects/${id}`,
+    { params: lang && lang !== "en" ? { lang } : undefined },
   );
   return data;
 }
@@ -404,9 +432,25 @@ export async function upsertProfile(
 }
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────
-export async function fetchLeaderboard(limit = 20, period = "all", offset = 0) {
-  const { data } = await api.get<LeaderboardEntry[]>("/api/leaderboard", { params: { limit, period, offset } });
+export async function fetchLeaderboard(limit = 20, period = "all", offset = 0, cursor?: string) {
+  const params: Record<string, unknown> = { limit, period };
+  if (cursor) params.cursor = cursor;
+  else if (offset) params.offset = offset;
+  const { data } = await api.get<LeaderboardEntry[]>("/api/leaderboard", { params });
   return data;
+}
+
+export async function fetchLeaderboardWithMeta(limit = 20, period = "all", cursor?: string, offset = 0) {
+  const params: Record<string, unknown> = { limit, period };
+  if (cursor) params.cursor = cursor;
+  else if (offset) params.offset = offset;
+  const response = await api.get<LeaderboardEntry[]>("/api/leaderboard", { params });
+  const meta = responseMeta(response);
+  return {
+    entries: response.data,
+    nextCursor: (meta?.nextCursor as string | null | undefined) ?? null,
+    hasMore: (meta?.hasMore as boolean | undefined) ?? false,
+  };
 }
 
 // ── Jobs (escrow) ───────────────────────────────────────────────────────────
@@ -439,9 +483,10 @@ export async function completeJobRelease(
 }
 
 // ── Project Updates ─────────────────────────────────────────────
-export async function fetchProjectUpdates(projectId: string) {
+export async function fetchProjectUpdates(projectId: string, lang?: "en" | "es" | "ar") {
   const { data } = await api.get<ProjectUpdate[]>(
     `/api/updates/${projectId}`,
+    { params: lang && lang !== "en" ? { lang } : undefined },
   );
   return data;
 }
@@ -464,6 +509,7 @@ export async function subscribeToProject(payload: {
   projectId: string;
   email: string;
   donorAddress?: string;
+  preferredLanguage?: "en" | "es" | "ar";
 }) {
   const { data } = await api.post<{ message: string }>(
     "/api/subscriptions",
@@ -588,10 +634,11 @@ export async function fetchUpdateLikes(updateId: string, donorAddress?: string) 
 }
 
 // ── Featured Project ─────────────────────────────────────────────
-export async function fetchFeaturedProject(): Promise<ClimateProject | null> {
+export async function fetchFeaturedProject(lang?: "en" | "es" | "ar"): Promise<ClimateProject | null> {
   try {
     const { data } = await api.get<ClimateProject>(
       "/api/projects/featured",
+      { params: lang && lang !== "en" ? { lang } : undefined },
     );
     return data;
   } catch {

@@ -20,7 +20,7 @@ import { useI18n } from "@/lib/i18n";
 interface DashboardProps { publicKey: string | null; onConnect: (pk: string) => void; }
 
 export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
-  const { localeTag } = useI18n();
+  const { localeTag, locale } = useI18n();
   const [profile,   setProfile]   = useState<DonorProfile | null>(null);
   const [donations, setDonations] = useState<Donation[]>([]);
   const [balance,   setBalance]   = useState<string | null>(null);
@@ -42,17 +42,17 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
       fetchProfile(publicKey).catch(() => null),
       fetchDonorHistory(publicKey),
       getXLMBalance(publicKey).catch(() => { setIsUnfunded(true); return null; }),
-      fetchProjects(),
+      fetchProjects({ lang: locale }),
     ])
-      .then(([p, d, b, allProjects]) => { 
+      .then(([p, d, b, projectResponse]) => { 
         setProfile(p); 
         setDonations(d); 
         if (b !== null) {
           setBalance(b);
           setIsUnfunded(false);
         }
-        setAllProjects(allProjects);
-        setSavedProjects(allProjects.filter(proj => wishlist.includes(proj.id)));
+        setAllProjects(projectResponse.projects);
+        setSavedProjects(projectResponse.projects.filter(proj => wishlist.includes(proj.id)));
         
         // Fetch pending rating
         return fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/v1/ratings/pending?donorAddress=${publicKey}`);
@@ -65,7 +65,7 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [publicKey, wishlist]);
+  }, [publicKey, wishlist, locale]);
 
   useEffect(() => {
     if (!publicKey) return;

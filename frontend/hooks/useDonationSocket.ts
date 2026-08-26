@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getSocket } from "@/lib/socket";
 import {
   SOCKET_EVENTS,
@@ -22,22 +22,30 @@ export interface UseDonationSocketOptions {
  * Subscribes to the backend's Socket.IO "donation_event" broadcast and invokes
  * `onDonation` for validated, deduplicated events matching `projectId`.
  *
+ * Beyond forwarding live events it closes the reconnect gap: the cursor of the
+ * last event seen is remembered, and on every reconnect the hook asks the
+ * backend what was broadcast in the meantime and replays it through the same
+ * callback, in order. When the backend cannot prove the replay is complete, or
+ * reports that its pod is delivering to itself only, `onGap` fires so the caller
+ * can reconcile against REST instead of silently carrying a hole in the feed.
+ *
  * Exposes the connection `status` so consumers can observe socket connectivity.
  */
-
 export function useDonationSocket(
     projectId: string | undefined | null,
     onDonation: (payload: DonationSocketPayload) => void,
     options?: UseDonationSocketOptions,
 ) {
   const socket = getSocket();
+  const { onGap, replayOnReconnect = true } = options;
 
   // Track status state
   const [status, setStatus] = useState<SocketStatus>(
       socket.connected ? "connected" : "connecting"
   );
+  const [delivery, setDelivery] = useState<RealtimeStatus["delivery"] | null>(null);
 
-  // Store latest callback in a ref to keep subscription stable across re-renders
+  // Store latest callbacks in refs to keep the subscription stable across renders
   const onDonationRef = useRef(onDonation);
   useEffect(() => {
     onDonationRef.current = onDonation;
@@ -93,6 +101,8 @@ export function useDonationSocket(
       onDonationRef.current(payload);
     };
 
+    const handleEvent = (payload: DonationSocketPayload) => deliver(payload);
+
     // Attach listeners
     socket.on("connect", handleConnect);
     socket.on("disconnect", handleDisconnect);
@@ -106,12 +116,13 @@ export function useDonationSocket(
 
     // Cleanup listeners on unmount or projectId change
     return () => {
+      cancelled = true;
       socket.off("connect", handleConnect);
       socket.off("disconnect", handleDisconnect);
       socket.off("connect_error", handleConnectError);
       socket.off(SOCKET_EVENTS.DONATION_EVENT, handleEvent);
     };
-  }, [projectId, socket]);
+  }, [projectId, socket, deliver, replayOnReconnect]);
 
   return { status };
 }

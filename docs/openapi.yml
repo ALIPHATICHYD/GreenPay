@@ -30,6 +30,12 @@ tags:
   - name: Impact
   - name: Ratings
   - name: Admin
+  - name: Realtime
+    description: >-
+      Live donation feed delivery. Broadcasts fan out across every backend
+      replica through a shared adapter; these endpoints let a client recover
+      events missed while disconnected and let operators see delivery per pod.
+      The full contract is documented in docs/realtime.md.
 
 components:
   schemas:
@@ -86,6 +92,9 @@ components:
           type: string
         category:
           type: string
+          description: Localized category label. Use sourceCategory for the stable filter value.
+        sourceCategory:
+          type: string
           enum: [Reforestation, Solar Energy, Ocean Conservation, Clean Water, Wildlife Protection, Carbon Capture, Wind Energy, Sustainable Agriculture, Other]
         status:
           type: string
@@ -117,6 +126,23 @@ components:
         updatedAt:
           type: string
           format: date-time
+        sourceLanguage:
+          type: string
+          enum: [en, es, ar]
+        contentLanguage:
+          type: string
+          enum: [en, es, ar]
+        requestedLanguage:
+          type: string
+          enum: [en, es, ar]
+          nullable: true
+        contentDirection:
+          type: string
+          enum: [ltr, rtl]
+        usedFallback:
+          type: boolean
+        machineTranslated:
+          type: boolean
 
     Campaign:
       type: object
@@ -286,6 +312,74 @@ components:
         createdAt:
           type: string
           format: date-time
+        sourceLanguage: { type: string, enum: [en, es, ar] }
+        contentLanguage: { type: string, enum: [en, es, ar] }
+        contentDirection: { type: string, enum: [ltr, rtl] }
+        requestedLanguage: { type: string, enum: [en, es, ar], nullable: true }
+        usedFallback: { type: boolean }
+        machineTranslated: { type: boolean }
+
+    ProjectSearchFacets:
+      type: object
+      description: Facet counts for the current filtered result set.
+      properties:
+        status:
+          type: object
+          additionalProperties:
+            type: integer
+        category:
+          type: object
+          additionalProperties:
+            type: integer
+        verified:
+          type: object
+          properties:
+            "true":
+              type: integer
+            "false":
+              type: integer
+        location:
+          type: object
+          additionalProperties:
+            type: integer
+        fundingProgress:
+          type: object
+          additionalProperties:
+            type: integer
+          description: |
+            Counts keyed by bucket — under25, 25to50, 50to75, over75, funded.
+
+    ProjectSearchMeta:
+      type: object
+      description: Search metadata returned alongside project listings.
+      properties:
+        total:
+          type: integer
+          description: Total projects matching filters (before limit).
+        search:
+          type: string
+          nullable: true
+          description: Sanitized search term applied to the query.
+        latencyMs:
+          type: number
+          format: float
+          description: Server-side query latency in milliseconds.
+        latencyBudgetMs:
+          type: number
+          format: float
+          description: Target p95 latency budget (default 150ms).
+        facets:
+          $ref: '#/components/schemas/ProjectSearchFacets'
+        ranking:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: number
+          description: Optional per-field ranking weight snapshot for debugging.
+
+    ProjectListMeta:
+      allOf:
+        - $ref: '#/components/schemas/ProjectSearchMeta'
 
     Job:
       type: object
@@ -350,17 +444,171 @@ components:
           type: string
           format: date-time
 
-    Pagination:
+    ReplayedEvent:
+      type: object
+      description: One event recorded in the shared replay log.
+      properties:
+        cursor:
+          type: string
+          description: Opaque position of this event in the global feed.
+          example: r:1787752099968-0
+        name:
+          type: string
+          description: Socket.IO event name this was broadcast as.
+          example: donation_event
+        payload:
+          type: object
+          additionalProperties: true
+          description: The event body, identical to what was broadcast live.
+        emittedAt:
+          type: string
+          format: date-time
+
+    ReplayMeta:
       type: object
       properties:
-        total:
-          type: integer
+        reset:
+          type: boolean
+          description: >-
+            True when the server cannot prove this reply is complete. The client
+            must refetch current state from REST rather than appending `data` to
+            its timeline. This is NOT the same as an empty `data` array, which
+            legitimately means no events occurred.
+        reason:
+          type: string
+          nullable: true
+          enum: [NO_CURSOR, INVALID_CURSOR, CURSOR_FOREIGN, CURSOR_EXPIRED, STORE_UNAVAILABLE]
+          description: >-
+            Why the cursor could not be honoured. Null when `reset` is false.
+            NO_CURSOR means the client has no timeline yet and simply starts from
+            now, which is not a gap.
+        degraded:
+          type: boolean
+          description: Whether the replay log is currently operating without its shared store.
+        nextCursor:
+          type: string
+          nullable: true
+          description: Cursor to resume the live feed from, and to chain further pages.
+        recovery:
+          type: string
+          description: Human-readable statement of what the client should do next.
+
+    RealtimeStatus:
+      type: object
+      description: Delivery status for one backend instance.
+      properties:
+        instanceId:
+          type: string
+          description: Identifies the responding pod. Changes on restart.
+        mode:
+          type: string
+          enum: [single-process, redis-adapter]
+          description: >-
+            single-process is a supported local-development mode, not a fault —
+            one process delivering to its own clients is complete delivery.
+        degraded:
+          type: boolean
+        reason:
+          type: string
+          nullable: true
+        delivery:
+          type: string
+          enum: [global, instance]
+          description: >-
+            global — this pod's broadcasts reach clients on every replica.
+            instance — they reach only this pod's clients, so the feed is
+            incomplete and clients should reconcile against REST.
+        replay:
+          type: object
+          additionalProperties: true
+          description: State of the replay log backing reconnect recovery.
+        metrics:
+          type: object
+          description: Counters for this instance only.
+          properties:
+            instanceId: { type: string }
+            currentConnections: { type: integer }
+            peakConnections: { type: integer }
+            connectionsOpened: { type: integer }
+            connectionsClosed: { type: integer }
+            eventsPublished:
+              type: integer
+              description: Broadcasts originated by this instance.
+            fanoutObserved:
+              type: integer
+              description: >-
+                Broadcasts received from other instances. Flat at zero on a pod
+                holding connections, while others publish, is the signature of
+                broken cross-replica delivery.
+            publishFailures: { type: integer }
+            replayRequests: { type: integer }
+            replayResets:
+              type: integer
+              description: Replays that could not be honoured; a rising rate means clients are falling outside the retention window.
+
+    Pagination:
+      type: object
+      description: Single standard pagination metadata contract used by all list endpoints.
+      properties:
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque versioned cursor for fetching the next page (null when no more items).
+          example: v1.eyJjcmVhdGVkQXQiOiIyMDI2LTA4LTI2VDEyOjAwOjAwWiIsImlkIjoiYWJjZCJ9
+        hasMore:
+          type: boolean
+          description: Whether additional items exist beyond the current page.
         limit:
           type: integer
+          description: Page size cap requested or applied.
+        totalCount:
+          type: integer
+          nullable: true
+          description: Total count of items if calculated, or null if omitted/estimated.
+        isTotalExact:
+          type: boolean
+          description: True if totalCount is exact; false if estimated or omitted.
+        total:
+          type: integer
+          description: >-
+            Deprecated alias of `totalCount`, kept so clients written against
+            the offset-era envelope keep reading a count. Present only on the
+            endpoints that still compute one.
+          deprecated: true
         offset:
           type: integer
+          description: >-
+            Deprecated. Echoes the `offset` the caller sent, and is absent on
+            cursor-paginated endpoints.
+          deprecated: true
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
 
   parameters:
+    cursorParam:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Opaque, versioned continuation cursor, taken verbatim from a previous
+        response's `meta.pagination.nextCursor`. Its contents are not a stable
+        API: decode or construct one and it may stop working. A malformed
+        cursor is rejected with `INVALID_CURSOR`, and one issued by a newer
+        format with `UNSUPPORTED_CURSOR_VERSION` — both HTTP 400. The full
+        contract is documented once in docs/pagination.md.
+      schema:
+        type: string
+    limitParam:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return per page.
+      schema:
+        type: integer
     projectId:
       name: id
       in: path
@@ -435,15 +683,22 @@ paths:
           in: query
           schema:
             type: string
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
             type: integer
             default: 50
             maximum: 100
+        - name: lang
+          in: query
+          description: Preferred donor-content language. Falls back to the labelled original.
+          schema:
+            type: string
+            enum: [en, es, ar]
       responses:
         '200':
-          description: List of projects
+          description: List of projects with optional search metadata
           content:
             application/json:
               schema:
@@ -455,12 +710,20 @@ paths:
                         type: array
                         items:
                           $ref: '#/components/schemas/Project'
+                      meta:
+                        $ref: '#/components/schemas/ProjectListMeta'
 
   /api/projects/featured:
     get:
       tags: [Projects]
       summary: Get featured project
       operationId: getFeaturedProject
+      parameters:
+        - name: lang
+          in: query
+          schema:
+            type: string
+            enum: [en, es, ar]
       description: Returns the active project with the highest donor count. Cached for 24 hours.
       responses:
         '200':
@@ -563,6 +826,11 @@ paths:
       operationId: getProject
       parameters:
         - $ref: '#/components/parameters/projectId'
+        - name: lang
+          in: query
+          schema:
+            type: string
+            enum: [en, es, ar]
       responses:
         '200':
           description: Project detail with campaigns, milestones, ratings
@@ -599,6 +867,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/projects/{id}/translations/{language}:
+    put:
+      tags: [Projects]
+      summary: Create or replace a pending project translation without changing the original
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - name: language
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [en, es, ar]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, description, category, location]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                category: { type: string }
+                location: { type: string }
+                machineTranslated: { type: boolean, default: false }
+      responses:
+        '201': { description: Translation saved in pending moderation }
+
+  /api/projects/{id}/translations/{language}/moderation:
+    patch:
+      tags: [Projects]
+      summary: Moderate project translation content
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [pending, approved, rejected] }
+                impactClaimsReviewed: { type: boolean, default: false }
+      responses:
+        '200': { description: Translation moderation state updated }
+        '400': { description: Human impact-claim review is required before approving machine translation }
 
   /api/projects/{id}/status:
     patch:
@@ -1073,12 +1397,7 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: cursor
-          in: query
-          description: ISO timestamp for cursor-based pagination
-          schema:
-            type: string
-            format: date-time
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1116,6 +1435,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1144,9 +1464,16 @@ paths:
       operationId: listDonorDonations
       parameters:
         - $ref: '#/components/parameters/publicKey'
+        - $ref: '#/components/parameters/cursorParam'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
       responses:
         '200':
-          description: All donations by this donor
+          description: Paginated donations by this donor
           content:
             application/json:
               schema:
@@ -1245,6 +1572,7 @@ paths:
       summary: Get donor leaderboard
       operationId: getLeaderboard
       parameters:
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1253,9 +1581,17 @@ paths:
             maximum: 100
         - name: offset
           in: query
+          deprecated: true
+          description: >-
+            Superseded by `cursor`. Honoured only when no `cursor` is supplied,
+            so existing clients keep working unchanged, and it carries the
+            offset caveats: rows written while a client pages can be duplicated
+            or skipped, and deep offsets get slower with depth. See
+            docs/pagination.md for the transition.
           schema:
             type: integer
             default: 0
+            maximum: 10000
         - name: period
           in: query
           schema:
@@ -1290,17 +1626,17 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: cursor
-          in: query
-          schema:
-            type: string
-            format: date-time
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
             type: integer
             default: 20
             maximum: 100
+        - name: lang
+          in: query
+          description: Preferred update-content language with labelled source fallback.
+          schema: { type: string, enum: [en, es, ar] }
       responses:
         '200':
           description: Paginated project updates
@@ -1346,6 +1682,10 @@ paths:
                   type: string
                 body:
                   type: string
+                sourceLanguage:
+                  type: string
+                  enum: [en, es, ar]
+                  default: en
       responses:
         '201':
           description: Update created and subscribers notified
@@ -1376,6 +1716,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/updates/{updateId}/translations/{language}:
+    put:
+      tags: [Updates]
+      summary: Create or replace a pending update translation
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: updateId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, body]
+              properties:
+                title: { type: string }
+                body: { type: string }
+                machineTranslated: { type: boolean, default: false }
+      responses:
+        '201': { description: Translation saved in pending moderation }
+
+  /api/updates/{updateId}/translations/{language}/moderation:
+    patch:
+      tags: [Updates]
+      summary: Moderate update translation content
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: updateId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [pending, approved, rejected] }
+                impactClaimsReviewed: { type: boolean, default: false }
+      responses:
+        '200': { description: Translation moderation state updated }
+        '400': { description: Human impact-claim review is required before approving machine translation }
 
   /api/updates/{updateId}/like:
     post:
@@ -1486,6 +1882,10 @@ paths:
                   format: email
                 donorAddress:
                   type: string
+                preferredLanguage:
+                  type: string
+                  enum: [en, es, ar]
+                  default: en
       responses:
         '201':
           description: Subscribed successfully
@@ -1554,9 +1954,17 @@ paths:
       tags: [Jobs]
       summary: List jobs
       operationId: listJobs
+      parameters:
+        - $ref: '#/components/parameters/cursorParam'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
       responses:
         '200':
-          description: List of escrow jobs (latest 50)
+          description: Paginated escrow jobs
           content:
             application/json:
               schema:
@@ -1920,6 +2328,7 @@ paths:
           description: Filter by action string (e.g. project.status.active)
           schema:
             type: string
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1928,9 +2337,14 @@ paths:
             maximum: 200
         - name: offset
           in: query
+          deprecated: true
+          description: >-
+            Superseded by `cursor`. Honoured only when no `cursor` is supplied.
+            See docs/pagination.md for the transition.
           schema:
             type: integer
             default: 0
+            maximum: 10000
       responses:
         '200':
           description: Paginated audit log entries
@@ -1950,3 +2364,94 @@ paths:
                         properties:
                           pagination:
                             $ref: '#/components/schemas/Pagination'
+
+  # ── Realtime ─────────────────────────────────────────────────────────────────
+  /api/v1/realtime/replay:
+    get:
+      tags: [Realtime]
+      summary: Recover live events missed while disconnected
+      operationId: replayRealtimeEvents
+      description: >-
+        Returns the events broadcast after `cursor`. Every live Socket.IO event
+        carries the cursor identifying it; a client stores the last one it saw
+        and presents it here on reconnect.
+
+
+        Read `meta.reset` before `data`. When it is true the server cannot prove
+        the reply is complete, and the client must refetch current state from the
+        REST resources instead of appending this reply to its timeline. An empty
+        `data` array on its own is ambiguous — it reads the same for "you missed
+        nothing" and "your cursor is unusable" — so `reset` is what distinguishes
+        them.
+
+
+        Any replica can answer, because the replay log is shared; this is what
+        makes recovery work when a reconnect lands the client on a different pod.
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: >-
+            Opaque cursor taken verbatim from a previous event's `cursor` field
+            or from `meta.nextCursor`. Its contents are not a stable API.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum events to return. Capped at 500 server-side.
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+      responses:
+        '200':
+          description: Events broadcast after the cursor
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ReplayedEvent'
+                      meta:
+                        $ref: '#/components/schemas/ReplayMeta'
+        '400':
+          description: Malformed cursor parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/realtime/status:
+    get:
+      tags: [Realtime]
+      summary: Per-pod realtime delivery status and counters
+      operationId: getRealtimeStatus
+      description: >-
+        Reports the delivery guarantee and connection counters for the single
+        instance that served the request — deliberately per-pod, not aggregated.
+        A cluster-wide total of connected clients looks identical whether one pod
+        holds them all or ten pods hold a tenth each and only one ever receives a
+        broadcast, which is how broken cross-replica delivery went unnoticed.
+
+
+        Scrape from every replica. The failure signature is a pod holding
+        connections whose `fanoutObserved` stays at zero while other pods report
+        `eventsPublished` climbing.
+      responses:
+        '200':
+          description: Delivery status for the responding instance
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RealtimeStatus'

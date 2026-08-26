@@ -9,10 +9,12 @@
     "lint": "eslint src",
     "docs": "typedoc --options typedoc.json",
     "test": "jest --runInBand",
-    "test:local-chain": "RUN_LOCAL_CHAIN_TESTS=true jest src/services/localChainDonation.integration.test.js --runInBand"
+    "test:local-chain": "RUN_LOCAL_CHAIN_TESTS=true jest src/services/localChainDonation.integration.test.js --runInBand",
+    "eval:search": "node scripts/eval-project-search.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@stellar/stellar-sdk": "^12.0.0",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",

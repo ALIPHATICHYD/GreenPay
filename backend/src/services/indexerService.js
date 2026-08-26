@@ -10,6 +10,7 @@ const { execute } = require("../eventSourcing/commandBus");
 const { DonationRecordedEvent, MatchAppliedEvent } = require("../eventSourcing/events");
 const { stroopsToXlm, xlmToStroops } = require("../utils/xlm");
 const { SorobanEventIndexer } = require("./sorobanEventIndexer");
+const { publish } = require("../realtime");
 
 let lastProcessedLedger = 0;
 let isRunning = false;
@@ -240,6 +241,11 @@ async function handleDonation(projectId, op) {
 
     console.log(`[Indexer] New donation: ${amountXLM} XLM from ${donorAddress} to project ${projectId}`);
 
+    // Broadcast through the shared adapter so every replica's clients see it,
+    // not just the ones attached to whichever pod happens to run the indexer.
+    // The indexer runs on every pod, so this is the emit that most obviously
+    // needed fanning out. `io` is still checked because startIndexer() is
+    // called without one in several tests.
     if (io) {
       const { SOCKET_EVENTS } = require("../schemas/socketEvents");
       io.emit(SOCKET_EVENTS.DONATION_EVENT, {
