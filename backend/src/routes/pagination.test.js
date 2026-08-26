@@ -11,6 +11,18 @@ jest.mock("../db/pool", () => ({
 
 const pool = require("../db/pool");
 
+/** searchProjects runs one listing query plus six facet aggregations. */
+function mockProjectListingQueries(listingRows) {
+  pool.query
+    .mockResolvedValueOnce({ rows: listingRows })
+    .mockResolvedValueOnce({ rows: [{ count: listingRows.length }] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] });
+}
+
 function buildApp() {
   const app = express();
   app.use(express.json());
@@ -52,13 +64,11 @@ describe("Keyset Pagination & Cursor Stability", () => {
     });
 
     it("returns nextCursor in response envelope meta when hasMore is true", async () => {
-      pool.query.mockResolvedValueOnce({
-        rows: [
-          { id: "11111111-1111-1111-1111-111111111111", name: "P1", description: "D1", category: "Solar Energy", location: "L1", wallet_address: "W1", goal_xlm: "100", raised_xlm: "50", donor_count: 1, co2_offset_kg: 10, status: "active", verified: true, on_chain_verified: false, tags: [], created_at: "2026-08-26T12:00:00.000Z", updated_at: "2026-08-26T12:00:00.000Z" },
-          { id: "22222222-2222-2222-2222-222222222222", name: "P2", description: "D2", category: "Solar Energy", location: "L2", wallet_address: "W2", goal_xlm: "200", raised_xlm: "100", donor_count: 2, co2_offset_kg: 20, status: "active", verified: true, on_chain_verified: false, tags: [], created_at: "2026-08-26T11:00:00.000Z", updated_at: "2026-08-26T11:00:00.000Z" },
-          { id: "33333333-3333-3333-3333-333333333333", name: "P3", description: "D3", category: "Solar Energy", location: "L3", wallet_address: "W3", goal_xlm: "300", raised_xlm: "150", donor_count: 3, co2_offset_kg: 30, status: "active", verified: true, on_chain_verified: false, tags: [], created_at: "2026-08-26T10:00:00.000Z", updated_at: "2026-08-26T10:00:00.000Z" },
-        ],
-      });
+      mockProjectListingQueries([
+        { id: "11111111-1111-1111-1111-111111111111", name: "P1", description: "D1", category: "Solar Energy", location: "L1", wallet_address: "W1", goal_xlm: "100", raised_xlm: "50", donor_count: 1, co2_offset_kg: 10, status: "active", verified: true, on_chain_verified: false, tags: [], created_at: "2026-08-26T12:00:00.000Z", updated_at: "2026-08-26T12:00:00.000Z" },
+        { id: "22222222-2222-2222-2222-222222222222", name: "P2", description: "D2", category: "Solar Energy", location: "L2", wallet_address: "W2", goal_xlm: "200", raised_xlm: "100", donor_count: 2, co2_offset_kg: 20, status: "active", verified: true, on_chain_verified: false, tags: [], created_at: "2026-08-26T11:00:00.000Z", updated_at: "2026-08-26T11:00:00.000Z" },
+        { id: "33333333-3333-3333-3333-333333333333", name: "P3", description: "D3", category: "Solar Energy", location: "L3", wallet_address: "W3", goal_xlm: "300", raised_xlm: "150", donor_count: 3, co2_offset_kg: 30, status: "active", verified: true, on_chain_verified: false, tags: [], created_at: "2026-08-26T10:00:00.000Z", updated_at: "2026-08-26T10:00:00.000Z" },
+      ]);
 
       const res = await request(app).get("/api/projects").query({ limit: 2 });
 
@@ -77,7 +87,7 @@ describe("Keyset Pagination & Cursor Stability", () => {
 
   describe("Keyset Total Ordering Guarantees", () => {
     it("includes id tiebreaker in project queries", async () => {
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      mockProjectListingQueries([]);
 
       await request(app).get("/api/projects");
 
