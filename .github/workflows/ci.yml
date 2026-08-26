@@ -108,6 +108,21 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      # The multi-replica realtime suite spawns two or more real backend
+      # processes and asserts an event emitted by one reaches a client connected
+      # to another. That fan-out goes through Redis, so without this service the
+      # suite skips itself and the cross-replica guarantee is unproven — which is
+      # how the bug it covers survived in the first place.
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-install
@@ -116,7 +131,29 @@ jobs:
       - name: npm audit (fail on high/critical)
         run: npx --yes audit-ci@7.1.0 --high --package-manager npm
       - run: npm run lint
+
+      # Deliberately WITHOUT REDIS_URL. Pointing the whole suite at a live Redis
+      # makes it stateful across runs — the rate limiter's counters outlive the
+      # process, so a second run sees a throttled account from the first — and
+      # leaves an open connection that stops jest exiting. The suites that need
+      # a real Redis own their own connection lifecycle and run in the step
+      # below.
       - run: npm test -- --coverage
+
+      # These two skip themselves without a reachable Redis, which is what keeps
+      # `npm test` working on a developer machine. In CI that skip would quietly
+      # retire the only test proving cross-replica delivery, so they get a step
+      # with the service wired up, and the guard fails the build if the
+      # multi-replica suite did not actually run.
+      - name: Redis-backed suites (cross-replica delivery, shared rate limiter)
+        run: npx jest src/middleware/rateLimiter.redis.test.js test/realtime.multiInstance.test.js --runInBand
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+      - name: Multi-replica realtime delivery must actually run
+        run: node scripts/assert-multi-instance-coverage.js
+        working-directory: .
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
       - uses: actions/upload-artifact@v4
         if: always()
         with:

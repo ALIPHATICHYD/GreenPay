@@ -173,7 +173,7 @@ const schema = {
     required: false,
     type: "url",
     description:
-      "Redis connection string for distributed rate-limiting; falls back to in-memory store when unset",
+      "Redis connection string for distributed rate-limiting and cross-replica realtime delivery; unset runs single-process (correct locally, silently partial at 2+ replicas)",
   },
 
   CACHE_MAX_ENTRIES: {

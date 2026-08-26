@@ -105,6 +105,9 @@ const io = new Server(server, {
   }
 });
 app.set("io", io);
+// Cross-replica delivery is attached in startServer(), once the process is
+// actually serving. Until then `io.emit` reaches only this instance's clients
+// — see src/realtime/index.js for why that matters at two or more replicas.
 // Removed generic app-wide rate limiter — each mutating endpoint now has
 // a dedicated limiter appropriate to its abuse profile (see individual route files).
 
@@ -134,6 +137,7 @@ app.use(`${API_V1}/notifications`,  require("./routes/notifications"));
 app.use(`${API_V1}/admin`,          require("./routes/admin"));
 app.use(`${API_V1}/network`,        require("./routes/network"));
 app.use(`${API_V1}/meta`,           require("./routes/meta"));
+app.use(`${API_V1}/realtime`,       require("./routes/realtime"));
 
 // Legacy unversioned routes → redirect to /api/v1 with a deprecation notice.
 app.use("/api", (req, res, next) => {
@@ -156,6 +160,12 @@ async function startServer() {
   await runMigrations();
 
   await initializeEventSourcing();
+
+  // Before anything can emit: the indexer and the donation route both
+  // broadcast, and a broadcast made before the adapter is attached would reach
+  // only this pod's clients.
+  const { initializeRealtime } = require("./realtime");
+  await initializeRealtime(io);
 
   const { start: startSummaryQueue } = require("./services/summaryQueue");
   await startSummaryQueue(io);
@@ -189,6 +199,7 @@ const gracefulShutdown = createShutdownHandler({
   pool,
   shutdownEventSourcing,
   stopIndexer,
+  shutdownRealtime: () => require("./realtime").shutdownRealtime(),
   timeoutMs: SHUTDOWN_TIMEOUT_MS,
 });
 
