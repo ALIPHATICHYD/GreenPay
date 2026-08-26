@@ -144,6 +144,10 @@ jobs:
           key: ${{ runner.os }}-cargo-contracts-${{ hashFiles('contracts/**/Cargo.lock') }}
       - run: cargo check --workspace
       - run: cargo test --workspace
+      - name: Property tests (fast profile)
+        env:
+          PROPTEST_CASES: "32"
+        run: cargo test --workspace --features testutils prop_ -- --test-threads=1
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Rust vulnerability scan
