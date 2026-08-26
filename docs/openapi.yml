@@ -30,6 +30,12 @@ tags:
   - name: Impact
   - name: Ratings
   - name: Admin
+  - name: Realtime
+    description: >-
+      Live donation feed delivery. Broadcasts fan out across every backend
+      replica through a shared adapter; these endpoints let a client recover
+      events missed while disconnected and let operators see delivery per pod.
+      The full contract is documented in docs/realtime.md.
 
 components:
   schemas:
@@ -437,6 +443,108 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    ReplayedEvent:
+      type: object
+      description: One event recorded in the shared replay log.
+      properties:
+        cursor:
+          type: string
+          description: Opaque position of this event in the global feed.
+          example: r:1787752099968-0
+        name:
+          type: string
+          description: Socket.IO event name this was broadcast as.
+          example: donation_event
+        payload:
+          type: object
+          additionalProperties: true
+          description: The event body, identical to what was broadcast live.
+        emittedAt:
+          type: string
+          format: date-time
+
+    ReplayMeta:
+      type: object
+      properties:
+        reset:
+          type: boolean
+          description: >-
+            True when the server cannot prove this reply is complete. The client
+            must refetch current state from REST rather than appending `data` to
+            its timeline. This is NOT the same as an empty `data` array, which
+            legitimately means no events occurred.
+        reason:
+          type: string
+          nullable: true
+          enum: [NO_CURSOR, INVALID_CURSOR, CURSOR_FOREIGN, CURSOR_EXPIRED, STORE_UNAVAILABLE]
+          description: >-
+            Why the cursor could not be honoured. Null when `reset` is false.
+            NO_CURSOR means the client has no timeline yet and simply starts from
+            now, which is not a gap.
+        degraded:
+          type: boolean
+          description: Whether the replay log is currently operating without its shared store.
+        nextCursor:
+          type: string
+          nullable: true
+          description: Cursor to resume the live feed from, and to chain further pages.
+        recovery:
+          type: string
+          description: Human-readable statement of what the client should do next.
+
+    RealtimeStatus:
+      type: object
+      description: Delivery status for one backend instance.
+      properties:
+        instanceId:
+          type: string
+          description: Identifies the responding pod. Changes on restart.
+        mode:
+          type: string
+          enum: [single-process, redis-adapter]
+          description: >-
+            single-process is a supported local-development mode, not a fault —
+            one process delivering to its own clients is complete delivery.
+        degraded:
+          type: boolean
+        reason:
+          type: string
+          nullable: true
+        delivery:
+          type: string
+          enum: [global, instance]
+          description: >-
+            global — this pod's broadcasts reach clients on every replica.
+            instance — they reach only this pod's clients, so the feed is
+            incomplete and clients should reconcile against REST.
+        replay:
+          type: object
+          additionalProperties: true
+          description: State of the replay log backing reconnect recovery.
+        metrics:
+          type: object
+          description: Counters for this instance only.
+          properties:
+            instanceId: { type: string }
+            currentConnections: { type: integer }
+            peakConnections: { type: integer }
+            connectionsOpened: { type: integer }
+            connectionsClosed: { type: integer }
+            eventsPublished:
+              type: integer
+              description: Broadcasts originated by this instance.
+            fanoutObserved:
+              type: integer
+              description: >-
+                Broadcasts received from other instances. Flat at zero on a pod
+                holding connections, while others publish, is the signature of
+                broken cross-replica delivery.
+            publishFailures: { type: integer }
+            replayRequests: { type: integer }
+            replayResets:
+              type: integer
+              description: Replays that could not be honoured; a rising rate means clients are falling outside the retention window.
 
     Pagination:
       type: object
@@ -2256,3 +2364,94 @@ paths:
                         properties:
                           pagination:
                             $ref: '#/components/schemas/Pagination'
+
+  # ── Realtime ─────────────────────────────────────────────────────────────────
+  /api/v1/realtime/replay:
+    get:
+      tags: [Realtime]
+      summary: Recover live events missed while disconnected
+      operationId: replayRealtimeEvents
+      description: >-
+        Returns the events broadcast after `cursor`. Every live Socket.IO event
+        carries the cursor identifying it; a client stores the last one it saw
+        and presents it here on reconnect.
+
+
+        Read `meta.reset` before `data`. When it is true the server cannot prove
+        the reply is complete, and the client must refetch current state from the
+        REST resources instead of appending this reply to its timeline. An empty
+        `data` array on its own is ambiguous — it reads the same for "you missed
+        nothing" and "your cursor is unusable" — so `reset` is what distinguishes
+        them.
+
+
+        Any replica can answer, because the replay log is shared; this is what
+        makes recovery work when a reconnect lands the client on a different pod.
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: >-
+            Opaque cursor taken verbatim from a previous event's `cursor` field
+            or from `meta.nextCursor`. Its contents are not a stable API.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum events to return. Capped at 500 server-side.
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+      responses:
+        '200':
+          description: Events broadcast after the cursor
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ReplayedEvent'
+                      meta:
+                        $ref: '#/components/schemas/ReplayMeta'
+        '400':
+          description: Malformed cursor parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/realtime/status:
+    get:
+      tags: [Realtime]
+      summary: Per-pod realtime delivery status and counters
+      operationId: getRealtimeStatus
+      description: >-
+        Reports the delivery guarantee and connection counters for the single
+        instance that served the request — deliberately per-pod, not aggregated.
+        A cluster-wide total of connected clients looks identical whether one pod
+        holds them all or ten pods hold a tenth each and only one ever receives a
+        broadcast, which is how broken cross-replica delivery went unnoticed.
+
+
+        Scrape from every replica. The failure signature is a pod holding
+        connections whose `fanoutObserved` stays at zero while other pods report
+        `eventsPublished` climbing.
+      responses:
+        '200':
+          description: Delivery status for the responding instance
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RealtimeStatus'

@@ -8,6 +8,7 @@ const { v4: uuid } = require("uuid");
 const pool = require("../db/pool");
 const { createLayeredRateLimiter } = require("../middleware/rateLimiter");
 const { createApiError } = require("../middleware/apiEnvelope");
+const { publish } = require("../realtime");
 const { z } = require("zod");
 const { validateBody, validate } = require("../middleware/validate");
 const { DonationCreateSchema } = require("../schemas/donations");
@@ -105,9 +106,13 @@ async function recordDonation(req, res, next) {
       throw createApiError(500, "DONATION_EVENT_MISSING", "Expected DonationRecorded event not produced");
     }
 
-    const io = req.app?.get("io");
-    if (io && !result.deduplicated) {
-      io.emit("donation_event", {
+    if (!result.deduplicated) {
+      // publish() rather than io.emit(): the latter reaches only the clients
+      // this pod happens to be holding, which at two or more replicas is a
+      // fraction of the donors watching. It also records the event so a client
+      // that reconnects can recover it. Awaited so a replay-log failure is
+      // logged against this request; it never throws.
+      await publish("donation_event", {
         projectId,
         donorAddress,
         amountXLM: Number.parseFloat(mainEvent.data.amountXlm),

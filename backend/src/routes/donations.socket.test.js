@@ -75,6 +75,12 @@ describe("POST /api/donations → donation_event WebSocket broadcast", () => {
       transports: ["websocket"],
     });
     app.set("io", ioServer);
+    // The route broadcasts through the realtime module rather than a bare
+    // io.emit, so the module has to know which server to emit on — exactly what
+    // server.js does at startup. No redisUrl keeps this in single-process mode,
+    // which is what this suite covers: the local-development path must behave
+    // exactly as it did before cross-replica delivery was introduced.
+    require("../realtime").initializeRealtime(ioServer, { redisUrl: null });
     app.use("/api/donations", require("./donations"));
 
     httpServer.listen(0, () => {
@@ -86,6 +92,7 @@ describe("POST /api/donations → donation_event WebSocket broadcast", () => {
   });
 
   afterAll((done) => {
+    require("../realtime").resetRealtime();
     ioServer.close(done);
   });
 
