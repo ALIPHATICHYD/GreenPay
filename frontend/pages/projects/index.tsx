@@ -14,7 +14,7 @@ import clsx from "clsx";
 
 export default function ProjectsPage() {
   const router = useRouter();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [projects, setProjects] = useState<ClimateProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
@@ -32,7 +32,7 @@ export default function ProjectsPage() {
     handleKeyDown
   } = useAutocomplete<ClimateProject>(
     async (q) => {
-      const data = await fetchProjects({ search: q, limit: 5 });
+      const data = await fetchProjects({ search: q, limit: 5, lang: locale });
       return data;
     }
   );
@@ -76,6 +76,7 @@ export default function ProjectsPage() {
         verified: verified || undefined,
         search: search || undefined,
         limit: 50,
+        lang: locale,
       })
         .then(setProjects)
         .catch(console.error)
@@ -83,7 +84,7 @@ export default function ProjectsPage() {
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [category, status, verified, search]);
+  }, [category, status, verified, search, locale]);
 
   useEffect(() => {
     if (!compareQuery || projects.length === 0) return;
@@ -196,7 +197,7 @@ export default function ProjectsPage() {
                 )}
               >
                 <div className="w-8 h-8 rounded-lg bg-forest-100 flex items-center justify-center text-lg flex-shrink-0">
-                  {CATEGORY_ICONS[p.category] || "🌿"}
+                  {CATEGORY_ICONS[(p.sourceCategory || p.category) as keyof typeof CATEGORY_ICONS] || "🌿"}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-forest-900 truncate">{p.name}</p>
