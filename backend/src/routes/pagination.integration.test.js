@@ -50,6 +50,14 @@ function checkDbAvailableSync() {
 const isDbAvailable = checkDbAvailableSync();
 const describeIfDb = isDbAvailable ? describe : describe.skip;
 
+// Without this the shared pool keeps the event loop alive and jest hangs after
+// the last assertion, which stalls the CI step this suite runs in.
+afterAll(async () => {
+  if (isDbAvailable) {
+    await pool.end();
+  }
+});
+
 function buildApp() {
   const app = express();
   app.use(express.json());
@@ -150,51 +158,139 @@ describeIfDb("Keyset Pagination Real-DB Integration & Latency Benchmarks", () =>
     });
   });
 
-  describe("Deep-page Latency Benchmark (Keyset Cursor vs OFFSET Depth)", () => {
-    it("measures execution time at depth and demonstrates O(1) latency growth for keyset pagination", async () => {
-      // Seed 500 rows
+  describe("Deep-page latency: OFFSET baseline vs keyset cursor", () => {
+    // The "before" number this replaces is what LIMIT/OFFSET cost at depth:
+    // Postgres walks and discards every skipped row, so the same 20-row payload
+    // gets steadily more expensive the deeper the page. The keyset query seeks
+    // straight to the cursor tuple on idx_projects_created_at_id, so its cost
+    // is flat. Both are measured here over one dataset and both are logged.
+    const ROWS = 50000;
+    const PAGE_SIZE = 20;
+    const DEEP_OFFSET = ROWS - PAGE_SIZE * 2;
+    const SAMPLES = 7;
+
+    const ORDER = "ORDER BY created_at DESC, id DESC";
+
+    async function medianMs(runQuery) {
+      const timings = [];
+      // One untimed pass so neither variant pays for a cold cache.
+      await runQuery();
+      for (let i = 0; i < SAMPLES; i++) {
+        const t0 = process.hrtime.bigint();
+        await runQuery();
+        timings.push(Number(process.hrtime.bigint() - t0) / 1e6);
+      }
+      timings.sort((a, b) => a - b);
+      return timings[Math.floor(timings.length / 2)];
+    }
+
+    it("records both measurements and holds keyset latency flat with depth", async () => {
+      // Bulk-seed in one statement: 50k rows through the HTTP layer would
+      // dominate the runtime, and the point of measurement is the query plan.
+      await pool.query(
+        `INSERT INTO projects (id, name, description, category, location, wallet_address, goal_xlm, status, created_at)
+         SELECT gen_random_uuid(), 'Project ' || g, 'desc', 'Solar Energy', 'Loc', 'wallet', 100, 'active',
+                NOW() - (g * INTERVAL '1 second')
+         FROM generate_series(1, $1) AS g`,
+        [ROWS]
+      );
+      await pool.query("ANALYZE projects");
+
+      // --- before: LIMIT/OFFSET ---
+      const offsetShallowMs = await medianMs(() =>
+        pool.query(`SELECT * FROM projects ${ORDER} LIMIT $1 OFFSET 0`, [PAGE_SIZE])
+      );
+      const offsetDeepMs = await medianMs(() =>
+        pool.query(`SELECT * FROM projects ${ORDER} LIMIT $1 OFFSET $2`, [PAGE_SIZE, DEEP_OFFSET])
+      );
+
+      // --- after: keyset over the same total ordering ---
+      const keysetShallowMs = await medianMs(() =>
+        pool.query(`SELECT * FROM projects ${ORDER} LIMIT $1`, [PAGE_SIZE])
+      );
+
+      // The sort key of the row sitting where the deep OFFSET page begins, so
+      // both variants are asked for the identical slice of the table.
+      const anchor = await pool.query(
+        `SELECT created_at, id FROM projects ${ORDER} LIMIT 1 OFFSET $1`,
+        [DEEP_OFFSET - 1]
+      );
+      const { created_at: anchorCreatedAt, id: anchorId } = anchor.rows[0];
+
+      const keysetDeepMs = await medianMs(() =>
+        pool.query(
+          `SELECT * FROM projects
+           WHERE (created_at, id) < ($1::timestamptz, $2::uuid)
+           ${ORDER} LIMIT $3`,
+          [anchorCreatedAt, anchorId, PAGE_SIZE]
+        )
+      );
+
+      console.log(
+        `[pagination benchmark] ${ROWS} rows, page size ${PAGE_SIZE}, depth ${DEEP_OFFSET} (medians of ${SAMPLES})\n` +
+        `  before  OFFSET  page 1: ${offsetShallowMs.toFixed(2)} ms   deep page: ${offsetDeepMs.toFixed(2)} ms   ` +
+        `(x${(offsetDeepMs / offsetShallowMs).toFixed(1)} deeper-page penalty)\n` +
+        `  after   keyset  page 1: ${keysetShallowMs.toFixed(2)} ms   deep page: ${keysetDeepMs.toFixed(2)} ms   ` +
+        `(x${(keysetDeepMs / keysetShallowMs).toFixed(1)} deeper-page penalty)`
+      );
+
+      // The claim under test is that depth stopped mattering, so it is asserted
+      // as a ratio against this same run's shallow page rather than a wall-clock
+      // budget, which would only measure how busy the runner is. The slack is
+      // wide because these are sub-millisecond timings on a shared runner; the
+      // OFFSET plan blows past it by an order of magnitude.
+      expect(keysetDeepMs).toBeLessThan(Math.max(keysetShallowMs * 4, 25));
+
+      // And the keyset deep page must actually beat the OFFSET deep page it
+      // replaced — otherwise the rewrite bought nothing.
+      expect(keysetDeepMs).toBeLessThan(offsetDeepMs);
+
+      // The two variants must agree on which rows the deep page contains;
+      // a faster query returning a different slice would not be a fix.
+      const offsetRows = await pool.query(
+        `SELECT id FROM projects ${ORDER} LIMIT $1 OFFSET $2`,
+        [PAGE_SIZE, DEEP_OFFSET]
+      );
+      const keysetRows = await pool.query(
+        `SELECT id FROM projects
+         WHERE (created_at, id) < ($1::timestamptz, $2::uuid)
+         ${ORDER} LIMIT $3`,
+        [anchorCreatedAt, anchorId, PAGE_SIZE]
+      );
+      expect(keysetRows.rows.map((r) => r.id)).toEqual(offsetRows.rows.map((r) => r.id));
+    });
+
+    it("serves a deep page over HTTP without offset in the request", async () => {
       const baseTime = Date.now();
-      const insertPromises = [];
-      for (let i = 0; i < 500; i++) {
-        const id = uuid();
-        const createdAt = new Date(baseTime - i * 100).toISOString();
-        insertPromises.push(
-          pool.query(
-            `INSERT INTO projects (id, name, description, category, location, wallet_address, goal_xlm, status, created_at)
-             VALUES ($1, $2, 'desc', 'Solar Energy', 'Loc', 'wallet', 100, 'active', $3)`,
-            [id, `Project ${i}`, createdAt]
-          )
+      const values = [];
+      // 250 rows so the tenth page of 20 still has a page after it and must
+      // hand back a cursor; a walk that ends exactly at the last row would not
+      // distinguish "no more pages" from "cursor missing".
+      for (let i = 0; i < 250; i++) {
+        values.push(`(gen_random_uuid(), 'Project ${i}', 'desc', 'Solar Energy', 'Loc', 'wallet', 100, 'active', to_timestamp(${(baseTime - i * 100) / 1000}))`);
+      }
+      await pool.query(
+        `INSERT INTO projects (id, name, description, category, location, wallet_address, goal_xlm, status, created_at)
+         VALUES ${values.join(",")}`
+      );
+
+      let cursor;
+      const seen = new Set();
+      for (let page = 0; page < 10; page++) {
+        const res = await request(app).get("/api/projects").query(
+          cursor ? { limit: PAGE_SIZE, cursor } : { limit: PAGE_SIZE }
         );
-      }
-      await Promise.all(insertPromises);
-
-      // Fetch Page 1 (keyset)
-      const t0 = process.hrtime.bigint();
-      const p1Res = await request(app).get("/api/projects").query({ limit: 20 });
-      const t1 = process.hrtime.bigint();
-      const page1TimeMs = Number(t1 - t0) / 1e6;
-
-      // Get cursor for page 20 (depth 400 rows)
-      let currentCursor = p1Res.body.meta.nextCursor;
-      for (let p = 2; p < 20; p++) {
-        const res = await request(app).get("/api/projects").query({ limit: 20, cursor: currentCursor });
-        currentCursor = res.body.meta.nextCursor;
+        expect(res.status).toBe(200);
+        for (const row of res.body.data) {
+          expect(seen.has(row.id)).toBe(false);
+          seen.add(row.id);
+        }
+        cursor = res.body.meta.nextCursor;
+        expect(cursor).toBeTruthy();
       }
 
-      // Deep page (depth 400) using Keyset Cursor
-      const t2 = process.hrtime.bigint();
-      const deepKeysetRes = await request(app).get("/api/projects").query({ limit: 20, cursor: currentCursor });
-      const t3 = process.hrtime.bigint();
-      const deepKeysetTimeMs = Number(t3 - t2) / 1e6;
-
-      expect(deepKeysetRes.status).toBe(200);
-      expect(deepKeysetRes.body.data).toHaveLength(20);
-
-      console.log(`[Benchmark] Keyset Page 1 Latency: ${page1TimeMs.toFixed(2)} ms`);
-      console.log(`[Benchmark] Keyset Deep Page (Row 400) Latency: ${deepKeysetTimeMs.toFixed(2)} ms`);
-
-      // Latency at depth 400 remains comparable to Page 1
-      expect(deepKeysetTimeMs).toBeLessThan(100); // Fast index scan
+      // Ten pages walked with nothing but cursors — no offset was ever sent.
+      expect(seen.size).toBe(PAGE_SIZE * 10);
     });
   });
 });

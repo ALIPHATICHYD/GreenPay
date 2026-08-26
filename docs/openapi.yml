@@ -400,10 +400,17 @@ components:
           description: True if totalCount is exact; false if estimated or omitted.
         total:
           type: integer
-          description: Legacy field for total count during transition.
+          description: >-
+            Deprecated alias of `totalCount`, kept so clients written against
+            the offset-era envelope keep reading a count. Present only on the
+            endpoints that still compute one.
+          deprecated: true
         offset:
           type: integer
-          description: Legacy field for offset during transition.
+          description: >-
+            Deprecated. Echoes the `offset` the caller sent, and is absent on
+            cursor-paginated endpoints.
+          deprecated: true
 
   securitySchemes:
     bearerAuth:
@@ -416,7 +423,13 @@ components:
       name: cursor
       in: query
       required: false
-      description: Opaque, versioned continuation cursor returned in response meta.pagination.nextCursor.
+      description: >-
+        Opaque, versioned continuation cursor, taken verbatim from a previous
+        response's `meta.pagination.nextCursor`. Its contents are not a stable
+        API: decode or construct one and it may stop working. A malformed
+        cursor is rejected with `INVALID_CURSOR`, and one issued by a newer
+        format with `UNSUPPORTED_CURSOR_VERSION` — both HTTP 400. The full
+        contract is documented once in docs/pagination.md.
       schema:
         type: string
     limitParam:
@@ -500,6 +513,7 @@ paths:
           in: query
           schema:
             type: string
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1211,12 +1225,7 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: cursor
-          in: query
-          description: ISO timestamp for cursor-based pagination
-          schema:
-            type: string
-            format: date-time
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1254,6 +1263,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1282,9 +1292,16 @@ paths:
       operationId: listDonorDonations
       parameters:
         - $ref: '#/components/parameters/publicKey'
+        - $ref: '#/components/parameters/cursorParam'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
       responses:
         '200':
-          description: All donations by this donor
+          description: Paginated donations by this donor
           content:
             application/json:
               schema:
@@ -1383,6 +1400,7 @@ paths:
       summary: Get donor leaderboard
       operationId: getLeaderboard
       parameters:
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1391,9 +1409,17 @@ paths:
             maximum: 100
         - name: offset
           in: query
+          deprecated: true
+          description: >-
+            Superseded by `cursor`. Honoured only when no `cursor` is supplied,
+            so existing clients keep working unchanged, and it carries the
+            offset caveats: rows written while a client pages can be duplicated
+            or skipped, and deep offsets get slower with depth. See
+            docs/pagination.md for the transition.
           schema:
             type: integer
             default: 0
+            maximum: 10000
         - name: period
           in: query
           schema:
@@ -1428,11 +1454,7 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: cursor
-          in: query
-          schema:
-            type: string
-            format: date-time
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1760,9 +1782,17 @@ paths:
       tags: [Jobs]
       summary: List jobs
       operationId: listJobs
+      parameters:
+        - $ref: '#/components/parameters/cursorParam'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
       responses:
         '200':
-          description: List of escrow jobs (latest 50)
+          description: Paginated escrow jobs
           content:
             application/json:
               schema:
@@ -2126,6 +2156,7 @@ paths:
           description: Filter by action string (e.g. project.status.active)
           schema:
             type: string
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -2134,9 +2165,14 @@ paths:
             maximum: 200
         - name: offset
           in: query
+          deprecated: true
+          description: >-
+            Superseded by `cursor`. Honoured only when no `cursor` is supplied.
+            See docs/pagination.md for the transition.
           schema:
             type: integer
             default: 0
+            maximum: 10000
       responses:
         '200':
           description: Paginated audit log entries

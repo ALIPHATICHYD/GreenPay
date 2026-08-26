@@ -64,11 +64,19 @@ router.post("/login", loginLimiter, loginAccountDelay, validate(AdminLoginSchema
 
 const { decodeCursor, formatPaginatedResponse } = require("../utils/pagination");
 
+// Ceiling on the deprecated `offset` path. Matches the bound AdminAuditQuerySchema
+// and LeaderboardQuerySchema already enforce, and exists for the same reason the
+// cursor path replaced offsets: a deep offset makes Postgres walk and discard every
+// skipped row, so an unbounded one is an arbitrarily expensive query for a caller
+// to ask for. Requests past it are clamped rather than rejected, so an old client
+// paging deep gets a slow-but-correct answer instead of an error.
+const MAX_OFFSET = 10000;
+
 router.get("/audit", adminRequired, adminSubjectLimiter, validate(AdminAuditQuerySchema, { source: "query" }), async (req, res, next) => {
   try {
     const { actor, action, cursor, offset } = req.query;
     const parsedLimit = Math.min(Number.parseInt(req.query.limit, 10) || 50, 200);
-    const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
+    const parsedOffset = Math.min(Math.max(Number.parseInt(offset, 10) || 0, 0), MAX_OFFSET);
     const where = [];
     const values = [];
 
@@ -80,6 +88,13 @@ router.get("/audit", adminRequired, adminSubjectLimiter, validate(AdminAuditQuer
       values.push(action);
       where.push(`action = $${values.length}`);
     }
+
+    // The count reflects the actor/action filters only. Snapshotting the
+    // values here — before the keyset predicate is appended — is what keeps
+    // `total` the size of the filtered set rather than the size of what is
+    // left after the cursor, which would shrink on every page.
+    const countValues = [...values];
+    const countWhereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
     const cursorObj = decodeCursor(cursor);
     let useOffset = false;
@@ -96,7 +111,6 @@ router.get("/audit", adminRequired, adminSubjectLimiter, validate(AdminAuditQuer
       useOffset = true;
     }
 
-    const countValues = [...values];
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
     let query;
@@ -116,7 +130,7 @@ router.get("/audit", adminRequired, adminSubjectLimiter, validate(AdminAuditQuer
 
     const result = await pool.query(query, values);
     const countResult = await pool.query(
-      `SELECT COUNT(*) AS total FROM admin_audit_log ${whereClause}`,
+      `SELECT COUNT(*) AS total FROM admin_audit_log ${countWhereClause}`,
       countValues,
     );
     const totalCount = parseInt(countResult.rows[0].total, 10);
@@ -166,7 +180,7 @@ router.get("/ai-summary-failures", adminRequired, adminSubjectLimiter, async (re
   try {
     const { cursor, offset } = req.query;
     const parsedLimit = Math.min(Number.parseInt(req.query.limit, 10) || 50, 200);
-    const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
+    const parsedOffset = Math.min(Math.max(Number.parseInt(offset, 10) || 0, 0), MAX_OFFSET);
 
     const cursorObj = decodeCursor(cursor);
     const where = [];

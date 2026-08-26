@@ -141,8 +141,10 @@ describe("GET /api/leaderboard", () => {
       const [sql, params] = pool.query.mock.calls[0];
       expect(sql).toMatch(/LEFT JOIN donations d/);
       expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(\s*ORDER BY COALESCE\(SUM\(d\.amount_xlm\), 0\) DESC, p\.public_key ASC\s*\)/);
-      expect(sql).toContain(period === "month" ? "30 days" : "1 year");
-      expect(params).toEqual([6, 5]);
+      // The window is bound as a parameter rather than interpolated, so the
+      // interval literal appears in the values array, not the SQL text.
+      expect(sql).toContain("NOW() - ($1::interval)");
+      expect(params).toEqual([period === "month" ? "30 days" : "1 year", 6, 5]);
       expect(pool.query.mock.calls[1][0]).toMatch(/FROM profiles/);
     });
   });

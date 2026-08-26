@@ -74,7 +74,12 @@ export default function LeaderboardTable({ limit = 20, period = "all" }: { limit
         await fetchLeaderboardWithMeta(limit, period, cursorStr || undefined);
       setEntries(prev => append ? [...prev, ...newEntries] : newEntries);
       setNextCursor(newCursor);
-      setHasMore(more || newEntries.length === limit);
+      // The server fetches limit+1 to decide this, so `more` is authoritative.
+      // The old `newEntries.length === limit` fallback belonged to offset
+      // paging: on a last page that exactly fills the limit it left the button
+      // enabled with no cursor to follow, and pressing it re-fetched page one
+      // and appended it — the duplicate rows keyset paging exists to prevent.
+      setHasMore(more && newCursor !== null);
     } catch {
       if (!append) setError("Could not load leaderboard.");
     } finally {
