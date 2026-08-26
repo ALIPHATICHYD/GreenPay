@@ -54,13 +54,15 @@ describe("projectSearch", () => {
   });
 
   describe("buildWhereClause", () => {
-    it("uses indexed english+simple full-text and trigram, not ILIKE wildcards", () => {
+    it("uses indexed full-text and trigram plus approved translation search", () => {
       const filters = parseFilters({ search: "reforestation" });
       const { whereSql, values } = buildWhereClause(filters);
       expect(whereSql).toContain("plainto_tsquery('english'");
       expect(whereSql).toContain("plainto_tsquery('simple'");
       expect(whereSql).toContain("similarity(p.name");
-      expect(whereSql).not.toContain("ILIKE");
+      expect(whereSql).toContain("FROM project_translations search_translation");
+      expect(whereSql).toContain("moderation_status = 'approved'");
+      expect(whereSql).not.toMatch(/\bp\.name ILIKE/);
       expect(values).toEqual(["reforestation"]);
     });
   });

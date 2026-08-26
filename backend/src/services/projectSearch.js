@@ -9,6 +9,21 @@
  * on name/location provides typo tolerance without leading-wildcard scans.
  */
 
+/** SQL fragment: match approved translations via ILIKE (multilingual keywords). */
+function translationSearchClause(paramIndex) {
+  return `EXISTS (
+    SELECT 1 FROM project_translations search_translation
+    WHERE search_translation.project_id = p.id
+      AND search_translation.moderation_status = 'approved'
+      AND (
+        search_translation.name ILIKE '%' || $${paramIndex} || '%'
+        OR search_translation.description ILIKE '%' || $${paramIndex} || '%'
+        OR search_translation.category ILIKE '%' || $${paramIndex} || '%'
+        OR search_translation.location ILIKE '%' || $${paramIndex} || '%'
+      )
+  )`;
+}
+
 /** SQL fragment: combined english+simple tsquery match + trigram typo tolerance. */
 function searchMatchClause(paramIndex) {
   return `(
@@ -110,7 +125,9 @@ function buildWhereClause(filters) {
   if (filters.search) {
     values.push(filters.search);
     searchParamIndex = values.length;
-    where.push(searchMatchClause(searchParamIndex));
+    where.push(
+      `(${searchMatchClause(searchParamIndex)} OR ${translationSearchClause(searchParamIndex)})`,
+    );
   }
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -291,4 +308,5 @@ module.exports = {
   searchProjects,
   searchMatchClause,
   searchRankClause,
+  translationSearchClause,
 };
