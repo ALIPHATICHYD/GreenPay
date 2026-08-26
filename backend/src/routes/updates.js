@@ -16,9 +16,15 @@ const { createLayeredRateLimiter } = require("../middleware/rateLimiter");
 const { mapProjectUpdateRow, mapProjectRow } = require("../services/store");
 const { enqueueUpdateNotifications } = require("../services/email");
 const { sendUpdatePushNotifications } = require("../services/push");
+const { logAdminAction } = require("../services/audit");
 
 const { adminRequired } = require("../middleware/auth");
 const { createApiError } = require("../middleware/apiEnvelope");
+const {
+  TRANSLATION_STATUSES,
+  requireContentLanguage,
+  updateLocalizationSelect,
+} = require("../services/contentLanguage");
 
 // Rate limiter for admin update creation: an IP floor plus the real cap on the
 // authenticated subject, so the same admin account is bounded regardless of
@@ -39,14 +45,22 @@ const likeLimiter = createLayeredRateLimiter({
   wallet: 20,
 });
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 // GET /api/updates/:projectId — list updates for a project, newest first
 router.get("/:projectId", async (req, res, next) => {
   try {
+    const language = req.query.lang === undefined ? null : requireContentLanguage(req.query.lang);
+    const values = [req.params.projectId];
+    let languageParam = null;
+    if (language) {
+      values.push(language);
+      languageParam = `$${values.length}`;
+    }
+    const localization = updateLocalizationSelect(languageParam);
     const result = await pool.query(
-      "SELECT * FROM project_updates WHERE project_id = $1 ORDER BY created_at DESC",
-      [req.params.projectId],
+      `SELECT u.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
+       FROM project_updates u${localization.join}
+       WHERE u.project_id = $1 ORDER BY u.created_at DESC`,
+      values,
     );
     res.json(result.rows.map(mapProjectUpdateRow));
   } catch (e) {
@@ -58,7 +72,10 @@ router.get("/:projectId", async (req, res, next) => {
 // Rate-limited to prevent update spam
 router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) => {
   try {
-    const { projectId, title, body } = req.body;
+    const { projectId, title, body } = req.body || {};
+    const sourceLanguage = req.body?.sourceLanguage === undefined
+      ? "en"
+      : requireContentLanguage(req.body.sourceLanguage);
 
     if (!projectId || typeof projectId !== "string") {
       throw createApiError(400, "PROJECT_ID_REQUIRED", "projectId is required");
@@ -80,10 +97,10 @@ router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) =>
     // Insert update
     const id = uuidv4();
     const insertResult = await pool.query(
-      `INSERT INTO project_updates (id, project_id, title, body)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO project_updates (id, project_id, title, body, source_language)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [id, projectId, title.trim(), body.trim()],
+      [id, projectId, title.trim(), body.trim(), sourceLanguage],
     );
     const update = mapProjectUpdateRow(insertResult.rows[0]);
 
@@ -106,14 +123,78 @@ router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) =>
   }
 });
 
-// GET /api/updates/:projectId — list updates for a project, most recent first
-router.get("/:projectId", async (req, res, next) => {
+router.put("/:updateId/translations/:language", adminRequired, updateCreationLimiter, async (req, res, next) => {
   try {
+    const language = requireContentLanguage(req.params.language);
+    const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+    const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+    if (!title || !body) {
+      throw createApiError(400, "TRANSLATION_FIELDS_REQUIRED", "title and body are required");
+    }
+    const original = await pool.query("SELECT id, source_language FROM project_updates WHERE id = $1", [req.params.updateId]);
+    if (!original.rows[0]) {
+      throw createApiError(404, "UPDATE_NOT_FOUND", "Update not found");
+    }
+    if (language === original.rows[0].source_language) {
+      throw createApiError(409, "SOURCE_LANGUAGE_TRANSLATION", "A translation cannot replace the original language");
+    }
     const result = await pool.query(
-      "SELECT * FROM project_updates WHERE project_id = $1 ORDER BY created_at DESC",
-      [req.params.projectId],
+      `INSERT INTO project_update_translations
+        (id, update_id, language, title, body, machine_translated, moderation_status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+       ON CONFLICT (update_id, language) DO UPDATE SET
+         title = EXCLUDED.title, body = EXCLUDED.body,
+         machine_translated = EXCLUDED.machine_translated,
+         impact_claims_reviewed = FALSE, moderation_status = 'pending', updated_at = NOW()
+       RETURNING *`,
+      [uuidv4(), req.params.updateId, language, title, body, req.body.machineTranslated === true],
     );
-    res.json(result.rows.map(mapProjectUpdateRow));
+    logAdminAction({
+      actor: req.admin.sub,
+      action: "project_update.translation.submitted",
+      targetType: "project_update_translation",
+      targetId: result.rows[0].id,
+      metadata: { updateId: req.params.updateId, language },
+      ipAddress: req.ip,
+    });
+    res.status(201).json(result.rows[0]);
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.patch("/:updateId/translations/:language/moderation", adminRequired, updateCreationLimiter, async (req, res, next) => {
+  try {
+    const language = requireContentLanguage(req.params.language);
+    const { status, impactClaimsReviewed = false } = req.body || {};
+    if (!TRANSLATION_STATUSES.includes(status)) {
+      throw createApiError(400, "TRANSLATION_STATUS_INVALID", `status must be one of: ${TRANSLATION_STATUSES.join(", ")}`);
+    }
+    const existing = await pool.query(
+      "SELECT * FROM project_update_translations WHERE update_id = $1 AND language = $2",
+      [req.params.updateId, language],
+    );
+    if (!existing.rows[0]) {
+      throw createApiError(404, "UPDATE_TRANSLATION_NOT_FOUND", "Update translation not found");
+    }
+    if (status === "approved" && existing.rows[0].machine_translated && impactClaimsReviewed !== true) {
+      throw createApiError(400, "IMPACT_CLAIMS_REVIEW_REQUIRED", "Machine-translated impact claims require human review before approval");
+    }
+    const result = await pool.query(
+      `UPDATE project_update_translations SET moderation_status = $1,
+         impact_claims_reviewed = $2, updated_at = NOW()
+       WHERE update_id = $3 AND language = $4 RETURNING *`,
+      [status, impactClaimsReviewed === true, req.params.updateId, language],
+    );
+    logAdminAction({
+      actor: req.admin.sub,
+      action: `project_update.translation.${status}`,
+      targetType: "project_update_translation",
+      targetId: result.rows[0].id,
+      metadata: { updateId: req.params.updateId, language, impactClaimsReviewed: impactClaimsReviewed === true },
+      ipAddress: req.ip,
+    });
+    res.json(result.rows[0]);
   } catch (e) {
     next(e);
   }

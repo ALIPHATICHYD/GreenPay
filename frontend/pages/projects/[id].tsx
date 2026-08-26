@@ -13,6 +13,7 @@ import MonthlyGivingSetup from "@/components/MonthlyGivingSetup";
 import DescriptionAccordion from "@/components/DescriptionAccordion";
 import { createProjectCampaign, fetchProject, fetchProjectMatches, fetchProjectUpdates, fetchSubscriberCount, generateProjectSummary, getApiErrorMessage, subscribeToProject, toggleUpdateLike } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import ContentLanguageNotice from "@/components/ContentLanguageNotice";
 import { formatXLM, formatCO2, progressPercent, timeAgo, statusClass, statusLabel, CATEGORY_ICONS, copyToClipboard, shortenAddress } from "@/utils/format";
 import { buildReportHtml } from "@/utils/buildReportHtml";
 import { accountUrl, fetchProjectDiscussion, type ProjectDiscussionMessage } from "@/lib/stellar";
@@ -36,7 +37,7 @@ export default function ProjectDetail({
 }: ProjectDetailProps) {
   const router = useRouter();
   const { id } = router.query;
-  const { t, localeTag } = useI18n();
+  const { t, localeTag, locale } = useI18n();
 
   const [project, setProject] = useState<ClimateProject | null>(null);
   const [updates, setUpdates] = useState<ProjectUpdate[]>([]);
@@ -84,8 +85,8 @@ export default function ProjectDetail({
   useEffect(() => {
     if (!id) return;
     Promise.all([
-      fetchProject(id as string),
-      fetchProjectUpdates(id as string),
+      fetchProject(id as string, locale),
+      fetchProjectUpdates(id as string, locale),
       fetchProjectMatches(id as string),
     ])
       .then(([p, u, m]) => {
@@ -98,7 +99,7 @@ export default function ProjectDetail({
       })
       .catch(() => router.push("/projects"))
       .finally(() => setLoading(false));
-  }, [id, router]);
+  }, [id, router, locale]);
 
   useEffect(() => {
     if (!project) return;
@@ -279,6 +280,7 @@ export default function ProjectDetail({
         projectId: project.id,
         email: subEmail,
         donorAddress: publicKey || undefined,
+        preferredLanguage: locale,
       });
       setSubState("success");
       setSubEmail("");
@@ -296,7 +298,7 @@ export default function ProjectDetail({
     setCampaignError(null);
     try {
       await createProjectCampaign(project.id, campaignForm);
-      const updatedProject = await fetchProject(project.id);
+      const updatedProject = await fetchProject(project.id, locale);
       setProject(updatedProject);
       setCampaignForm({
         title: "",
@@ -472,7 +474,7 @@ export default function ProjectDetail({
           <div className="card">
             <div className="flex items-start gap-4 mb-5">
               <div className="w-14 h-14 rounded-2xl bg-forest-100 flex items-center justify-center text-3xl border border-forest-200 flex-shrink-0">
-                {CATEGORY_ICONS[project.category] || "🌿"}
+                {CATEGORY_ICONS[(project.sourceCategory || project.category) as keyof typeof CATEGORY_ICONS] || "🌿"}
               </div>
               <div className="flex-1">
                 <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -532,9 +534,10 @@ export default function ProjectDetail({
                     </svg>
                   </button>
                 </div>
-                <h1 className="font-display text-2xl sm:text-3xl font-bold text-forest-900">
-                  {project.name}
-                </h1>
+                <div dir={project.contentDirection} lang={project.contentLanguage} className="text-start">
+                  <h1 className="font-display text-2xl sm:text-3xl font-bold text-forest-900">
+                    {project.name}
+                  </h1>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
                   <p className="text-[#4b654b] text-sm font-body">
                     📍 {project.location}
@@ -547,6 +550,8 @@ export default function ProjectDetail({
                     </div>
                   )}
                 </div>
+                </div>
+                <div className="mt-2"><ContentLanguageNotice content={project} /></div>
               </div>
             </div>
 
@@ -761,7 +766,9 @@ export default function ProjectDetail({
             <h2 className="font-display text-lg font-semibold text-forest-900 mb-3">
               About this Project
             </h2>
-            <DescriptionAccordion description={project.description} />
+            <div dir={project.contentDirection} lang={project.contentLanguage} className="text-start">
+              <DescriptionAccordion description={project.description} />
+            </div>
             {project.tags.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-4">
                 {project.tags.map((tag) => (
@@ -957,7 +964,9 @@ export default function ProjectDetail({
                   return (
                     <div
                       key={u.id}
-                      className="pb-4 border-b border-forest-100 last:border-0 last:pb-0"
+                      className="pb-4 border-b border-forest-100 last:border-0 last:pb-0 text-start"
+                      dir={u.contentDirection}
+                      lang={u.contentLanguage}
                     >
                       <div className="flex items-center justify-between mb-2">
                         <h3 className="font-semibold text-forest-900 text-sm font-body">
@@ -971,6 +980,7 @@ export default function ProjectDetail({
                         className="text-[#4b654b] text-sm leading-relaxed font-body prose prose-sm max-w-none"
                         dangerouslySetInnerHTML={{ __html: renderMarkdown(u.body) }}
                       />
+                      <div className="mt-2"><ContentLanguageNotice content={u} /></div>
                       <div className="flex items-center gap-3 mt-2">
                         <button
                           onClick={() => handleToggleLike(u.id)}
@@ -1160,7 +1170,7 @@ export default function ProjectDetail({
                 }
                 setRefreshKey((k) => k + 1);
                 setTimeout(
-                  () => fetchProject(project.id).then(setProject),
+                  () => fetchProject(project.id, locale).then(setProject),
                   2000,
                 );
               }}
