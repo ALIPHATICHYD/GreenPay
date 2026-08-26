@@ -16,9 +16,15 @@ const { createLayeredRateLimiter } = require("../middleware/rateLimiter");
 const { mapProjectUpdateRow, mapProjectRow } = require("../services/store");
 const { enqueueUpdateNotifications } = require("../services/email");
 const { sendUpdatePushNotifications } = require("../services/push");
+const { logAdminAction } = require("../services/audit");
 
 const { adminRequired } = require("../middleware/auth");
 const { createApiError } = require("../middleware/apiEnvelope");
+const {
+  TRANSLATION_STATUSES,
+  requireContentLanguage,
+  updateLocalizationSelect,
+} = require("../services/contentLanguage");
 
 // Rate limiter for admin update creation: an IP floor plus the real cap on the
 // authenticated subject, so the same admin account is bounded regardless of
@@ -41,14 +47,56 @@ const likeLimiter = createLayeredRateLimiter({
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+const { decodeCursor, formatPaginatedResponse } = require("../utils/pagination");
+
 // GET /api/updates/:projectId — list updates for a project, newest first
 router.get("/:projectId", async (req, res, next) => {
   try {
-    const result = await pool.query(
-      "SELECT * FROM project_updates WHERE project_id = $1 ORDER BY created_at DESC",
-      [req.params.projectId],
-    );
-    res.json(result.rows.map(mapProjectUpdateRow));
+    const { cursor } = req.query;
+    const parsedLimit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    // Validated up front so an unsupported `lang` is rejected rather than
+    // quietly served as source-language content under the requested label.
+    const language = req.query.lang === undefined ? null : requireContentLanguage(req.query.lang);
+    const cursorObj = decodeCursor(cursor);
+
+    const where = ["u.project_id = $1"];
+    const values = [req.params.projectId];
+
+    if (cursorObj) {
+      if (cursorObj.createdAt && cursorObj.id) {
+        values.push(cursorObj.createdAt, cursorObj.id);
+        where.push(`(u.created_at, u.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+      } else if (cursorObj.createdAt) {
+        values.push(cursorObj.createdAt);
+        where.push(`u.created_at < $${values.length}::timestamptz`);
+      }
+    }
+
+    let languageParam = null;
+    if (language) {
+      values.push(language);
+      languageParam = `$${values.length}`;
+    }
+    // At most one approved translation per (update, language), so the join
+    // cannot fan out rows and change what a page of `limit` rows means.
+    const localization = updateLocalizationSelect(languageParam);
+
+    values.push(parsedLimit + 1);
+    const query = `SELECT u.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
+       FROM project_updates u${localization.join}
+       WHERE ${where.join(" AND ")}
+       ORDER BY u.created_at DESC, u.id DESC
+       LIMIT $${values.length}`;
+
+    const result = await pool.query(query, values);
+    const { data, meta } = formatPaginatedResponse({
+      rows: result.rows,
+      limit: parsedLimit,
+      getCursorPayload: (row) => ({ createdAt: row.created_at, id: row.id }),
+    });
+
+    res.apiMeta(meta);
+    res.json(data.map(mapProjectUpdateRow));
   } catch (e) {
     next(e);
   }
@@ -58,7 +106,10 @@ router.get("/:projectId", async (req, res, next) => {
 // Rate-limited to prevent update spam
 router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) => {
   try {
-    const { projectId, title, body } = req.body;
+    const { projectId, title, body } = req.body || {};
+    const sourceLanguage = req.body?.sourceLanguage === undefined
+      ? "en"
+      : requireContentLanguage(req.body.sourceLanguage);
 
     if (!projectId || typeof projectId !== "string") {
       throw createApiError(400, "PROJECT_ID_REQUIRED", "projectId is required");
@@ -80,10 +131,10 @@ router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) =>
     // Insert update
     const id = uuidv4();
     const insertResult = await pool.query(
-      `INSERT INTO project_updates (id, project_id, title, body)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO project_updates (id, project_id, title, body, source_language)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [id, projectId, title.trim(), body.trim()],
+      [id, projectId, title.trim(), body.trim(), sourceLanguage],
     );
     const update = mapProjectUpdateRow(insertResult.rows[0]);
 
@@ -106,18 +157,7 @@ router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) =>
   }
 });
 
-// GET /api/updates/:projectId — list updates for a project, most recent first
-router.get("/:projectId", async (req, res, next) => {
-  try {
-    const result = await pool.query(
-      "SELECT * FROM project_updates WHERE project_id = $1 ORDER BY created_at DESC",
-      [req.params.projectId],
-    );
-    res.json(result.rows.map(mapProjectUpdateRow));
-  } catch (e) {
-    next(e);
-  }
-});
+
 
 // POST /api/updates/:updateId/like — toggle like
 // Rate-limited per donor to prevent like enumeration/spam

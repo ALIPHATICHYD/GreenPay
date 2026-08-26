@@ -86,6 +86,9 @@ components:
           type: string
         category:
           type: string
+          description: Localized category label. Use sourceCategory for the stable filter value.
+        sourceCategory:
+          type: string
           enum: [Reforestation, Solar Energy, Ocean Conservation, Clean Water, Wildlife Protection, Carbon Capture, Wind Energy, Sustainable Agriculture, Other]
         status:
           type: string
@@ -117,6 +120,23 @@ components:
         updatedAt:
           type: string
           format: date-time
+        sourceLanguage:
+          type: string
+          enum: [en, es, ar]
+        contentLanguage:
+          type: string
+          enum: [en, es, ar]
+        requestedLanguage:
+          type: string
+          enum: [en, es, ar]
+          nullable: true
+        contentDirection:
+          type: string
+          enum: [ltr, rtl]
+        usedFallback:
+          type: boolean
+        machineTranslated:
+          type: boolean
 
     Campaign:
       type: object
@@ -286,6 +306,12 @@ components:
         createdAt:
           type: string
           format: date-time
+        sourceLanguage: { type: string, enum: [en, es, ar] }
+        contentLanguage: { type: string, enum: [en, es, ar] }
+        contentDirection: { type: string, enum: [ltr, rtl] }
+        requestedLanguage: { type: string, enum: [en, es, ar], nullable: true }
+        usedFallback: { type: boolean }
+        machineTranslated: { type: boolean }
 
     Job:
       type: object
@@ -352,15 +378,67 @@ components:
 
     Pagination:
       type: object
+      description: Single standard pagination metadata contract used by all list endpoints.
       properties:
-        total:
-          type: integer
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque versioned cursor for fetching the next page (null when no more items).
+          example: v1.eyJjcmVhdGVkQXQiOiIyMDI2LTA4LTI2VDEyOjAwOjAwWiIsImlkIjoiYWJjZCJ9
+        hasMore:
+          type: boolean
+          description: Whether additional items exist beyond the current page.
         limit:
           type: integer
+          description: Page size cap requested or applied.
+        totalCount:
+          type: integer
+          nullable: true
+          description: Total count of items if calculated, or null if omitted/estimated.
+        isTotalExact:
+          type: boolean
+          description: True if totalCount is exact; false if estimated or omitted.
+        total:
+          type: integer
+          description: >-
+            Deprecated alias of `totalCount`, kept so clients written against
+            the offset-era envelope keep reading a count. Present only on the
+            endpoints that still compute one.
+          deprecated: true
         offset:
           type: integer
+          description: >-
+            Deprecated. Echoes the `offset` the caller sent, and is absent on
+            cursor-paginated endpoints.
+          deprecated: true
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
 
   parameters:
+    cursorParam:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Opaque, versioned continuation cursor, taken verbatim from a previous
+        response's `meta.pagination.nextCursor`. Its contents are not a stable
+        API: decode or construct one and it may stop working. A malformed
+        cursor is rejected with `INVALID_CURSOR`, and one issued by a newer
+        format with `UNSUPPORTED_CURSOR_VERSION` — both HTTP 400. The full
+        contract is documented once in docs/pagination.md.
+      schema:
+        type: string
+    limitParam:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return per page.
+      schema:
+        type: integer
     projectId:
       name: id
       in: path
@@ -435,12 +513,19 @@ paths:
           in: query
           schema:
             type: string
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
             type: integer
             default: 50
             maximum: 100
+        - name: lang
+          in: query
+          description: Preferred donor-content language. Falls back to the labelled original.
+          schema:
+            type: string
+            enum: [en, es, ar]
       responses:
         '200':
           description: List of projects
@@ -461,6 +546,12 @@ paths:
       tags: [Projects]
       summary: Get featured project
       operationId: getFeaturedProject
+      parameters:
+        - name: lang
+          in: query
+          schema:
+            type: string
+            enum: [en, es, ar]
       description: Returns the active project with the highest donor count. Cached for 24 hours.
       responses:
         '200':
@@ -563,6 +654,11 @@ paths:
       operationId: getProject
       parameters:
         - $ref: '#/components/parameters/projectId'
+        - name: lang
+          in: query
+          schema:
+            type: string
+            enum: [en, es, ar]
       responses:
         '200':
           description: Project detail with campaigns, milestones, ratings
@@ -599,6 +695,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/projects/{id}/translations/{language}:
+    put:
+      tags: [Projects]
+      summary: Create or replace a pending project translation without changing the original
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - name: language
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [en, es, ar]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, description, category, location]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                category: { type: string }
+                location: { type: string }
+                machineTranslated: { type: boolean, default: false }
+      responses:
+        '201': { description: Translation saved in pending moderation }
+
+  /api/projects/{id}/translations/{language}/moderation:
+    patch:
+      tags: [Projects]
+      summary: Moderate project translation content
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [pending, approved, rejected] }
+                impactClaimsReviewed: { type: boolean, default: false }
+      responses:
+        '200': { description: Translation moderation state updated }
+        '400': { description: Human impact-claim review is required before approving machine translation }
 
   /api/projects/{id}/status:
     patch:
@@ -1073,12 +1225,7 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: cursor
-          in: query
-          description: ISO timestamp for cursor-based pagination
-          schema:
-            type: string
-            format: date-time
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1116,6 +1263,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1144,9 +1292,16 @@ paths:
       operationId: listDonorDonations
       parameters:
         - $ref: '#/components/parameters/publicKey'
+        - $ref: '#/components/parameters/cursorParam'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
       responses:
         '200':
-          description: All donations by this donor
+          description: Paginated donations by this donor
           content:
             application/json:
               schema:
@@ -1245,6 +1400,7 @@ paths:
       summary: Get donor leaderboard
       operationId: getLeaderboard
       parameters:
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1253,9 +1409,17 @@ paths:
             maximum: 100
         - name: offset
           in: query
+          deprecated: true
+          description: >-
+            Superseded by `cursor`. Honoured only when no `cursor` is supplied,
+            so existing clients keep working unchanged, and it carries the
+            offset caveats: rows written while a client pages can be duplicated
+            or skipped, and deep offsets get slower with depth. See
+            docs/pagination.md for the transition.
           schema:
             type: integer
             default: 0
+            maximum: 10000
         - name: period
           in: query
           schema:
@@ -1290,17 +1454,17 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: cursor
-          in: query
-          schema:
-            type: string
-            format: date-time
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
             type: integer
             default: 20
             maximum: 100
+        - name: lang
+          in: query
+          description: Preferred update-content language with labelled source fallback.
+          schema: { type: string, enum: [en, es, ar] }
       responses:
         '200':
           description: Paginated project updates
@@ -1346,6 +1510,10 @@ paths:
                   type: string
                 body:
                   type: string
+                sourceLanguage:
+                  type: string
+                  enum: [en, es, ar]
+                  default: en
       responses:
         '201':
           description: Update created and subscribers notified
@@ -1376,6 +1544,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/updates/{updateId}/translations/{language}:
+    put:
+      tags: [Updates]
+      summary: Create or replace a pending update translation
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: updateId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, body]
+              properties:
+                title: { type: string }
+                body: { type: string }
+                machineTranslated: { type: boolean, default: false }
+      responses:
+        '201': { description: Translation saved in pending moderation }
+
+  /api/updates/{updateId}/translations/{language}/moderation:
+    patch:
+      tags: [Updates]
+      summary: Moderate update translation content
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: updateId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: language
+          in: path
+          required: true
+          schema: { type: string, enum: [en, es, ar] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [pending, approved, rejected] }
+                impactClaimsReviewed: { type: boolean, default: false }
+      responses:
+        '200': { description: Translation moderation state updated }
+        '400': { description: Human impact-claim review is required before approving machine translation }
 
   /api/updates/{updateId}/like:
     post:
@@ -1486,6 +1710,10 @@ paths:
                   format: email
                 donorAddress:
                   type: string
+                preferredLanguage:
+                  type: string
+                  enum: [en, es, ar]
+                  default: en
       responses:
         '201':
           description: Subscribed successfully
@@ -1554,9 +1782,17 @@ paths:
       tags: [Jobs]
       summary: List jobs
       operationId: listJobs
+      parameters:
+        - $ref: '#/components/parameters/cursorParam'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
       responses:
         '200':
-          description: List of escrow jobs (latest 50)
+          description: Paginated escrow jobs
           content:
             application/json:
               schema:
@@ -1920,6 +2156,7 @@ paths:
           description: Filter by action string (e.g. project.status.active)
           schema:
             type: string
+        - $ref: '#/components/parameters/cursorParam'
         - name: limit
           in: query
           schema:
@@ -1928,9 +2165,14 @@ paths:
             maximum: 200
         - name: offset
           in: query
+          deprecated: true
+          description: >-
+            Superseded by `cursor`. Honoured only when no `cursor` is supplied.
+            See docs/pagination.md for the transition.
           schema:
             type: integer
             default: 0
+            maximum: 10000
       responses:
         '200':
           description: Paginated audit log entries

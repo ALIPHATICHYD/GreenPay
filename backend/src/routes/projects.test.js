@@ -160,3 +160,124 @@ describe("PATCH /api/projects/:id/status", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("GET /api/projects multilingual content", () => {
+  let app;
+
+  beforeEach(() => {
+    app = buildApp();
+    pool.query.mockReset();
+  });
+
+  it("selects approved requested-language content and searches every approved translation", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [makeProjectRow({
+      localized_name: "Reforestar el delta",
+      localized_description: "Descripción en español",
+      localized_category: "Reforestación",
+      localized_location: "Delta",
+      localized_language: "es",
+      localized_machine_translated: true,
+      source_language: "en",
+      requested_language: "es",
+    })] });
+
+    const res = await request(app).get("/api/projects?lang=es&search=bosque");
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0]).toMatchObject({
+      name: "Reforestar el delta",
+      sourceLanguage: "en",
+      contentLanguage: "es",
+      usedFallback: false,
+      machineTranslated: true,
+    });
+    expect(pool.query.mock.calls[0][0]).toContain("FROM project_translations search_translation");
+    expect(pool.query.mock.calls[0][0]).toContain("moderation_status = 'approved'");
+  });
+
+  it("keeps the original fields and explicitly labels fallback", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [makeProjectRow({
+      source_language: "en",
+      requested_language: "ar",
+    })] });
+
+    const res = await request(app).get("/api/projects?lang=ar");
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0]).toMatchObject({
+      name: "Reforest the Delta",
+      sourceLanguage: "en",
+      contentLanguage: "en",
+      requestedLanguage: "ar",
+      usedFallback: true,
+      machineTranslated: false,
+    });
+  });
+
+  it("rejects an unsupported language instead of silently mislabelling content", async () => {
+    const res = await request(app).get("/api/projects?lang=fr");
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("CONTENT_LANGUAGE_INVALID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+});
+
+describe("project translation moderation", () => {
+  let app;
+  const token = () => signToken({ role: "admin", sub: "reviewer" }, "1h");
+
+  beforeEach(() => {
+    app = buildApp();
+    pool.query.mockReset();
+    logAdminAction.mockReset();
+  });
+
+  it("stores a translation separately in pending moderation", async () => {
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: PROJECT_ID, source_language: "en" }] })
+      .mockResolvedValueOnce({ rows: [{ id: "translation-1", moderation_status: "pending" }] });
+
+    const res = await request(app)
+      .put(`/api/projects/${PROJECT_ID}/translations/es`)
+      .set("Authorization", `Bearer ${token()}`)
+      .send({
+        name: "Reforestar el delta",
+        description: "Descripción",
+        category: "Reforestación",
+        location: "Delta",
+        machineTranslated: true,
+      });
+
+    expect(res.status).toBe(201);
+    expect(pool.query.mock.calls[1][0]).toContain("INSERT INTO project_translations");
+    expect(pool.query.mock.calls[1][0]).not.toContain("UPDATE projects SET");
+  });
+
+  it("blocks machine-translated impact claims until a human reviewer confirms them", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [{ id: "translation-1", machine_translated: true }] });
+    const res = await request(app)
+      .patch(`/api/projects/${PROJECT_ID}/translations/es/moderation`)
+      .set("Authorization", `Bearer ${token()}`)
+      .send({ status: "approved" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("IMPACT_CLAIMS_REVIEW_REQUIRED");
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a reviewed translation through the authenticated moderation path", async () => {
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: "translation-1", machine_translated: true }] })
+      .mockResolvedValueOnce({ rows: [{ id: "translation-1", moderation_status: "approved" }] });
+    const res = await request(app)
+      .patch(`/api/projects/${PROJECT_ID}/translations/es/moderation`)
+      .set("Authorization", `Bearer ${token()}`)
+      .send({ status: "approved", impactClaimsReviewed: true });
+
+    expect(res.status).toBe(200);
+    expect(logAdminAction).toHaveBeenCalledWith(expect.objectContaining({
+      actor: "reviewer",
+      action: "project.translation.approved",
+    }));
+  });
+});

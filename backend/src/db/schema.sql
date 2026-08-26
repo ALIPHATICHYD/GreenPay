@@ -17,6 +17,31 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Original donor-facing copy remains on projects for backwards compatibility.
+-- source_language identifies that immutable language context; approved
+-- translations are separate moderated user-content records.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_language TEXT NOT NULL DEFAULT 'en';
+
+CREATE TABLE IF NOT EXISTS project_translations (
+  id UUID PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  language TEXT NOT NULL CHECK (language IN ('en', 'es', 'ar')),
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  category TEXT NOT NULL,
+  location TEXT NOT NULL,
+  machine_translated BOOLEAN NOT NULL DEFAULT FALSE,
+  impact_claims_reviewed BOOLEAN NOT NULL DEFAULT FALSE,
+  moderation_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (moderation_status IN ('pending', 'approved', 'rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(project_id, language)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_translations_search
+  ON project_translations(project_id, language, moderation_status);
+
 -- AI summary cache: filled on demand by POST /api/projects/:id/generate-summary,
 -- read by GET /api/projects/:id and rendered as a highlighted card on the
 -- project detail page. ai_summary_source_hash stores a SHA-256 of the
@@ -80,6 +105,26 @@ CREATE TABLE IF NOT EXISTS project_updates (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE project_updates ADD COLUMN IF NOT EXISTS source_language TEXT NOT NULL DEFAULT 'en';
+
+CREATE TABLE IF NOT EXISTS project_update_translations (
+  id UUID PRIMARY KEY,
+  update_id UUID NOT NULL REFERENCES project_updates(id) ON DELETE CASCADE,
+  language TEXT NOT NULL CHECK (language IN ('en', 'es', 'ar')),
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  machine_translated BOOLEAN NOT NULL DEFAULT FALSE,
+  impact_claims_reviewed BOOLEAN NOT NULL DEFAULT FALSE,
+  moderation_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (moderation_status IN ('pending', 'approved', 'rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(update_id, language)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_update_translations_lookup
+  ON project_update_translations(update_id, language, moderation_status);
+
 CREATE TABLE IF NOT EXISTS project_subscriptions (
   id UUID PRIMARY KEY,
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -88,6 +133,8 @@ CREATE TABLE IF NOT EXISTS project_subscriptions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(project_id, email)
 );
+
+ALTER TABLE project_subscriptions ADD COLUMN IF NOT EXISTS preferred_language TEXT NOT NULL DEFAULT 'en';
 
 CREATE TABLE IF NOT EXISTS jobs (
   id UUID PRIMARY KEY,
@@ -325,3 +372,40 @@ CREATE TABLE IF NOT EXISTS matching_processed_donations (
 
 CREATE INDEX IF NOT EXISTS idx_matching_processed_donations_tx_hash
   ON matching_processed_donations (original_tx_hash);
+
+-- ============================================================
+-- Keyset Pagination Indexes (Total Ordering & Cursor Optimizations)
+-- ============================================================
+CREATE INDEX IF NOT EXISTS idx_projects_created_at_id
+  ON projects (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_donations_project_created_id
+  ON donations (project_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_donations_project_amount_created_id
+  ON donations (project_id, amount DESC, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_donations_donor_created_id
+  ON donations (donor_address, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_donor_stats_total_public_key
+  ON donor_stats (total_donated_xlm DESC, public_key ASC);
+
+CREATE INDEX IF NOT EXISTS idx_profiles_total_public_key
+  ON profiles (total_donated_xlm DESC, public_key ASC);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created_at_id
+  ON admin_audit_log (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_ai_summary_job_failures_created_at_id
+  ON ai_summary_job_failures (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at_id
+  ON jobs (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_updates_project_created_id
+  ON project_updates (project_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_follows_device_created_project
+  ON project_follows (device_token_id, created_at DESC, project_id DESC);
+

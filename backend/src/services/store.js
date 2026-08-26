@@ -155,12 +155,14 @@ function toIso(value) {
 }
 
 function mapProjectRow(row) {
+  const { translationMetadata } = require("./contentLanguage");
   return {
     id: row.id,
-    name: row.name,
-    description: row.description,
-    category: row.category,
-    location: row.location,
+    name: row.localized_name || row.name,
+    description: row.localized_description || row.description,
+    category: row.localized_category || row.category,
+    sourceCategory: row.category,
+    location: row.localized_location || row.location,
     walletAddress: row.wallet_address,
     goalXLM: row.goal_xlm?.toString() || "0",
     raisedXLM: row.raised_xlm?.toString() || "0",
@@ -177,6 +179,7 @@ function mapProjectRow(row) {
     aiSummarySourceHash:  row.ai_summary_source_hash || null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
+    ...translationMetadata(row),
   };
 }
 
@@ -237,12 +240,14 @@ function mapProfileRow(row) {
 // exported as `mapProfileRow`
 
 function mapProjectUpdateRow(row) {
+  const { translationMetadata } = require("./contentLanguage");
   return {
     id: row.id,
     projectId: row.project_id,
-    title: row.title,
-    body: row.body,
+    title: row.localized_title || row.title,
+    body: row.localized_body || row.body,
     createdAt: toIso(row.created_at),
+    ...translationMetadata(row),
   };
 }
 
