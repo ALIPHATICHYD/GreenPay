@@ -30,6 +30,8 @@ function searchRankClause(paramIndex) {
     )`;
 }
 
+const { projectLocalizationSelect } = require("./contentLanguage");
+
 const VALID_STATUSES = ["active", "completed", "paused"];
 const VALID_CATEGORIES = [
   "Reforestation",
@@ -69,11 +71,16 @@ function parseFilters(query) {
     ? Math.min(limitRaw, 100)
     : 50;
 
+  const lang = typeof query.lang === "string" && query.lang.trim()
+    ? query.lang.trim().toLowerCase()
+    : null;
+
   return {
     category: VALID_CATEGORIES.includes(query.category) ? query.category : null,
     status: VALID_STATUSES.includes(query.status) ? query.status : null,
     verified: query.verified === "true" ? true : query.verified === "false" ? false : null,
     search: sanitizeSearchTerm(query.search),
+    lang,
     limit,
   };
 }
@@ -115,6 +122,17 @@ function buildWhereClause(filters) {
  */
 function buildListingQuery(filters, ranking) {
   const { whereSql, values, searchParamIndex } = buildWhereClause(filters);
+
+  let localizationJoin = "";
+  let localizationColumns = "";
+  if (filters.lang) {
+    values.push(filters.lang);
+    const languageParam = `$${values.length}`;
+    const localization = projectLocalizationSelect(languageParam);
+    localizationJoin = localization.join;
+    localizationColumns = `${localization.columns}, ${languageParam}::text AS requested_language`;
+  }
+
   const limitIndex = values.length + 1;
   values.push(filters.limit);
 
@@ -150,8 +168,9 @@ function buildListingQuery(filters, ranking) {
   }
 
   const sql = `
-    SELECT p.*, ${rankSelect}
+    SELECT p.*, ${rankSelect}${localizationColumns}
     FROM projects p
+    ${localizationJoin}
     ${whereSql}
     ORDER BY ${orderBy}
     LIMIT $${limitIndex}

@@ -65,6 +65,7 @@ export default function ProjectSearchBar({
       </span>
       <input
         type="search"
+        role="combobox"
         value={search}
         onChange={handleChange}
         onKeyDown={handleInputKeyDown}
