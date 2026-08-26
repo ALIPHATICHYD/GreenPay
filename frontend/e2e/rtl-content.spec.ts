@@ -40,5 +40,9 @@ test("Arabic project copy stays RTL inside the existing card", async ({ page }) 
   const content = card.getByRole("heading", { name: arabicProject.name }).locator("..");
   await expect(content).toHaveAttribute("lang", "ar");
   await expect(content).toHaveAttribute("dir", "rtl");
-  await expect(card).toHaveScreenshot("arabic-project-card.png", { animations: "disabled" });
+  await expect(card).toHaveScreenshot("arabic-project-card.png", {
+    animations: "disabled",
+    // Arabic glyph rasterization varies slightly between developer and CI Linux images.
+    maxDiffPixelRatio: 0.05,
+  });
 });
