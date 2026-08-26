@@ -156,9 +156,12 @@ router.get("/featured", async (req, res, next) => {
   }
 });
 
+const { decodeCursor, formatPaginatedResponse } = require("../utils/pagination");
+
 router.get("/", async (req, res, next) => {
   try {
-    const { category, status, verified, search, limit = 50 } = req.query;
+    const { category, status, verified, search, cursor } = req.query;
+    const parsedLimit = Math.min(Number.parseInt(req.query.limit, 10) || 50, 100);
     const where = [];
     const values = [];
 
@@ -187,14 +190,30 @@ router.get("/", async (req, res, next) => {
       )`);
     }
 
-    values.push(Math.min(Number.parseInt(limit, 10) || 50, 100));
+    const cursorObj = decodeCursor(cursor);
+    if (cursorObj) {
+      if (cursorObj.createdAt && cursorObj.id) {
+        values.push(cursorObj.createdAt, cursorObj.id);
+        where.push(`(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+      } else if (cursorObj.createdAt) {
+        values.push(cursorObj.createdAt);
+        where.push(`created_at < $${values.length}::timestamptz`);
+      }
+    }
 
+    values.push(parsedLimit + 1);
     const whereClause = where.length ? `WHERE ${where.join(" AND ")} ` : "";
-    const query = `SELECT * FROM projects ${whereClause}ORDER BY created_at DESC LIMIT $${values.length}`;
+    const query = `SELECT * FROM projects ${whereClause}ORDER BY created_at DESC, id DESC LIMIT $${values.length}`;
 
     const result = await pool.query(query, values);
+    const { data, meta } = formatPaginatedResponse({
+      rows: result.rows,
+      limit: parsedLimit,
+      getCursorPayload: (row) => ({ createdAt: row.created_at, id: row.id }),
+    });
 
-    res.json(result.rows.map(row => ({ ...mapProjectRow(row), serverNow: Date.now() })));
+    res.apiMeta(meta);
+    res.json(data.map(row => ({ ...mapProjectRow(row), serverNow: Date.now() })));
   } catch (e) {
     next(e);
   }

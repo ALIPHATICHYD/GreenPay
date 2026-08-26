@@ -352,15 +352,48 @@ components:
 
     Pagination:
       type: object
+      description: Single standard pagination metadata contract used by all list endpoints.
       properties:
-        total:
-          type: integer
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque versioned cursor for fetching the next page (null when no more items).
+          example: v1.eyJjcmVhdGVkQXQiOiIyMDI2LTA4LTI2VDEyOjAwOjAwWiIsImlkIjoiYWJjZCJ9
+        hasMore:
+          type: boolean
+          description: Whether additional items exist beyond the current page.
         limit:
           type: integer
+          description: Page size cap requested or applied.
+        totalCount:
+          type: integer
+          nullable: true
+          description: Total count of items if calculated, or null if omitted/estimated.
+        isTotalExact:
+          type: boolean
+          description: True if totalCount is exact; false if estimated or omitted.
+        total:
+          type: integer
+          description: Legacy field for total count during transition.
         offset:
           type: integer
+          description: Legacy field for offset during transition.
 
   parameters:
+    cursorParam:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque, versioned continuation cursor returned in response meta.pagination.nextCursor.
+      schema:
+        type: string
+    limitParam:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return per page.
+      schema:
+        type: integer
     projectId:
       name: id
       in: path

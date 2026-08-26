@@ -325,3 +325,40 @@ CREATE TABLE IF NOT EXISTS matching_processed_donations (
 
 CREATE INDEX IF NOT EXISTS idx_matching_processed_donations_tx_hash
   ON matching_processed_donations (original_tx_hash);
+
+-- ============================================================
+-- Keyset Pagination Indexes (Total Ordering & Cursor Optimizations)
+-- ============================================================
+CREATE INDEX IF NOT EXISTS idx_projects_created_at_id
+  ON projects (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_donations_project_created_id
+  ON donations (project_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_donations_project_amount_created_id
+  ON donations (project_id, amount DESC, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_donations_donor_created_id
+  ON donations (donor_address, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_donor_stats_total_public_key
+  ON donor_stats (total_donated_xlm DESC, public_key ASC);
+
+CREATE INDEX IF NOT EXISTS idx_profiles_total_public_key
+  ON profiles (total_donated_xlm DESC, public_key ASC);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created_at_id
+  ON admin_audit_log (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_ai_summary_job_failures_created_at_id
+  ON ai_summary_job_failures (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at_id
+  ON jobs (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_updates_project_created_id
+  ON project_updates (project_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_follows_device_created_project
+  ON project_follows (device_token_id, created_at DESC, project_id DESC);
+
