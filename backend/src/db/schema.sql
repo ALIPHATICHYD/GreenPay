@@ -374,38 +374,49 @@ CREATE INDEX IF NOT EXISTS idx_matching_processed_donations_tx_hash
   ON matching_processed_donations (original_tx_hash);
 
 -- ============================================================
--- Keyset Pagination Indexes (Total Ordering & Cursor Optimizations)
+-- Project search indexes (issue #500)
+-- Full-text + trigram for ranked discovery; no leading-wildcard scans.
+-- Multilingual: 'simple' config avoids mis-stemming non-English descriptions.
 -- ============================================================
-CREATE INDEX IF NOT EXISTS idx_projects_created_at_id
-  ON projects (created_at DESC, id DESC);
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-CREATE INDEX IF NOT EXISTS idx_donations_project_created_id
-  ON donations (project_id, created_at DESC, id DESC);
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
-CREATE INDEX IF NOT EXISTS idx_donations_project_amount_created_id
-  ON donations (project_id, amount DESC, created_at DESC, id DESC);
+CREATE OR REPLACE FUNCTION projects_search_vector_update() RETURNS trigger AS $$
+BEGIN
+  -- English stemming on primary narrative fields; simple tokenization on the
+  -- rest so multilingual category/location/tags are not mis-stemmed.
+  NEW.search_vector :=
+    setweight(to_tsvector('english', coalesce(NEW.name, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(NEW.name, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(NEW.category, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(NEW.location, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(array_to_string(NEW.tags, ' '), '')), 'C') ||
+    setweight(to_tsvector('english', coalesce(NEW.description, '')), 'D') ||
+    setweight(to_tsvector('simple', coalesce(NEW.description, '')), 'D');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-CREATE INDEX IF NOT EXISTS idx_donations_donor_created_id
-  ON donations (donor_address, created_at DESC, id DESC);
+DROP TRIGGER IF EXISTS projects_search_vector_trigger ON projects;
+CREATE TRIGGER projects_search_vector_trigger
+  BEFORE INSERT OR UPDATE OF name, description, category, location, tags ON projects
+  FOR EACH ROW EXECUTE FUNCTION projects_search_vector_update();
 
-CREATE INDEX IF NOT EXISTS idx_donor_stats_total_public_key
-  ON donor_stats (total_donated_xlm DESC, public_key ASC);
+UPDATE projects SET
+  search_vector =
+    setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(name, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(category, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(location, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(array_to_string(tags, ' '), '')), 'C') ||
+    setweight(to_tsvector('english', coalesce(description, '')), 'D') ||
+    setweight(to_tsvector('simple', coalesce(description, '')), 'D')
+WHERE search_vector IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_profiles_total_public_key
-  ON profiles (total_donated_xlm DESC, public_key ASC);
-
-CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created_at_id
-  ON admin_audit_log (created_at DESC, id DESC);
-
-CREATE INDEX IF NOT EXISTS idx_ai_summary_job_failures_created_at_id
-  ON ai_summary_job_failures (created_at DESC, id DESC);
-
-CREATE INDEX IF NOT EXISTS idx_jobs_created_at_id
-  ON jobs (created_at DESC, id DESC);
-
-CREATE INDEX IF NOT EXISTS idx_project_updates_project_created_id
-  ON project_updates (project_id, created_at DESC, id DESC);
-
-CREATE INDEX IF NOT EXISTS idx_project_follows_device_created_project
-  ON project_follows (device_token_id, created_at DESC, project_id DESC);
-
+CREATE INDEX IF NOT EXISTS idx_projects_search_vector ON projects USING GIN (search_vector);
+CREATE INDEX IF NOT EXISTS idx_projects_name_trgm ON projects USING GIN (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_projects_location_trgm ON projects USING GIN (location gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_projects_category ON projects (category);
+CREATE INDEX IF NOT EXISTS idx_projects_status ON projects (status);
+CREATE INDEX IF NOT EXISTS idx_projects_verified ON projects (verified);

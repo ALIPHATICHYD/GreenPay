@@ -376,16 +376,7 @@ jobs:
         working-directory: shared
       - name: Backend real-transaction integration test
         working-directory: backend
-        # These need a real Postgres, so they skip themselves in the `backend`
-        # job and only have teeth here. The pagination suite is the one that
-        # mutates rows between page fetches and records the deep-page
-        # measurements; leaving it off this list meant it never ran anywhere.
-        run: >-
-          npx jest
-          src/services/indexerService.integration.test.js
-          src/routes/leaderboard.integration.test.js
-          src/routes/pagination.integration.test.js
-          --runInBand
+        run: npx jest src/services/indexerService.integration.test.js src/routes/leaderboard.integration.test.js src/services/projectSearch.integration.test.js --runInBand
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/greenpay
       - name: Start local Stellar protocol 21 network

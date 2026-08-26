@@ -39,6 +39,18 @@ function makeProjectRow(overrides = {}) {
   };
 }
 
+/** searchProjects issues one listing query plus six facet aggregations. */
+function mockProjectListingQueries(listingRows) {
+  pool.query
+    .mockResolvedValueOnce({ rows: listingRows })
+    .mockResolvedValueOnce({ rows: [{ count: listingRows.length }] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] });
+}
+
 jest.mock("../services/audit", () => ({
   logAdminAction: jest.fn(),
 }));
@@ -170,7 +182,7 @@ describe("GET /api/projects multilingual content", () => {
   });
 
   it("selects approved requested-language content and searches every approved translation", async () => {
-    pool.query.mockResolvedValueOnce({ rows: [makeProjectRow({
+    mockProjectListingQueries([makeProjectRow({
       localized_name: "Reforestar el delta",
       localized_description: "Descripción en español",
       localized_category: "Reforestación",
@@ -179,7 +191,7 @@ describe("GET /api/projects multilingual content", () => {
       localized_machine_translated: true,
       source_language: "en",
       requested_language: "es",
-    })] });
+    })]);
 
     const res = await request(app).get("/api/projects?lang=es&search=bosque");
 
@@ -196,10 +208,10 @@ describe("GET /api/projects multilingual content", () => {
   });
 
   it("keeps the original fields and explicitly labels fallback", async () => {
-    pool.query.mockResolvedValueOnce({ rows: [makeProjectRow({
+    mockProjectListingQueries([makeProjectRow({
       source_language: "en",
       requested_language: "ar",
-    })] });
+    })]);
 
     const res = await request(app).get("/api/projects?lang=ar");
 
