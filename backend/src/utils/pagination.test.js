@@ -4,7 +4,6 @@ const {
   encodeCursor,
   decodeCursor,
   formatPaginatedResponse,
-  CURSOR_VERSION,
 } = require("./pagination");
 const { ApiError } = require("../middleware/apiEnvelope");
 

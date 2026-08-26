@@ -3,7 +3,7 @@
 const express = require("express");
 const request = require("supertest");
 const { apiEnvelope, errorHandler } = require("../middleware/apiEnvelope");
-const { encodeCursor, decodeCursor } = require("../utils/pagination");
+const { decodeCursor } = require("../utils/pagination");
 
 jest.mock("../db/pool", () => ({
   query: jest.fn(),

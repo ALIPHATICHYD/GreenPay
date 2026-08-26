@@ -7,10 +7,6 @@ const router  = express.Router();
 const pool = require("../db/pool");
 const { validate } = require("../middleware/validate");
 const { LeaderboardQuerySchema } = require("../schemas/leaderboard");
-
-// period=all reads from donor_stats, the aggregate donation projections.js
-// keeps current on every DonationRecorded/MatchApplied/MigratedDonation
-// (unlike profiles.total_donated_xlm, which is dead and only ever 0).
 const { decodeCursor, formatPaginatedResponse } = require("../utils/pagination");
 
 const ALL_TIME_COUNT_QUERY = "SELECT COUNT(*) AS total FROM donor_stats";
@@ -27,7 +23,7 @@ router.get("/", validate(LeaderboardQuerySchema, { source: "query" }), async (re
 
     if (cursorObj && cursorObj.totalDonatedXlm !== undefined && cursorObj.publicKey) {
       values.push(cursorObj.totalDonatedXlm, cursorObj.publicKey);
-      where.push(`(total_donated_xlm < $1::numeric OR (total_donated_xlm = $1::numeric AND public_key > $2))`);
+      where.push("(total_donated_xlm < $1::numeric OR (total_donated_xlm = $1::numeric AND public_key > $2))");
     } else if (offset > 0) {
       useOffset = true;
     }
@@ -66,7 +62,10 @@ router.get("/", validate(LeaderboardQuerySchema, { source: "query" }), async (re
         `;
       }
     } else {
-      const interval = period === "month" ? "30 days" : "1 year";
+      const intervalStr = period === "month" ? "30 days" : "1 year";
+      values.push(intervalStr);
+      const intervalParamIndex = values.length;
+
       if (useOffset) {
         values.push(limit + 1, offset);
         dataQuery = `
@@ -80,12 +79,12 @@ router.get("/", validate(LeaderboardQuerySchema, { source: "query" }), async (re
             FROM profiles p
             LEFT JOIN donations d
               ON p.public_key = d.donor_address
-              AND d.created_at >= NOW() - INTERVAL '${interval}'
+              AND d.created_at >= NOW() - ($${intervalParamIndex}::interval)
             GROUP BY p.public_key, p.display_name, p.badges
           )
           SELECT * FROM ranked
           ORDER BY total_donated_xlm DESC, public_key ASC
-          LIMIT $1 OFFSET $2
+          LIMIT $${values.length - 1} OFFSET $${values.length}
         `;
       } else {
         values.push(limit + 1);
@@ -100,7 +99,7 @@ router.get("/", validate(LeaderboardQuerySchema, { source: "query" }), async (re
             FROM profiles p
             LEFT JOIN donations d
               ON p.public_key = d.donor_address
-              AND d.created_at >= NOW() - INTERVAL '${interval}'
+              AND d.created_at >= NOW() - ($${intervalParamIndex}::interval)
             GROUP BY p.public_key, p.display_name, p.badges
           )
           SELECT * FROM ranked

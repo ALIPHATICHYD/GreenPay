@@ -19,7 +19,6 @@ const { v4: uuid } = require("uuid");
 
 const pool = require("../db/pool");
 const { apiEnvelope, errorHandler } = require("../middleware/apiEnvelope");
-const { encodeCursor, decodeCursor } = require("../utils/pagination");
 
 jest.setTimeout(30000);
 
