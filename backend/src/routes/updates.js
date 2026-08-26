@@ -45,24 +45,58 @@ const likeLimiter = createLayeredRateLimiter({
   wallet: 20,
 });
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const { decodeCursor, formatPaginatedResponse } = require("../utils/pagination");
+
 // GET /api/updates/:projectId — list updates for a project, newest first
 router.get("/:projectId", async (req, res, next) => {
   try {
+    const { cursor } = req.query;
+    const parsedLimit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    // Validated up front so an unsupported `lang` is rejected rather than
+    // quietly served as source-language content under the requested label.
     const language = req.query.lang === undefined ? null : requireContentLanguage(req.query.lang);
+    const cursorObj = decodeCursor(cursor);
+
+    const where = ["u.project_id = $1"];
     const values = [req.params.projectId];
+
+    if (cursorObj) {
+      if (cursorObj.createdAt && cursorObj.id) {
+        values.push(cursorObj.createdAt, cursorObj.id);
+        where.push(`(u.created_at, u.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+      } else if (cursorObj.createdAt) {
+        values.push(cursorObj.createdAt);
+        where.push(`u.created_at < $${values.length}::timestamptz`);
+      }
+    }
+
     let languageParam = null;
     if (language) {
       values.push(language);
       languageParam = `$${values.length}`;
     }
+    // At most one approved translation per (update, language), so the join
+    // cannot fan out rows and change what a page of `limit` rows means.
     const localization = updateLocalizationSelect(languageParam);
-    const result = await pool.query(
-      `SELECT u.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
+
+    values.push(parsedLimit + 1);
+    const query = `SELECT u.*${localization.columns}${languageParam ? `, ${languageParam}::text AS requested_language` : ""}
        FROM project_updates u${localization.join}
-       WHERE u.project_id = $1 ORDER BY u.created_at DESC`,
-      values,
-    );
-    res.json(result.rows.map(mapProjectUpdateRow));
+       WHERE ${where.join(" AND ")}
+       ORDER BY u.created_at DESC, u.id DESC
+       LIMIT $${values.length}`;
+
+    const result = await pool.query(query, values);
+    const { data, meta } = formatPaginatedResponse({
+      rows: result.rows,
+      limit: parsedLimit,
+      getCursorPayload: (row) => ({ createdAt: row.created_at, id: row.id }),
+    });
+
+    res.apiMeta(meta);
+    res.json(data.map(mapProjectUpdateRow));
   } catch (e) {
     next(e);
   }
@@ -123,82 +157,7 @@ router.post("/", adminRequired, updateCreationLimiter, async (req, res, next) =>
   }
 });
 
-router.put("/:updateId/translations/:language", adminRequired, updateCreationLimiter, async (req, res, next) => {
-  try {
-    const language = requireContentLanguage(req.params.language);
-    const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
-    const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
-    if (!title || !body) {
-      throw createApiError(400, "TRANSLATION_FIELDS_REQUIRED", "title and body are required");
-    }
-    const original = await pool.query("SELECT id, source_language FROM project_updates WHERE id = $1", [req.params.updateId]);
-    if (!original.rows[0]) {
-      throw createApiError(404, "UPDATE_NOT_FOUND", "Update not found");
-    }
-    if (language === original.rows[0].source_language) {
-      throw createApiError(409, "SOURCE_LANGUAGE_TRANSLATION", "A translation cannot replace the original language");
-    }
-    const result = await pool.query(
-      `INSERT INTO project_update_translations
-        (id, update_id, language, title, body, machine_translated, moderation_status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-       ON CONFLICT (update_id, language) DO UPDATE SET
-         title = EXCLUDED.title, body = EXCLUDED.body,
-         machine_translated = EXCLUDED.machine_translated,
-         impact_claims_reviewed = FALSE, moderation_status = 'pending', updated_at = NOW()
-       RETURNING *`,
-      [uuidv4(), req.params.updateId, language, title, body, req.body.machineTranslated === true],
-    );
-    logAdminAction({
-      actor: req.admin.sub,
-      action: "project_update.translation.submitted",
-      targetType: "project_update_translation",
-      targetId: result.rows[0].id,
-      metadata: { updateId: req.params.updateId, language },
-      ipAddress: req.ip,
-    });
-    res.status(201).json(result.rows[0]);
-  } catch (e) {
-    next(e);
-  }
-});
 
-router.patch("/:updateId/translations/:language/moderation", adminRequired, updateCreationLimiter, async (req, res, next) => {
-  try {
-    const language = requireContentLanguage(req.params.language);
-    const { status, impactClaimsReviewed = false } = req.body || {};
-    if (!TRANSLATION_STATUSES.includes(status)) {
-      throw createApiError(400, "TRANSLATION_STATUS_INVALID", `status must be one of: ${TRANSLATION_STATUSES.join(", ")}`);
-    }
-    const existing = await pool.query(
-      "SELECT * FROM project_update_translations WHERE update_id = $1 AND language = $2",
-      [req.params.updateId, language],
-    );
-    if (!existing.rows[0]) {
-      throw createApiError(404, "UPDATE_TRANSLATION_NOT_FOUND", "Update translation not found");
-    }
-    if (status === "approved" && existing.rows[0].machine_translated && impactClaimsReviewed !== true) {
-      throw createApiError(400, "IMPACT_CLAIMS_REVIEW_REQUIRED", "Machine-translated impact claims require human review before approval");
-    }
-    const result = await pool.query(
-      `UPDATE project_update_translations SET moderation_status = $1,
-         impact_claims_reviewed = $2, updated_at = NOW()
-       WHERE update_id = $3 AND language = $4 RETURNING *`,
-      [status, impactClaimsReviewed === true, req.params.updateId, language],
-    );
-    logAdminAction({
-      actor: req.admin.sub,
-      action: `project_update.translation.${status}`,
-      targetType: "project_update_translation",
-      targetId: result.rows[0].id,
-      metadata: { updateId: req.params.updateId, language, impactClaimsReviewed: impactClaimsReviewed === true },
-      ipAddress: req.ip,
-    });
-    res.json(result.rows[0]);
-  } catch (e) {
-    next(e);
-  }
-});
 
 // POST /api/updates/:updateId/like — toggle like
 // Rate-limited per donor to prevent like enumeration/spam

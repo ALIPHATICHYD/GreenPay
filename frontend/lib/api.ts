@@ -263,6 +263,7 @@ export async function fetchProjects(params?: {
   verified?: boolean;
   search?: string;
   limit?: number;
+  cursor?: string;
   lang?: "en" | "es" | "ar";
 }) {
   const { data } = await api.get<ClimateProject[]>(
@@ -406,9 +407,25 @@ export async function upsertProfile(
 }
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────
-export async function fetchLeaderboard(limit = 20, period = "all", offset = 0) {
-  const { data } = await api.get<LeaderboardEntry[]>("/api/leaderboard", { params: { limit, period, offset } });
+export async function fetchLeaderboard(limit = 20, period = "all", offset = 0, cursor?: string) {
+  const params: Record<string, unknown> = { limit, period };
+  if (cursor) params.cursor = cursor;
+  else if (offset) params.offset = offset;
+  const { data } = await api.get<LeaderboardEntry[]>("/api/leaderboard", { params });
   return data;
+}
+
+export async function fetchLeaderboardWithMeta(limit = 20, period = "all", cursor?: string, offset = 0) {
+  const params: Record<string, unknown> = { limit, period };
+  if (cursor) params.cursor = cursor;
+  else if (offset) params.offset = offset;
+  const response = await api.get<LeaderboardEntry[]>("/api/leaderboard", { params });
+  const meta = responseMeta(response);
+  return {
+    entries: response.data,
+    nextCursor: (meta?.nextCursor as string | null | undefined) ?? null,
+    hasMore: (meta?.hasMore as boolean | undefined) ?? false,
+  };
 }
 
 // ── Jobs (escrow) ───────────────────────────────────────────────────────────
