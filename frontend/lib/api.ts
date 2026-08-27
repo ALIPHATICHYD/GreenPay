@@ -8,6 +8,9 @@ import type {
   DonorProfile,
   FreelancerProfile,
   ProjectUpdate,
+  ProjectVerificationApplication,
+  ProjectVerificationStatus,
+  ProjectVerificationStatusResponse,
   LeaderboardEntry,
   EscrowJob,
   ProjectCampaign,
@@ -302,6 +305,95 @@ export async function fetchProject(id: string, lang?: "en" | "es" | "ar") {
   const { data } = await api.get<ClimateProject>(
     `/api/projects/${id}`,
     { params: lang && lang !== "en" ? { lang } : undefined },
+  );
+  return data;
+}
+
+export async function fetchProjectVerification(projectId: string) {
+  const { data } = await api.get<ProjectVerificationStatusResponse>(
+    `/api/projects/${projectId}/verification`,
+  );
+  return data;
+}
+
+export async function createProjectVerificationApplication(
+  projectId: string,
+  payload: {
+    submittedByWallet: string;
+    attestationSummary: string;
+  },
+) {
+  const { data } = await api.post<ProjectVerificationApplication>(
+    `/api/projects/${projectId}/verification/application`,
+    payload,
+  );
+  return data;
+}
+
+export async function requestProjectVerificationChallenge(
+  projectId: string,
+  payload: {
+    applicationId: string;
+    walletAddress: string;
+  },
+) {
+  const { data } = await api.post<{
+    applicationId: string;
+    challenge: string;
+    expiresAt: string;
+    signatureEncoding: string;
+  }>(
+    `/api/projects/${projectId}/verification/application/challenge`,
+    payload,
+  );
+  return data;
+}
+
+export async function submitProjectVerificationWalletProof(
+  projectId: string,
+  payload: {
+    applicationId: string;
+    signature: string;
+  },
+) {
+  const { data } = await api.post<ProjectVerificationApplication>(
+    `/api/projects/${projectId}/verification/application/wallet-proof`,
+    payload,
+  );
+  return data;
+}
+
+export async function updateProjectVerificationApplicationStatus(
+  projectId: string,
+  payload: {
+    applicationId: string;
+    status: Exclude<ProjectVerificationStatus, "wallet_proof_pending" | "approved">;
+    rationale?: string;
+    communityVoteOpensAt?: string;
+    communityVoteClosesAt?: string;
+    revocationReason?: string;
+  },
+) {
+  const { data } = await api.patch<ProjectVerificationApplication>(
+    `/api/projects/${projectId}/verification/application/status`,
+    payload,
+  );
+  return data;
+}
+
+export async function recordProjectVerificationDecision(
+  projectId: string,
+  payload: {
+    applicationId: string;
+    decisionTxHash: string;
+    decisionContractId: string;
+    expiresAt: string;
+    rationale?: string;
+  },
+) {
+  const { data } = await api.post<ProjectVerificationApplication>(
+    `/api/projects/${projectId}/verification/application/decision`,
+    payload,
   );
   return data;
 }
