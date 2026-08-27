@@ -138,6 +138,7 @@ app.use(`${API_V1}/admin`,          require("./routes/admin"));
 app.use(`${API_V1}/network`,        require("./routes/network"));
 app.use(`${API_V1}/meta`,           require("./routes/meta"));
 app.use(`${API_V1}/realtime`,       require("./routes/realtime"));
+app.use(`${API_V1}/onboarding`,     require("./routes/onboarding"));
 
 // Legacy unversioned routes → redirect to /api/v1 with a deprecation notice.
 app.use("/api", (req, res, next) => {
@@ -180,6 +181,13 @@ async function startServer() {
     logger.error({ msg: "indexer startup error", error: err.message })
   );
 
+  // Onboarding housekeeping: sponsorship offers that were never co-signed hold
+  // treasury capacity, and funnel sessions left open forever inflate the
+  // conversion rate by counting people who left as still deciding. Both sweeps
+  // are idempotent and cheap, so a missed tick costs nothing.
+  const { startOnboardingMaintenance } = require("./services/onboarding/maintenance");
+  startOnboardingMaintenance();
+
   server.listen(env.port, () => {
     logger.info({
       msg: "server started",
@@ -200,6 +208,7 @@ const gracefulShutdown = createShutdownHandler({
   shutdownEventSourcing,
   stopIndexer,
   shutdownRealtime: () => require("./realtime").shutdownRealtime(),
+  stopOnboardingMaintenance: () => require("./services/onboarding/maintenance").stopOnboardingMaintenance(),
   timeoutMs: SHUTDOWN_TIMEOUT_MS,
 });
 

@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import DonateForm from "@/components/DonateForm";
+import { loadStarterAccount } from "@/lib/starterAccount";
 import DonationFeed from "@/components/DonationFeed";
 import ToastNotification, { type ToastItem } from "@/components/ToastNotification";
 import WalletConnect from "@/components/WalletConnect";
@@ -48,6 +49,22 @@ export default function ProjectDetail({
   const [shareState, setShareState] = useState<'idle' | 'copied'>('idle');
   const [shareCount, setShareCount] = useState<number>(0);
   const [calcAmount, setCalcAmount] = useState<string>("50");
+
+  /**
+   * Which key signs this donation.
+   *
+   * Derived from whether the connected address *is* the browser-held starter
+   * account rather than from a flag set during onboarding, so it stays correct
+   * across a page reload, a second visit, or a donor who has since connected a
+   * real wallet — in all of which a remembered flag would be stale and would
+   * send the donation to the wrong signer.
+   */
+  const [donationSigner, setDonationSigner] = useState<"wallet" | "starter">("wallet");
+
+  useEffect(() => {
+    const starter = loadStarterAccount();
+    setDonationSigner(starter && starter.publicKey === publicKey ? "starter" : "wallet");
+  }, [publicKey]);
   const [subState, setSubState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [subError, setSubError] = useState<string | null>(null);
   const [subscriberCount, setSubscriberCount] = useState<number | null>(null);
@@ -1097,7 +1114,11 @@ export default function ProjectDetail({
                 Donate to {project.name}
               </a>
             ) : (
-              <WalletConnect onConnect={onConnect} />
+              <WalletConnect
+                onConnect={onConnect}
+                allowGuidedOnboarding
+                projectId={project.id}
+              />
             )}
           </div>
 
@@ -1153,6 +1174,7 @@ export default function ProjectDetail({
             <DonateForm
               project={project}
               publicKey={publicKey}
+              signer={donationSigner}
               initialAmount={prefillAmount}
               initialMessage={prefillReplyMemo}
               onSuccess={() => {
@@ -1181,7 +1203,11 @@ export default function ProjectDetail({
               <p className="text-center text-[#4b654b] text-sm mb-4 font-body">
                 Connect your wallet to donate
               </p>
-              <WalletConnect onConnect={onConnect} />
+              <WalletConnect
+                onConnect={onConnect}
+                allowGuidedOnboarding
+                projectId={project.id}
+              />
             </div>
           )}
 
