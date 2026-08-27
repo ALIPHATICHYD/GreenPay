@@ -621,7 +621,8 @@ export async function fetchSubscriberCount(projectId: string) {
 export interface GlobalStats {
   totalDonations: number;
   totalXLMRaised: string;
-  totalCO2OffsetKg: number;
+  publishedImpactClaims: number;
+  verifiedImpactClaims: number;
 }
 
 export async function fetchGlobalStats(): Promise<GlobalStats> {
@@ -752,36 +753,150 @@ export async function fetchCategoryStats(): Promise<CategoryStats[]> {
 }
 
 // ── Impact Aggregation ───────────────────────────────────────────────────────
+export type ImpactClaimType = "avoided_emissions" | "sequestration" | "offset";
+export type ImpactClaimStatus = "verified" | "operator_stated" | "unverified" | "revoked" | "expired";
+
+export interface ImpactAttestation {
+  id: string;
+  verifierName: string;
+  verifierAddress: string;
+  attestationHash: string;
+  evidenceDigest: string;
+  status: "pending_anchor" | "verified" | "revoked" | "expired";
+  contractId: string | null;
+  transactionHash: string | null;
+  ledger: number | null;
+  issuedAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  revocationReason: string | null;
+  revocationTransactionHash: string | null;
+}
+
+export interface ImpactClaim {
+  id: string;
+  projectId: string;
+  projectName: string | null;
+  category: string | null;
+  claimType: ImpactClaimType;
+  quantity: {
+    value: string;
+    lowerBound: string;
+    upperBound: string;
+    unit: string;
+  };
+  uncertainty: {
+    lowerBound: string;
+    upperBound: string;
+    confidencePercent: number | null;
+  };
+  methodology: {
+    id: string;
+    code: string;
+    name: string;
+    version: string;
+    description: string;
+    accountingApproach: string;
+    limitations: string;
+    comparisonScope: string;
+    registryUrl: string | null;
+  };
+  measurementPeriod: { start: string; end: string };
+  vintage: { start: string | null; end: string | null } | null;
+  baseline: string;
+  evidence: Array<{
+    id: string;
+    type: string;
+    sourceUri: string | null;
+    contentHash: string;
+    description: string;
+    measurementDate: string | null;
+    submittedBy: string;
+    createdAt: string;
+  }>;
+  provenance: {
+    status: ImpactClaimStatus;
+    label: string;
+    assertedBy: string;
+    assertingPartyType: string;
+    assertedAt: string;
+    expiresAt: string | null;
+    revokedAt: string | null;
+    revocationReason: string | null;
+    migratedFromLegacy: boolean;
+    migrationNote: string | null;
+    attestation: ImpactAttestation | null;
+  };
+}
+
+export interface ImpactClaimSummary {
+  total: number;
+  verified: number;
+  operatorStated: number;
+  unverified: number;
+  revoked: number;
+  expired: number;
+}
+
+export interface ComparableImpactGroup {
+  claimType: ImpactClaimType;
+  unit: string;
+  methodology: ImpactClaim["methodology"];
+  claims: ImpactClaim[];
+  claimCount: number;
+  verifiedClaimCount: number;
+  range: { lowerBound: string; upperBound: string; unit: string };
+}
+
 export interface ImpactProjectStats {
   totalDonationsXLM: string;
   donorCount: number;
-  co2OffsetKg: number;
-  treesEquivalent: number;
-  uniqueCountries: number;
+  claims: ImpactClaim[];
+  claimSummary: ImpactClaimSummary;
+  comparableImpactGroups: ComparableImpactGroup[];
 }
 
 export interface ImpactCategoryBreakdownItem {
   category: string;
   totalDonationsXLM: string;
   donorCount: number;
-  co2OffsetKg: number;
+  claimCount: number;
+  verifiedClaimCount: number;
 }
 
-export interface ImpactGlobalStats extends ImpactProjectStats {
+export interface ImpactGlobalStats {
+  totalDonationsXLM: string;
+  donorCount: number;
+  claimSummary: ImpactClaimSummary;
+  comparableImpactGroups: ComparableImpactGroup[];
   breakdownByCategory: ImpactCategoryBreakdownItem[];
 }
 
 export interface ImpactDonorStats {
   totalDonatedXLM: string;
-  co2OffsetKg: number;
   projectsSupported: number;
   topCategory: string | null;
+  supportedProjectClaims: ImpactClaim[];
+  claimSummary: ImpactClaimSummary;
+  attributionNotice: string;
 }
 
 export async function fetchImpactProject(projectId: string): Promise<ImpactProjectStats> {
   const { data } = await api.get<ImpactProjectStats>(
     `/api/impact/project/${projectId}`,
   );
+  // A partial deployment, stale cache, or permissive test/mock endpoint may
+  // return a successful envelope without the claim model.  Treat that as an
+  // unavailable evidence feed instead of letting project pages dereference an
+  // untrusted shape and crash.
+  if (
+    !data ||
+    !Array.isArray(data.claims) ||
+    !data.claimSummary ||
+    typeof data.claimSummary.total !== "number"
+  ) {
+    throw new Error("Impact claim response is missing required provenance fields");
+  }
   return data;
 }
 

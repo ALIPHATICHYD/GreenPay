@@ -140,6 +140,175 @@ CREATE TABLE IF NOT EXISTS project_verification_events (
 CREATE INDEX IF NOT EXISTS idx_project_verification_events_application
   ON project_verification_events (application_id, created_at ASC);
 
+-- ============================================================
+-- Evidence-first environmental impact accounting
+-- ============================================================
+-- A project's legacy co2_offset_kg column is retained only so old clients and
+-- rollback builds can still read the original record.  Donor-facing impact
+-- APIs read exclusively from the normalized records below.  In particular,
+-- donations are never joined to a project-level quantity to manufacture a
+-- donor-level outcome.
+
+CREATE TABLE IF NOT EXISTS impact_methodologies (
+  id UUID PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  version TEXT NOT NULL,
+  claim_type TEXT NOT NULL
+    CHECK (claim_type IN ('avoided_emissions', 'sequestration', 'offset')),
+  unit TEXT NOT NULL,
+  description TEXT NOT NULL,
+  accounting_approach TEXT NOT NULL,
+  limitations TEXT NOT NULL,
+  comparison_scope TEXT NOT NULL,
+  registry_url TEXT,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- This methodology does not endorse or verify the historical values.  It is a
+-- durable migration label that prevents an unsourced scalar from silently
+-- acquiring verified status after the schema upgrade.
+INSERT INTO impact_methodologies (
+  id, code, name, version, claim_type, unit, description,
+  accounting_approach, limitations, comparison_scope, active
+) VALUES (
+  '00000000-0000-4000-8000-000000000001',
+  'legacy-operator-stated-offset',
+  'Legacy operator-stated offset',
+  '1',
+  'offset',
+  'kg_co2e',
+  'Migration-only label for a project operator figure that predates evidence-first accounting.',
+  'No calculation method was recorded. The value is preserved as an operator assertion, not recomputed from donations.',
+  'No source, baseline, measurement period, verifier, or uncertainty was supplied with the original value.',
+  'legacy-unsourced-values-only',
+  FALSE
+) ON CONFLICT (code) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS impact_claims (
+  id UUID PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  methodology_id UUID NOT NULL REFERENCES impact_methodologies(id),
+  claim_type TEXT NOT NULL
+    CHECK (claim_type IN ('avoided_emissions', 'sequestration', 'offset')),
+  quantity NUMERIC(30, 6) NOT NULL CHECK (quantity >= 0),
+  unit TEXT NOT NULL,
+  uncertainty_low NUMERIC(30, 6) NOT NULL CHECK (uncertainty_low >= 0),
+  uncertainty_high NUMERIC(30, 6) NOT NULL,
+  confidence_percent NUMERIC(5, 2)
+    CHECK (confidence_percent IS NULL OR (confidence_percent > 0 AND confidence_percent <= 100)),
+  measurement_period_start DATE NOT NULL,
+  measurement_period_end DATE NOT NULL,
+  vintage_start DATE,
+  vintage_end DATE,
+  baseline_description TEXT NOT NULL,
+  asserting_party TEXT NOT NULL,
+  asserting_party_type TEXT NOT NULL DEFAULT 'project_operator'
+    CHECK (asserting_party_type IN ('project_operator', 'data_provider', 'platform_migration')),
+  status TEXT NOT NULL DEFAULT 'operator_stated'
+    CHECK (status IN ('unverified', 'operator_stated', 'verified', 'revoked', 'expired')),
+  asserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ,
+  supersedes_claim_id UUID REFERENCES impact_claims(id),
+  revoked_at TIMESTAMPTZ,
+  revocation_reason TEXT,
+  migrated_from_legacy BOOLEAN NOT NULL DEFAULT FALSE,
+  migration_note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (uncertainty_low <= quantity AND quantity <= uncertainty_high),
+  CHECK (measurement_period_start <= measurement_period_end),
+  CHECK (vintage_start IS NULL OR vintage_end IS NULL OR vintage_start <= vintage_end)
+);
+
+CREATE INDEX IF NOT EXISTS idx_impact_claims_project
+  ON impact_claims (project_id, asserted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_impact_claims_comparison
+  ON impact_claims (claim_type, methodology_id, unit, status);
+
+CREATE TABLE IF NOT EXISTS impact_evidence (
+  id UUID PRIMARY KEY,
+  claim_id UUID NOT NULL REFERENCES impact_claims(id) ON DELETE CASCADE,
+  evidence_type TEXT NOT NULL
+    CHECK (evidence_type IN ('measurement', 'baseline', 'calculation', 'monitoring_report', 'other')),
+  source_uri TEXT,
+  content_hash TEXT NOT NULL CHECK (content_hash ~ '^[0-9a-f]{64}$'),
+  description TEXT NOT NULL,
+  measurement_date DATE,
+  submitted_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_impact_evidence_claim
+  ON impact_evidence (claim_id, created_at ASC);
+
+-- An assertion and its independent attestation are deliberately separate.
+-- canonical_payload is the exact JSON document whose SHA-256 is anchored by
+-- the Soroban contract.  Revocation never deletes the row or the old anchor.
+CREATE TABLE IF NOT EXISTS impact_attestations (
+  id UUID PRIMARY KEY,
+  claim_id UUID NOT NULL REFERENCES impact_claims(id) ON DELETE CASCADE,
+  verifier_name TEXT NOT NULL,
+  verifier_address TEXT NOT NULL,
+  canonical_payload JSONB NOT NULL,
+  attestation_hash TEXT NOT NULL CHECK (attestation_hash ~ '^[0-9a-f]{64}$'),
+  evidence_digest TEXT NOT NULL CHECK (evidence_digest ~ '^[0-9a-f]{64}$'),
+  status TEXT NOT NULL DEFAULT 'verified'
+    CHECK (status IN ('pending_anchor', 'verified', 'revoked', 'expired')),
+  contract_id TEXT,
+  anchor_transaction_hash TEXT,
+  anchor_ledger INTEGER,
+  issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revocation_reason TEXT,
+  revocation_transaction_hash TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (claim_id, verifier_address, attestation_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_impact_attestations_claim
+  ON impact_attestations (claim_id, issued_at DESC);
+CREATE INDEX IF NOT EXISTS idx_impact_attestations_hash
+  ON impact_attestations (attestation_hash);
+
+-- Existing non-zero figures are preserved, visibly, as operator-stated data.
+-- A deliberately broad 0..2x uncertainty range communicates that the old
+-- scalar arrived without recorded uncertainty; it does not manufacture
+-- precision.  ADR-006 records why these rows are neither hidden nor verified.
+INSERT INTO impact_claims (
+  id, project_id, methodology_id, claim_type, quantity, unit,
+  uncertainty_low, uncertainty_high, confidence_percent,
+  measurement_period_start, measurement_period_end,
+  baseline_description, asserting_party, asserting_party_type, status,
+  asserted_at, migrated_from_legacy, migration_note
+)
+SELECT
+  md5('legacy-impact-claim:' || p.id::text)::uuid,
+  p.id,
+  '00000000-0000-4000-8000-000000000001',
+  'offset',
+  p.co2_offset_kg,
+  'kg_co2e',
+  0,
+  p.co2_offset_kg * 2,
+  NULL,
+  p.created_at::date,
+  GREATEST(p.created_at::date, p.updated_at::date),
+  'No baseline was recorded for this legacy operator assertion.',
+  'Project operator (legacy import)',
+  'platform_migration',
+  'operator_stated',
+  p.updated_at,
+  TRUE,
+  'Imported from projects.co2_offset_kg; unsourced, unverified, and never allocated to donors.'
+FROM projects p
+WHERE p.co2_offset_kg > 0
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS donations (
   id UUID PRIMARY KEY,
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -504,3 +673,132 @@ CREATE INDEX IF NOT EXISTS idx_projects_location_trgm ON projects USING GIN (loc
 CREATE INDEX IF NOT EXISTS idx_projects_category ON projects (category);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects (status);
 CREATE INDEX IF NOT EXISTS idx_projects_verified ON projects (verified);
+
+-- ── Graduated donor onboarding ──────────────────────────────────────────────
+-- Tables behind the first-donation paths for donors who arrive without a
+-- wallet, without a funded account, or without both. See
+-- docs/adr/ADR-005-graduated-non-custodial-donor-onboarding.md.
+--
+-- Nothing here stores a private key, a seed phrase, or any material that could
+-- be used to sign for a donor. The platform's non-custodial guarantee is a
+-- property of the schema, not only of the code: there is no column to put a
+-- key in.
+
+-- sponsored_accounts: one row per sponsorship request, from the moment
+-- treasury capacity is reserved to the moment the reserve comes back.
+--
+-- reserved_stroops holds capacity that is committed but not yet locked on
+-- chain; locked_stroops holds reserve the ledger has actually taken. Keeping
+-- them apart is what lets an abandoned or failed request give its capacity back
+-- without ever having claimed to hold real reserve.
+CREATE TABLE IF NOT EXISTS sponsored_accounts (
+  id UUID PRIMARY KEY,
+  account_public_key TEXT NOT NULL,
+  sponsor_public_key TEXT NOT NULL,
+  session_id UUID,
+  -- Hashed, never the address itself: enough to rate-limit, not enough to
+  -- identify or to be worth stealing.
+  ip_hash TEXT,
+  user_agent_hash TEXT,
+  state TEXT NOT NULL DEFAULT 'requested'
+    CHECK (state IN ('requested', 'awaiting_signature', 'submitted', 'active', 'failed', 'abandoned', 'reclaimed')),
+  reserved_stroops NUMERIC(20, 0) NOT NULL DEFAULT 0,
+  locked_stroops NUMERIC(20, 0) NOT NULL DEFAULT 0,
+  network TEXT NOT NULL DEFAULT 'testnet',
+  unsigned_xdr TEXT,
+  transaction_hash TEXT,
+  reclaim_transaction_hash TEXT,
+  reclaim_failures INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT,
+  upgraded_to TEXT,
+  expires_at TIMESTAMPTZ,
+  activated_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One live sponsorship per address. A partial index rather than a plain unique
+-- constraint, because the same address may legitimately appear again after a
+-- previous attempt failed or was abandoned.
+CREATE UNIQUE INDEX IF NOT EXISTS sponsored_accounts_live_key
+  ON sponsored_accounts (account_public_key)
+  WHERE state IN ('requested', 'awaiting_signature', 'submitted', 'active');
+CREATE INDEX IF NOT EXISTS idx_sponsored_accounts_state ON sponsored_accounts (state);
+CREATE INDEX IF NOT EXISTS idx_sponsored_accounts_ip_hash ON sponsored_accounts (ip_hash, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sponsored_accounts_session ON sponsored_accounts (session_id);
+CREATE INDEX IF NOT EXISTS idx_sponsored_accounts_created ON sponsored_accounts (created_at DESC);
+
+-- onboarding_sessions: one row per donor attempt at a first donation.
+-- Holds no IP, no user agent and no cookie — the id is a random value the
+-- browser generates. Enough to measure conversion, not enough to profile.
+CREATE TABLE IF NOT EXISTS onboarding_sessions (
+  id UUID PRIMARY KEY,
+  path TEXT CHECK (path IN ('connected_wallet', 'sponsored_account', 'onramp', 'claimable_balance')),
+  project_id UUID,
+  referrer_kind TEXT NOT NULL DEFAULT 'direct',
+  furthest_stage TEXT,
+  furthest_stage_index INTEGER NOT NULL DEFAULT -1,
+  outcome TEXT NOT NULL DEFAULT 'in_progress'
+    CHECK (outcome IN ('completed', 'abandoned', 'failed', 'in_progress')),
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_outcome ON onboarding_sessions (outcome, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_path ON onboarding_sessions (path, created_at DESC);
+
+-- onboarding_funnel_events: one row per (session, stage, path).
+--
+-- path_key exists only so the uniqueness constraint works: a NULL path would
+-- make every re-report a fresh row under SQL's NULL comparison rules, which is
+-- exactly the double-counting the idempotency is there to prevent.
+CREATE TABLE IF NOT EXISTS onboarding_funnel_events (
+  id UUID PRIMARY KEY,
+  session_id UUID NOT NULL,
+  stage TEXT NOT NULL,
+  stage_index INTEGER NOT NULL,
+  path TEXT,
+  path_key TEXT GENERATED ALWAYS AS (COALESCE(path, '')) STORED,
+  project_id UUID,
+  detail JSONB,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (session_id, stage, path_key)
+);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_stage ON onboarding_funnel_events (stage_index, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_occurred ON onboarding_funnel_events (occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_session ON onboarding_funnel_events (session_id);
+
+-- account_upgrades: a donor moving from a browser-held starter account to a
+-- wallet they properly control. Both addresses sign the same single-use nonce.
+CREATE TABLE IF NOT EXISTS account_upgrades (
+  id UUID PRIMARY KEY,
+  from_address TEXT NOT NULL,
+  to_address TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'challenged'
+    CHECK (state IN ('challenged', 'completed', 'expired', 'rejected')),
+  migrated_donations INTEGER NOT NULL DEFAULT 0,
+  migrated_amount NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_account_upgrades_from ON account_upgrades (from_address);
+CREATE INDEX IF NOT EXISTS idx_account_upgrades_state ON account_upgrades (state, created_at DESC);
+
+-- donor_address_links: the durable result of an upgrade.
+--
+-- Donations are never rewritten to a new donor_address — the ledger says which
+-- address made them and the database must not contradict it. Instead every
+-- read path that means "this donor's history" resolves through this table.
+-- linked_address is unique so an address can belong to exactly one donor.
+CREATE TABLE IF NOT EXISTS donor_address_links (
+  id UUID PRIMARY KEY,
+  canonical_address TEXT NOT NULL,
+  linked_address TEXT NOT NULL UNIQUE,
+  upgrade_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_donor_links_canonical ON donor_address_links (canonical_address);

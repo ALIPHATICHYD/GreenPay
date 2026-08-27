@@ -30,6 +30,15 @@ tags:
   - name: Impact
   - name: Ratings
   - name: Admin
+  - name: Onboarding
+    description: >-
+      Graduated first-donation paths for donors who arrive without a wallet,
+      without a funded account, or without both. Nothing here is custodial: the
+      donor's key is generated in their browser or on their device and never
+      transmitted, and the sponsored account-creation transaction is
+      unsubmittable until the donor signs it themselves. Donors who already
+      have a funded wallet never touch these endpoints — that flow is
+      unchanged. See docs/adr/ADR-005-graduated-non-custodial-donor-onboarding.md.
   - name: Realtime
     description: >-
       Live donation feed delivery. Broadcasts fan out across every backend
@@ -109,6 +118,8 @@ components:
           type: integer
         co2OffsetKg:
           type: number
+          deprecated: true
+          description: Legacy operator input. Donor-facing environmental outcomes use ImpactClaim records and are never derived from this field.
         verified:
           type: boolean
         onChainVerified:
@@ -143,6 +154,67 @@ components:
           type: boolean
         machineTranslated:
           type: boolean
+
+    ImpactClaim:
+      type: object
+      required: [id, projectId, claimType, quantity, uncertainty, methodology, measurementPeriod, baseline, evidence, provenance]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        projectName:
+          type: string
+          nullable: true
+        claimType:
+          type: string
+          enum: [avoided_emissions, sequestration, offset]
+        quantity:
+          type: object
+          properties:
+            value: { type: string }
+            lowerBound: { type: string }
+            upperBound: { type: string }
+            unit: { type: string }
+        uncertainty:
+          type: object
+          properties:
+            lowerBound: { type: string }
+            upperBound: { type: string }
+            confidencePercent: { type: number, nullable: true }
+        methodology:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+            version: { type: string }
+            limitations: { type: string }
+            comparisonScope: { type: string }
+        measurementPeriod:
+          type: object
+          properties:
+            start: { type: string, format: date }
+            end: { type: string, format: date }
+        vintage:
+          type: object
+          nullable: true
+        baseline:
+          type: string
+        evidence:
+          type: array
+          items: { type: object }
+        provenance:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [verified, operator_stated, unverified, revoked, expired]
+            label: { type: string }
+            assertedBy: { type: string }
+            attestation: { type: object, nullable: true }
 
     Campaign:
       type: object
@@ -2111,7 +2183,7 @@ paths:
   /api/impact/project/{id}:
     get:
       tags: [Impact]
-      summary: Impact metrics for a project
+      summary: Donation facts and evidence-backed claims for a project
       operationId: getProjectImpact
       parameters:
         - $ref: '#/components/parameters/projectId'
@@ -2132,12 +2204,15 @@ paths:
                             type: string
                           donorCount:
                             type: integer
-                          co2OffsetKg:
-                            type: integer
-                          treesEquivalent:
-                            type: number
-                          uniqueCountries:
-                            type: integer
+                          claims:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ImpactClaim'
+                          claimSummary:
+                            type: object
+                          comparableImpactGroups:
+                            type: array
+                            items: { type: object }
         '400':
           description: Invalid project id
           content:
@@ -2154,7 +2229,7 @@ paths:
   /api/impact/global:
     get:
       tags: [Impact]
-      summary: Global impact metrics
+      summary: Global donation facts and comparable claim groups
       operationId: getGlobalImpact
       responses:
         '200':
@@ -2173,12 +2248,11 @@ paths:
                             type: string
                           donorCount:
                             type: integer
-                          co2OffsetKg:
-                            type: integer
-                          treesEquivalent:
-                            type: number
-                          uniqueCountries:
-                            type: integer
+                          claimSummary:
+                            type: object
+                          comparableImpactGroups:
+                            type: array
+                            items: { type: object }
                           breakdownByCategory:
                             type: array
                             items:
@@ -2190,13 +2264,15 @@ paths:
                                   type: string
                                 donorCount:
                                   type: integer
-                                co2OffsetKg:
+                                claimCount:
+                                  type: integer
+                                verifiedClaimCount:
                                   type: integer
 
   /api/impact/donor/{publicKey}:
     get:
       tags: [Impact]
-      summary: Impact metrics for a donor
+      summary: Donation facts plus unallocated claims from supported projects
       operationId: getDonorImpact
       parameters:
         - $ref: '#/components/parameters/publicKey'
@@ -2215,13 +2291,19 @@ paths:
                         properties:
                           totalDonatedXLM:
                             type: string
-                          co2OffsetKg:
-                            type: integer
                           projectsSupported:
                             type: integer
                           topCategory:
                             type: string
                             nullable: true
+                          supportedProjectClaims:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ImpactClaim'
+                          claimSummary:
+                            type: object
+                          attributionNotice:
+                            type: string
         '400':
           description: Invalid public key
           content:
@@ -2455,3 +2537,430 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/RealtimeStatus'
+
+  /api/v1/onboarding/paths:
+    get:
+      tags: [Onboarding]
+      summary: First-donation paths this deployment can offer
+      description: >-
+        Returns each path with its availability, its cost, and the trade-offs
+        attached to it. The disclosures ship *with* the options rather than
+        being fetched separately, so a client cannot render the choice without
+        the cost of it. A path this deployment cannot offer is returned with
+        `available: false` and a reason, so the UI can say so instead of
+        dead-ending.
+      responses:
+        '200':
+          description: Available paths and their trade-offs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          guarantee:
+                            type: string
+                            description: The non-custodial guarantee, restated at the top level.
+                          paths:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  enum: [connected_wallet, sponsored_account, onramp]
+                                title: { type: string }
+                                available: { type: boolean }
+                                unavailableReason:
+                                  type: string
+                                  nullable: true
+                                unchanged:
+                                  type: boolean
+                                  description: >-
+                                    True for the pre-existing connected-wallet flow. Stated
+                                    explicitly so nobody has to infer from silence that it
+                                    survived this change.
+                                tradeoffs:
+                                  type: object
+                                  properties:
+                                    keep: { type: array, items: { type: string } }
+                                    giveUp: { type: array, items: { type: string } }
+                                    mitigation: { type: array, items: { type: string } }
+
+  /api/v1/onboarding/sessions:
+    post:
+      tags: [Onboarding]
+      summary: Start a funnel session
+      description: >-
+        Returns an opaque session id carrying no personal data. Referrers are
+        bucketed server-side, never stored verbatim.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path:
+                  type: string
+                  enum: [connected_wallet, sponsored_account, onramp, claimable_balance]
+                  nullable: true
+                projectId: { type: string, format: uuid, nullable: true }
+                referrer: { type: string, nullable: true }
+      responses:
+        '201':
+          description: Session started
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          sessionId: { type: string, format: uuid }
+
+  /api/v1/onboarding/events:
+    post:
+      tags: [Onboarding]
+      summary: Record a funnel stage
+      description: >-
+        Idempotent per (session, stage, path): a component that re-renders must
+        not inflate its own conversion rate. An unrecognised stage is accepted
+        and ignored rather than rejected — telemetry must never be able to
+        break a donation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, stage]
+              properties:
+                sessionId: { type: string, format: uuid }
+                stage:
+                  type: string
+                  enum:
+                    - donate_intent
+                    - path_offered
+                    - path_selected
+                    - tradeoff_acknowledged
+                    - account_ready
+                    - funds_available
+                    - donation_submitted
+                    - donation_confirmed
+                    - donation_recorded
+                path:
+                  type: string
+                  nullable: true
+                projectId: { type: string, format: uuid, nullable: true }
+                detail:
+                  type: object
+                  nullable: true
+                  description: Bounded key/value pairs. Not a free-form blob.
+      responses:
+        '202':
+          description: Recorded, or accepted and ignored
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/onboarding/sessions/complete:
+    post:
+      tags: [Onboarding]
+      summary: Close a funnel session with a terminal outcome
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, outcome]
+              properties:
+                sessionId: { type: string, format: uuid }
+                outcome:
+                  type: string
+                  enum: [completed, abandoned, failed, in_progress]
+                path: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Session closed
+
+  /api/v1/onboarding/sponsorship/quote:
+    post:
+      tags: [Onboarding]
+      summary: Cost and eligibility for a sponsored account, without committing
+      description: >-
+        Costed but non-committal: a donor sees exactly what the platform locks
+        and what they are accepting before any state exists anywhere.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [publicKey]
+              properties:
+                publicKey: { type: string }
+                sessionId: { type: string, format: uuid, nullable: true }
+                trustline: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Quote and eligibility decision
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/onboarding/sponsorship:
+    post:
+      tags: [Onboarding]
+      summary: Request sponsored account creation
+      description: >-
+        Returns a transaction the sponsor has already signed and that the donor
+        must co-sign. Its closing `endSponsoringFutureReserves` operation is
+        sourced by the donor, so the platform cannot submit it alone — this is
+        the non-custodial guarantee made structural rather than promised.
+
+
+        `acknowledgedDisclosure` must be `true`. Enforced at the API and not
+        only in the UI, so the guarantee survives a client that skips the
+        screen.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [publicKey, sessionId, acknowledgedDisclosure]
+              properties:
+                publicKey: { type: string }
+                sessionId: { type: string, format: uuid }
+                trustline: { type: boolean, default: false }
+                acknowledgedDisclosure:
+                  type: boolean
+                  enum: [true]
+      responses:
+        '201':
+          description: A sponsor-signed transaction awaiting the donor's signature
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: string, format: uuid }
+                          state: { type: string }
+                          xdr: { type: string }
+                          networkPassphrase: { type: string }
+                          sponsorPublicKey: { type: string }
+                          expiresAt: { type: string, format: date-time }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          description: An abuse limit or the treasury floor refused this request
+        '503':
+          description: Sponsorship is not configured on this deployment
+
+  /api/v1/onboarding/sponsorship/{id}/submit:
+    post:
+      tags: [Onboarding]
+      summary: Submit the donor-co-signed creation transaction
+      description: >-
+        The submitted envelope is checked against the one that was offered
+        rather than trusted, so the sponsor's signature can never be applied to
+        operations the sponsor did not agree to. Idempotent: a retry after a
+        dropped response does not lock reserve twice.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signedXdr]
+              properties:
+                signedXdr: { type: string }
+      responses:
+        '200':
+          description: Account created, or already active
+        '400':
+          description: The signed transaction did not match the offer
+        '409':
+          description: The request expired or is already closed
+        '502':
+          description: The network refused or failed the transaction; no reserve was locked
+
+  /api/v1/onboarding/sponsorship/{id}/abandon:
+    post:
+      tags: [Onboarding]
+      summary: Release a sponsorship the donor walked away from
+      description: >-
+        Returns the reserved treasury capacity immediately and leaves nothing
+        behind but an audit row. Succeeds quietly for an unknown id — the
+        caller is a browser that may be retrying a beacon. The server-side
+        sweeper is what actually guarantees release; this makes it immediate.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Released, or nothing to release
+
+  /api/v1/onboarding/sponsorship/ledger:
+    get:
+      tags: [Onboarding]
+      summary: Reserve position and monitoring signals
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Locked reserve, committed capacity, treasury capacity and active signals
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/onboarding/sponsorship/{id}/reclaim:
+    post:
+      tags: [Onboarding]
+      summary: Reclaim one sponsorship's locked reserve
+      description: >-
+        Revocation only succeeds if the account can then meet its own minimum
+        balance — a protocol constraint. An account that cannot is reported
+        with the exact shortfall rather than retried into a guaranteed failure.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Reclaim outcome, with a reason when it could not proceed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/onboarding/funnel/conversion:
+    get:
+      tags: [Onboarding]
+      summary: Stage-by-stage conversion, optionally against a baseline
+      description: >-
+        Admin-only: publishing exactly where donors give up also publishes
+        where to aim an attack. Supplying `baselineSince` and `baselineUntil`
+        returns a comparison reporting both percentage-point and relative
+        change, plus `sufficientSample`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+        - in: query
+          name: until
+          schema: { type: string, format: date-time }
+        - in: query
+          name: path
+          schema: { type: string }
+        - in: query
+          name: baselineSince
+          schema: { type: string, format: date-time }
+        - in: query
+          name: baselineUntil
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Conversion report, or a baseline comparison
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/onboarding/onramp/providers:
+    get:
+      tags: [Onboarding]
+      summary: Fiat on-ramp providers and their compliance split
+      description: >-
+        GreenPay never takes fiat. Each provider entry carries the donor-facing
+        handoff disclosure and the full obligation matrix — which duties sit
+        with the provider, which with the platform, which are shared. An empty
+        list with `configured: false` is a configuration answer, not an error.
+      responses:
+        '200':
+          description: Available providers, their disclosures and obligation matrices
+
+  /api/v1/onboarding/upgrade/disclosures:
+    get:
+      tags: [Onboarding]
+      summary: What a starter account costs, and what a migration does not move
+      responses:
+        '200':
+          description: Starter-account trade-offs and migration limitations
+
+  /api/v1/onboarding/upgrade/challenge:
+    post:
+      tags: [Onboarding]
+      summary: Begin moving donation history to a full wallet
+      description: >-
+        Issues a single-use nonce both addresses must prove control of. Both
+        halves are required: with only the destination proving control anyone
+        could adopt a stranger's history, and with only the source anyone could
+        dump history onto an address they do not own.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fromAddress, toAddress]
+              properties:
+                fromAddress: { type: string }
+                toAddress: { type: string }
+      responses:
+        '201':
+          description: A single-use challenge
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/onboarding/upgrade/complete:
+    post:
+      tags: [Onboarding]
+      summary: Complete the migration
+      description: >-
+        `fromSignature` is a raw ed25519 signature over the challenge text by
+        the starter key. `toChallengeXdr` is the destination wallet's signed,
+        unsubmittable SEP-10-style challenge envelope — wallet extensions will
+        not sign arbitrary bytes, because a wallet that did could be tricked
+        into signing a payment dressed up as a verification message.
+
+
+        Donations are never rewritten to the new address: the ledger records
+        which address made them and the database must not contradict it. The
+        link is recorded instead, and read paths resolve through it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upgradeId, fromSignature, toChallengeXdr]
+              properties:
+                upgradeId: { type: string, format: uuid }
+                fromSignature: { type: string }
+                toChallengeXdr: { type: string }
+      responses:
+        '200':
+          description: Migration completed, with the number of donations carried across
+        '403':
+          description: One of the two signatures did not verify
+        '409':
+          description: The challenge expired or is already closed
