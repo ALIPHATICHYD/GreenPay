@@ -24,6 +24,14 @@ import {
   isValidStellarSecret,
 } from '../utils/starterAccount';
 
+/**
+ * Every test here does real ed25519 work through @stellar/stellar-sdk, and the
+ * first one also pays the cost of loading it through the jest-expo transform.
+ * Jest's 5s default leaves no headroom for that on a contended CI runner — see
+ * the note in FirstDonationPaths.test.tsx for the full reasoning.
+ */
+jest.setTimeout(30000);
+
 beforeEach(async () => {
   jest.clearAllMocks();
   await forgetStarterAccount();

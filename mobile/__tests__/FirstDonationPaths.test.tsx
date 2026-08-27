@@ -25,6 +25,23 @@ jest.mock('../utils/funnel', () => ({
   getSessionId: jest.fn().mockResolvedValue('44444444-4444-4444-8444-444444444444'),
 }));
 
+/**
+ * Jest's 5s default is not enough for the *first* test in this suite.
+ *
+ * It is not the assertion that is slow — locally the first test takes ~340ms
+ * and the rest ~90ms. The difference is the one-off cost of loading the React
+ * Native module graph plus @stellar/stellar-sdk through the jest-expo
+ * transform, which the first test to run happens to pay for. On a two-core CI
+ * runner with several suites executing in parallel, that one-off cost is
+ * amplified past 5s and the suite fails for a reason that has nothing to do
+ * with the code under test.
+ *
+ * Same reasoning as QRScannerScreen.test.tsx, which raises it for the same
+ * reason. Kept generous enough never to flake, and still short enough that a
+ * genuine hang fails the build rather than hanging it.
+ */
+jest.setTimeout(30000);
+
 const fetchOnboardingPaths = onboarding.fetchOnboardingPaths as jest.Mock;
 const assessDonorSituation = onboarding.assessDonorSituation as jest.Mock;
 const requestSponsorship = onboarding.requestSponsorship as jest.Mock;
@@ -60,23 +77,39 @@ const PATHS = {
   ],
 };
 
+/**
+ * The sponsorship offer fixture, built once.
+ *
+ * `beforeEach` needs it for all 23 tests and the value is identical every
+ * time, so the ed25519 keygen and transaction build happen on first use rather
+ * than 23 times over. `expiresAt` is the one field recomputed per call, since a
+ * fixed timestamp would drift into the past during a slow run and trip the
+ * expiry branch.
+ */
+let cachedOffer: { xdr: string; sponsorPublicKey: string } | null = null;
+
 function offer() {
-  const sponsor = Keypair.random();
-  const xdr = new TransactionBuilder(new Account(sponsor.publicKey(), '1'), {
-    fee: '300',
-    networkPassphrase: Networks.TESTNET,
-  })
-    .addOperation(Operation.bumpSequence({ bumpTo: '0' }))
-    .setTimeout(900)
-    .build()
-    .toXDR();
+  if (!cachedOffer) {
+    const sponsor = Keypair.random();
+    cachedOffer = {
+      sponsorPublicKey: sponsor.publicKey(),
+      xdr: new TransactionBuilder(new Account(sponsor.publicKey(), '1'), {
+        fee: '300',
+        networkPassphrase: Networks.TESTNET,
+      })
+        .addOperation(Operation.bumpSequence({ bumpTo: '0' }))
+        .setTimeout(900)
+        .build()
+        .toXDR(),
+    };
+  }
 
   return {
     id: 'sponsorship-1',
     state: 'awaiting_signature',
-    xdr,
+    xdr: cachedOffer.xdr,
     networkPassphrase: Networks.TESTNET,
-    sponsorPublicKey: sponsor.publicKey(),
+    sponsorPublicKey: cachedOffer.sponsorPublicKey,
     quote: { lockedXlm: '1.0000000', disclosure: [], recoverable: true },
     expiresAt: new Date(Date.now() + 900_000).toISOString(),
   };
