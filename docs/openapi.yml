@@ -118,6 +118,8 @@ components:
           type: integer
         co2OffsetKg:
           type: number
+          deprecated: true
+          description: Legacy operator input. Donor-facing environmental outcomes use ImpactClaim records and are never derived from this field.
         verified:
           type: boolean
         onChainVerified:
@@ -152,6 +154,67 @@ components:
           type: boolean
         machineTranslated:
           type: boolean
+
+    ImpactClaim:
+      type: object
+      required: [id, projectId, claimType, quantity, uncertainty, methodology, measurementPeriod, baseline, evidence, provenance]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        projectName:
+          type: string
+          nullable: true
+        claimType:
+          type: string
+          enum: [avoided_emissions, sequestration, offset]
+        quantity:
+          type: object
+          properties:
+            value: { type: string }
+            lowerBound: { type: string }
+            upperBound: { type: string }
+            unit: { type: string }
+        uncertainty:
+          type: object
+          properties:
+            lowerBound: { type: string }
+            upperBound: { type: string }
+            confidencePercent: { type: number, nullable: true }
+        methodology:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+            version: { type: string }
+            limitations: { type: string }
+            comparisonScope: { type: string }
+        measurementPeriod:
+          type: object
+          properties:
+            start: { type: string, format: date }
+            end: { type: string, format: date }
+        vintage:
+          type: object
+          nullable: true
+        baseline:
+          type: string
+        evidence:
+          type: array
+          items: { type: object }
+        provenance:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [verified, operator_stated, unverified, revoked, expired]
+            label: { type: string }
+            assertedBy: { type: string }
+            attestation: { type: object, nullable: true }
 
     Campaign:
       type: object
@@ -2120,7 +2183,7 @@ paths:
   /api/impact/project/{id}:
     get:
       tags: [Impact]
-      summary: Impact metrics for a project
+      summary: Donation facts and evidence-backed claims for a project
       operationId: getProjectImpact
       parameters:
         - $ref: '#/components/parameters/projectId'
@@ -2141,12 +2204,15 @@ paths:
                             type: string
                           donorCount:
                             type: integer
-                          co2OffsetKg:
-                            type: integer
-                          treesEquivalent:
-                            type: number
-                          uniqueCountries:
-                            type: integer
+                          claims:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ImpactClaim'
+                          claimSummary:
+                            type: object
+                          comparableImpactGroups:
+                            type: array
+                            items: { type: object }
         '400':
           description: Invalid project id
           content:
@@ -2163,7 +2229,7 @@ paths:
   /api/impact/global:
     get:
       tags: [Impact]
-      summary: Global impact metrics
+      summary: Global donation facts and comparable claim groups
       operationId: getGlobalImpact
       responses:
         '200':
@@ -2182,12 +2248,11 @@ paths:
                             type: string
                           donorCount:
                             type: integer
-                          co2OffsetKg:
-                            type: integer
-                          treesEquivalent:
-                            type: number
-                          uniqueCountries:
-                            type: integer
+                          claimSummary:
+                            type: object
+                          comparableImpactGroups:
+                            type: array
+                            items: { type: object }
                           breakdownByCategory:
                             type: array
                             items:
@@ -2199,13 +2264,15 @@ paths:
                                   type: string
                                 donorCount:
                                   type: integer
-                                co2OffsetKg:
+                                claimCount:
+                                  type: integer
+                                verifiedClaimCount:
                                   type: integer
 
   /api/impact/donor/{publicKey}:
     get:
       tags: [Impact]
-      summary: Impact metrics for a donor
+      summary: Donation facts plus unallocated claims from supported projects
       operationId: getDonorImpact
       parameters:
         - $ref: '#/components/parameters/publicKey'
@@ -2224,13 +2291,19 @@ paths:
                         properties:
                           totalDonatedXLM:
                             type: string
-                          co2OffsetKg:
-                            type: integer
                           projectsSupported:
                             type: integer
                           topCategory:
                             type: string
                             nullable: true
+                          supportedProjectClaims:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ImpactClaim'
+                          claimSummary:
+                            type: object
+                          attributionNotice:
+                            type: string
         '400':
           description: Invalid public key
           content:

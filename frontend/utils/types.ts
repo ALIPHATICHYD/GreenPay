@@ -37,8 +37,10 @@ export interface ClimateProject {
   goalXLM: string;             // fundraising goal
   raisedXLM: string;           // total raised so far
   donorCount: number;
-  co2OffsetKg: number;         // estimated CO2 offset in kg
-  co2_per_xlm?: number;        // CO2 offset per XLM donated
+  /** @deprecated Legacy operator input; use /api/impact project claims. */
+  co2OffsetKg: number;
+  /** @deprecated Retained for old contract/project payload compatibility only. */
+  co2_per_xlm?: number;
   status: ProjectStatus;
   rejectionReason?: string | null;
   verified: boolean;

@@ -8,7 +8,7 @@ import { signTransactionWithWallet } from "@/lib/wallet";
 import { loadStarterAccount, signWithStarterAccount, shouldPromptExport } from "@/lib/starterAccount";
 import { track, completeFunnel } from "@/lib/funnel";
 import { recordDonation } from "@/lib/api";
-import { formatXLM, formatCO2 } from "@/utils/format";
+import { formatXLM } from "@/utils/format";
 import { useI18n } from "@/lib/i18n";
 import { parseToStroops, stroopsToXLM, isValidDonationAmount, hasSufficientBalance, multiply } from "@/utils/amount";
 import type { ClimateProject } from "@/utils/types";
@@ -187,14 +187,6 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
   const amountNum = Number.parseFloat(amount);
   const amountStroops = parseToStroops(amount);
   const isValid = isValidDonationAmount(amount) && parseToStroops(amount) >= parseToStroops("1");
-
-  // Calculate CO₂ impact for XLM donations
-  const co2Impact = currency === "XLM" && amount && isValid && project.co2_per_xlm
-    ? (parseFloat(stroopsToXLM(amountStroops)) * project.co2_per_xlm) / 1000 // Convert to kg
-    : 0;
-
-  // Calculate tree equivalent (rough estimate: 1 tree absorbs ~22kg CO₂ per year)
-  const treeEquivalent = co2Impact > 0 ? Math.round(co2Impact / 22) : 0;
 
     const charCount = message.length;
 
@@ -492,19 +484,11 @@ export default function DonateForm({ project, publicKey, initialAmount, initialM
             className="input-field" />
           {amount && !isValid && <p className="mt-1 text-xs text-red-500">Minimum donation is 1 {currency}</p>}
           
-          {/* CO₂ Impact Calculator */}
-          {currency === "XLM" && amount && !isNaN(amountNum) && co2Impact > 0 && (
-            <div className="mt-3 p-3 bg-forest-50 border border-forest-200 rounded-xl">
-              <p className="text-sm font-medium text-forest-900 mb-1">
-                🌱 Your donation will offset approximately <span className="font-bold text-forest-700">{formatCO2(co2Impact, localeTag)}</span>
-              </p>
-              {treeEquivalent > 0 && (
-                <p className="text-xs text-forest-600 mt-1 font-semibold">
-                  {t("donate.treeEquivalent", { count: treeEquivalent })}
-                </p>
-              )}
-            </div>
-          )}
+          <div className="mt-3 p-3 bg-forest-50 border border-forest-200 rounded-xl">
+            <p className="text-xs text-forest-700">
+              Your payment is recorded on-chain. Environmental outcomes are reported separately as measured project claims; this amount does not generate an automatic CO₂ estimate.
+            </p>
+          </div>
         </div>
 
         {/* Message */}

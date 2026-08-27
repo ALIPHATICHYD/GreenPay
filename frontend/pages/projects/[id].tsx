@@ -12,10 +12,12 @@ import WalletConnect from "@/components/WalletConnect";
 import CircularProgress from "@/components/CircularProgress";
 import MonthlyGivingSetup from "@/components/MonthlyGivingSetup";
 import DescriptionAccordion from "@/components/DescriptionAccordion";
-import { createProjectCampaign, fetchProject, fetchProjectMatches, fetchProjectUpdates, fetchSubscriberCount, generateProjectSummary, getApiErrorMessage, subscribeToProject, toggleUpdateLike } from "@/lib/api";
+import ImpactClaimCard from "@/components/ImpactClaimCard";
+import { createProjectCampaign, fetchImpactProject, fetchProject, fetchProjectMatches, fetchProjectUpdates, fetchSubscriberCount, generateProjectSummary, getApiErrorMessage, subscribeToProject, toggleUpdateLike } from "@/lib/api";
+import type { ImpactProjectStats } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import ContentLanguageNotice from "@/components/ContentLanguageNotice";
-import { formatXLM, formatCO2, progressPercent, timeAgo, statusClass, statusLabel, CATEGORY_ICONS, copyToClipboard, shortenAddress } from "@/utils/format";
+import { formatXLM, progressPercent, timeAgo, statusClass, statusLabel, CATEGORY_ICONS, copyToClipboard, shortenAddress } from "@/utils/format";
 import { buildReportHtml } from "@/utils/buildReportHtml";
 import { accountUrl, fetchProjectDiscussion, type ProjectDiscussionMessage } from "@/lib/stellar";
 import { markMonthlySubscriptionPaid } from "@/lib/monthlyGiving";
@@ -48,7 +50,7 @@ export default function ProjectDetail({
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [shareState, setShareState] = useState<'idle' | 'copied'>('idle');
   const [shareCount, setShareCount] = useState<number>(0);
-  const [calcAmount, setCalcAmount] = useState<string>("50");
+  const [projectImpact, setProjectImpact] = useState<ImpactProjectStats | null>(null);
 
   /**
    * Which key signs this donation.
@@ -105,11 +107,13 @@ export default function ProjectDetail({
       fetchProject(id as string, locale),
       fetchProjectUpdates(id as string, locale),
       fetchProjectMatches(id as string),
+      fetchImpactProject(id as string).catch(() => null),
     ])
-      .then(([p, u, m]) => {
+      .then(([p, u, m, impact]) => {
         setProject(p);
         setUpdates(u);
         setMatches(m);
+        setProjectImpact(impact);
         if (p.serverNow) {
           setServerOffset(p.serverNow - Date.now());
         }
@@ -356,17 +360,6 @@ export default function ProjectDetail({
     ? formatCountdown(activeCampaign.deadline, countdownNow)
     : null;
 
-  const calcAmountNum = parseFloat(calcAmount) || 0;
-  const estimatedCO2 = calcAmountNum * (project.co2OffsetKg || 0);
-  const treesEquivalent = estimatedCO2 / 22;
-  
-  let analogy = "";
-  if (treesEquivalent === 0) analogy = "Enter an amount to see your impact!";
-  else if (treesEquivalent < 1) analogy = "A tiny sprout of change! 🌱";
-  else if (treesEquivalent < 10) analogy = "A small grove taking root! 🌳";
-  else if (treesEquivalent < 50) analogy = "A growing mini-forest! 🌲";
-  else analogy = "A massive impact for our planet! 🌍";
-
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10 pb-24 sm:pb-10 animate-fade-in">
       <ToastNotification
@@ -598,9 +591,9 @@ export default function ProjectDetail({
                   value: project.donorCount.toString(),
                 },
                 {
-                  icon: "♻️",
-                  label: "CO₂ Offset",
-                  value: formatCO2(project.co2OffsetKg, localeTag),
+                  icon: "📋",
+                  label: "Outcome Claims",
+                  value: `${projectImpact?.claimSummary.total ?? 0} (${projectImpact?.claimSummary.verified ?? 0} verified)`,
                 },
                 {
                   icon: "🎯",
@@ -614,32 +607,42 @@ export default function ProjectDetail({
                     <p className="font-semibold text-forest-900 text-sm font-body">
                       {s.value}
                     </p>
-                    {s.label === "CO₂ Offset" && (
-                      <span
-                        className="tooltip"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                        }}
-                      >
-                        <button
-                          type="button"
-                          className="w-3.5 h-3.5 flex items-center justify-center rounded-full bg-forest-100 text-[8px] text-forest-600 border border-forest-200 hover:bg-forest-200 transition-colors focus:outline-none focus:ring-1 focus:ring-forest-400"
-                          aria-label="CO2 offset estimate methodology info"
-                        >
-                          ℹ️
-                        </button>
-                        <span className="tooltip-text" role="tooltip">
-                          Estimated CO₂ offset based on this project&apos;s declared
-                          impact rate per XLM donated. Actual results may vary.
-                        </span>
-                      </span>
-                    )}
                   </div>
                   <p className="text-xs text-[#547454] font-body">{s.label}</p>
                 </div>
               ))}
             </div>
+
+            <section className="mt-5 border-t border-forest-100 pt-5">
+              <div className="flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h2 className="font-display text-xl font-bold text-forest-900">Measured outcome claims</h2>
+                  <p className="mt-1 text-xs text-forest-600">
+                    Project-level evidence records; they are never calculated from your donation amount.
+                  </p>
+                </div>
+                {projectImpact && (
+                  <p className="text-xs font-semibold text-forest-700">
+                    {projectImpact.claimSummary.operatorStated} operator-stated · {projectImpact.claimSummary.unverified} unverified · {projectImpact.claimSummary.revoked} withdrawn
+                  </p>
+                )}
+              </div>
+              {projectImpact === null ? (
+                <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  Outcome claim records are temporarily unavailable. No environmental quantity is inferred from the donation data.
+                </p>
+              ) : projectImpact.claims.length ? (
+                <div className="mt-4 space-y-4">
+                  {projectImpact.claims.map((claim) => (
+                    <ImpactClaimCard key={claim.id} claim={claim} locale={localeTag} />
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                  No measured outcome claim has been published for this project. The donation destination and amount remain verifiable on-chain.
+                </p>
+              )}
+            </section>
 
             {/* Wallet link */}
             <div className="mt-4 pt-4 border-t border-forest-100 flex items-center gap-2 text-xs text-[#547454] font-body">
@@ -1122,51 +1125,17 @@ export default function ProjectDetail({
             )}
           </div>
 
-          {/* Impact Calculator */}
+          {/* Outcome provenance */}
           <div className="card bg-forest-50 border-forest-200">
-            <h3 className="font-display font-semibold text-forest-900 mb-2">Impact Calculator</h3>
-            <p className="text-xs text-[#4b654b] mb-3 font-body">See what your donation can achieve before you give.</p>
-            
-            <div className="flex flex-wrap gap-2 mb-3">
-              {["10", "25", "50", "100", "250"].map(p => (
-                <button
-                  key={p}
-                  onClick={() => setCalcAmount(p)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
-                    calcAmount === p ? "bg-forest-600 text-white border-forest-600 shadow-sm" : "bg-white text-forest-700 border-forest-200 hover:border-forest-400"
-                  }`}
-                >
-                  {p} XLM
-                </button>
-              ))}
-            </div>
-            
-            <div className="mb-4">
-              <input
-                type="number"
-                value={calcAmount}
-                onChange={(e) => setCalcAmount(e.target.value)}
-                placeholder="Custom amount"
-                min="0"
-                className="w-full px-3 py-2 text-sm rounded-lg border border-forest-200 bg-white focus:outline-none focus:ring-2 focus:ring-forest-400 font-body placeholder:text-forest-300"
-              />
-            </div>
-            
-            {calcAmountNum > 0 && (
-              <div className="p-3 bg-white rounded-lg border border-forest-100 shadow-sm animate-fade-in">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-lg">♻️</span>
-                  <span className="font-semibold text-forest-800 text-sm font-body">{formatCO2(estimatedCO2, localeTag)} offset</span>
-                </div>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-lg">🌳</span>
-                  <span className="font-semibold text-forest-800 text-sm font-body">~{treesEquivalent.toFixed(1)} trees/year</span>
-                </div>
-                <div className="pt-2 border-t border-forest-50 text-center">
-                  <span className="text-xs text-forest-600 font-medium italic font-body">{analogy}</span>
-                </div>
-              </div>
-            )}
+            <h3 className="font-display font-semibold text-forest-900 mb-2">How outcome reporting works</h3>
+            <p className="text-xs text-[#4b654b] font-body leading-relaxed">
+              A payment does not automatically become avoided emissions, sequestration, or an offset. Project operators submit measured ranges and evidence; independent verifiers attest a canonical hash on-chain. Withdrawn attestations stay visible.
+            </p>
+            <p className="mt-3 rounded-lg border border-forest-100 bg-white p-3 text-xs font-semibold text-forest-800">
+              {projectImpact === null
+                ? "Outcome records temporarily unavailable"
+                : `${projectImpact.claimSummary.total} current and historical claim record${projectImpact.claimSummary.total === 1 ? "" : "s"}`}
+            </p>
           </div>
 
           {publicKey ? (
