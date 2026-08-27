@@ -504,3 +504,132 @@ CREATE INDEX IF NOT EXISTS idx_projects_location_trgm ON projects USING GIN (loc
 CREATE INDEX IF NOT EXISTS idx_projects_category ON projects (category);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects (status);
 CREATE INDEX IF NOT EXISTS idx_projects_verified ON projects (verified);
+
+-- ── Graduated donor onboarding ──────────────────────────────────────────────
+-- Tables behind the first-donation paths for donors who arrive without a
+-- wallet, without a funded account, or without both. See
+-- docs/adr/ADR-005-graduated-non-custodial-donor-onboarding.md.
+--
+-- Nothing here stores a private key, a seed phrase, or any material that could
+-- be used to sign for a donor. The platform's non-custodial guarantee is a
+-- property of the schema, not only of the code: there is no column to put a
+-- key in.
+
+-- sponsored_accounts: one row per sponsorship request, from the moment
+-- treasury capacity is reserved to the moment the reserve comes back.
+--
+-- reserved_stroops holds capacity that is committed but not yet locked on
+-- chain; locked_stroops holds reserve the ledger has actually taken. Keeping
+-- them apart is what lets an abandoned or failed request give its capacity back
+-- without ever having claimed to hold real reserve.
+CREATE TABLE IF NOT EXISTS sponsored_accounts (
+  id UUID PRIMARY KEY,
+  account_public_key TEXT NOT NULL,
+  sponsor_public_key TEXT NOT NULL,
+  session_id UUID,
+  -- Hashed, never the address itself: enough to rate-limit, not enough to
+  -- identify or to be worth stealing.
+  ip_hash TEXT,
+  user_agent_hash TEXT,
+  state TEXT NOT NULL DEFAULT 'requested'
+    CHECK (state IN ('requested', 'awaiting_signature', 'submitted', 'active', 'failed', 'abandoned', 'reclaimed')),
+  reserved_stroops NUMERIC(20, 0) NOT NULL DEFAULT 0,
+  locked_stroops NUMERIC(20, 0) NOT NULL DEFAULT 0,
+  network TEXT NOT NULL DEFAULT 'testnet',
+  unsigned_xdr TEXT,
+  transaction_hash TEXT,
+  reclaim_transaction_hash TEXT,
+  reclaim_failures INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT,
+  upgraded_to TEXT,
+  expires_at TIMESTAMPTZ,
+  activated_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One live sponsorship per address. A partial index rather than a plain unique
+-- constraint, because the same address may legitimately appear again after a
+-- previous attempt failed or was abandoned.
+CREATE UNIQUE INDEX IF NOT EXISTS sponsored_accounts_live_key
+  ON sponsored_accounts (account_public_key)
+  WHERE state IN ('requested', 'awaiting_signature', 'submitted', 'active');
+CREATE INDEX IF NOT EXISTS idx_sponsored_accounts_state ON sponsored_accounts (state);
+CREATE INDEX IF NOT EXISTS idx_sponsored_accounts_ip_hash ON sponsored_accounts (ip_hash, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sponsored_accounts_session ON sponsored_accounts (session_id);
+CREATE INDEX IF NOT EXISTS idx_sponsored_accounts_created ON sponsored_accounts (created_at DESC);
+
+-- onboarding_sessions: one row per donor attempt at a first donation.
+-- Holds no IP, no user agent and no cookie — the id is a random value the
+-- browser generates. Enough to measure conversion, not enough to profile.
+CREATE TABLE IF NOT EXISTS onboarding_sessions (
+  id UUID PRIMARY KEY,
+  path TEXT CHECK (path IN ('connected_wallet', 'sponsored_account', 'onramp', 'claimable_balance')),
+  project_id UUID,
+  referrer_kind TEXT NOT NULL DEFAULT 'direct',
+  furthest_stage TEXT,
+  furthest_stage_index INTEGER NOT NULL DEFAULT -1,
+  outcome TEXT NOT NULL DEFAULT 'in_progress'
+    CHECK (outcome IN ('completed', 'abandoned', 'failed', 'in_progress')),
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_outcome ON onboarding_sessions (outcome, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_path ON onboarding_sessions (path, created_at DESC);
+
+-- onboarding_funnel_events: one row per (session, stage, path).
+--
+-- path_key exists only so the uniqueness constraint works: a NULL path would
+-- make every re-report a fresh row under SQL's NULL comparison rules, which is
+-- exactly the double-counting the idempotency is there to prevent.
+CREATE TABLE IF NOT EXISTS onboarding_funnel_events (
+  id UUID PRIMARY KEY,
+  session_id UUID NOT NULL,
+  stage TEXT NOT NULL,
+  stage_index INTEGER NOT NULL,
+  path TEXT,
+  path_key TEXT GENERATED ALWAYS AS (COALESCE(path, '')) STORED,
+  project_id UUID,
+  detail JSONB,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (session_id, stage, path_key)
+);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_stage ON onboarding_funnel_events (stage_index, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_occurred ON onboarding_funnel_events (occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_session ON onboarding_funnel_events (session_id);
+
+-- account_upgrades: a donor moving from a browser-held starter account to a
+-- wallet they properly control. Both addresses sign the same single-use nonce.
+CREATE TABLE IF NOT EXISTS account_upgrades (
+  id UUID PRIMARY KEY,
+  from_address TEXT NOT NULL,
+  to_address TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'challenged'
+    CHECK (state IN ('challenged', 'completed', 'expired', 'rejected')),
+  migrated_donations INTEGER NOT NULL DEFAULT 0,
+  migrated_amount NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_account_upgrades_from ON account_upgrades (from_address);
+CREATE INDEX IF NOT EXISTS idx_account_upgrades_state ON account_upgrades (state, created_at DESC);
+
+-- donor_address_links: the durable result of an upgrade.
+--
+-- Donations are never rewritten to a new donor_address — the ledger says which
+-- address made them and the database must not contradict it. Instead every
+-- read path that means "this donor's history" resolves through this table.
+-- linked_address is unique so an address can belong to exactly one donor.
+CREATE TABLE IF NOT EXISTS donor_address_links (
+  id UUID PRIMARY KEY,
+  canonical_address TEXT NOT NULL,
+  linked_address TEXT NOT NULL UNIQUE,
+  upgrade_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_donor_links_canonical ON donor_address_links (canonical_address);
