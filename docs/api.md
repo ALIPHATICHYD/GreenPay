@@ -52,7 +52,6 @@ existing clients.
   "goalXLM": "50000.0000000",
   "raisedXLM": "18420.0000000",
   "donorCount": 147,
-  "co2OffsetKg": 245000,
   "status": "active",
   "verified": true,
   "tags": ["reforestation", "amazon"],
@@ -111,6 +110,32 @@ Donations are **deduplicated by transactionHash** — safe to retry.
   "topBadge": "earth"
 }
 ```
+
+---
+
+## Environmental impact claims
+
+Donation amounts and environmental claims are separate resources. None of the
+endpoints below calculates a donor outcome from XLM.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/impact/project/:id` | Donation facts plus all current/historical project claims |
+| GET | `/api/v1/impact/global` | Donation totals and methodology-compatible claim groups |
+| GET | `/api/v1/impact/donor/:publicKey` | Donation facts plus claims belonging to supported projects, with no donor allocation |
+| GET | `/api/v1/impact/methodologies` | Methodology registry |
+| GET | `/api/v1/impact/claims/:id/verification` | Canonical payload, SHA-256, anchor and revocation state |
+| POST | `/api/v1/impact/project/:id/claims` | Admin: record an operator assertion |
+| POST | `/api/v1/impact/claims/:id/evidence` | Admin: attach a source URI and content hash |
+| POST | `/api/v1/impact/claims/:id/attestations` | Admin: record independent review and optional anchor receipt |
+| POST | `/api/v1/impact/attestations/:id/anchor` | Admin: attach a confirmed Soroban receipt |
+| POST | `/api/v1/impact/attestations/:id/revoke` | Admin: record verifier/admin revocation |
+| POST | `/api/v1/impact/claims/:id/revoke` | Admin: withdraw a claim without deleting history |
+
+An impact claim includes a quantity range, unit, claim type, methodology,
+measurement period, vintage, baseline, uncertainty/confidence, asserting party,
+evidence and provenance. `avoided_emissions`, `sequestration` and `offset` are
+never combined. See [impact accounting](impact-accounting.md).
 
 ---
 

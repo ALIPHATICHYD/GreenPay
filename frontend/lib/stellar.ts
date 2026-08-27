@@ -519,32 +519,30 @@ export function accountUrl(addr: string): string {
 }
 
 /**
- * Queries the Soroban contract for global impact metrics.
+ * Queries Soroban for independently auditable donation metrics.
  */
 export async function getGlobalImpactStats() {
   if (!CONTRACT_ID) {
     console.warn("CONTRACT_ID not set, returning zero stats");
-    return { totalRaisedXLM: "0", totalCO2OffsetGrams: "0", donationCount: 0 };
+    return { totalRaisedXLM: "0", donationCount: 0 };
   }
 
   const contract = new Contract(CONTRACT_ID);
   
   try {
-    const [totalRaised, totalCO2, donationCount] = await Promise.all([
+    const [totalRaised, donationCount] = await Promise.all([
       simulateCall(contract, "get_global_total"),
-      simulateCall(contract, "get_global_co2"),
       simulateCall(contract, "get_donation_count")
     ]);
 
-    // totalRaised is in stroops (i128), totalCO2 is in grams (i128)
+    // totalRaised is in stroops (i128).
     return {
       totalRaisedXLM: (Number(totalRaised) / 10_000_000).toLocaleString(undefined, { minimumFractionDigits: 2 }),
-      totalCO2OffsetGrams: totalCO2.toString(),
       donationCount: Number(donationCount),
     };
   } catch (err) {
     console.error("Failed to fetch global impact stats:", err);
-    return { totalRaisedXLM: "0", totalCO2OffsetGrams: "0", donationCount: 0 };
+    return { totalRaisedXLM: "0", donationCount: 0 };
   }
 }
 
@@ -566,7 +564,6 @@ export async function getDonorStats(donorAddress: string) {
       totalDonated: Number(stats.total_donated) / 10_000_000,
       donationCount: Number(stats.donation_count),
       badge: stats.badge,
-      co2OffsetGrams: Number(stats.co2_offset_grams),
     };
   } catch (err) {
     console.error("Failed to fetch donor stats:", err);
