@@ -5,7 +5,7 @@
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { apiGet, API_URL, parseApiFetchResponse } from '../../utils/api';
+import { apiFetch, apiGet, parseApiFetchResponse } from '../../utils/api';
 import { getPushToken, followProject, unfollowProject } from '../../utils/notifications';
 import { parseProjectUpdates, type MobileProjectUpdate } from '../../utils/projectUpdates';
 import { useTheme } from '../theme';
@@ -58,7 +58,7 @@ export default function ProjectDetailScreen() {
 
   const checkFollowStatus = async (projectId: string, token: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/notifications/follows?token=${token}`);
+      const response = await apiFetch(`/api/notifications/follows?token=${encodeURIComponent(token)}`);
       const followedProjects = await parseApiFetchResponse<Array<{ id: string }>>(response);
       const isFollowed = followedProjects.some((p) => p.id === projectId);
       setIsFollowing(isFollowed);
