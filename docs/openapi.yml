@@ -862,20 +862,6 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-
-  responses:
-    BadRequest:
-      description: The request is invalid.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    Unauthorized:
-      description: Authentication is required or the supplied credentials are invalid.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
     NotFound:
       description: The requested resource was not found.
       content:
@@ -3703,7 +3689,7 @@ paths:
       responses:
         '201': { description: Appeal queued for an independent reviewer }
         '403': { description: Wallet signature did not verify }
-        '409': { description: Challenge expired, used, or case not appealable }
+        '409': { description: 'Challenge expired, used, or case not appealable' }
 
   /api/v1/integrity/appeals:
     get:

@@ -138,37 +138,36 @@ app.get(`${API_V1}/csrf-token`, (req, res) => {
 
 app.get("/livez", (req, res) => res.json({ status: "ok" }));
 app.use("/health",                  require("./routes/health"));
-app.use(`${API_V1}/projects`,       require("./routes/projects"));
-app.use(`${API_V1}/donations`,      require("./routes/donations"));
-app.use(`${API_V1}/profiles`,       require("./routes/profiles"));
-app.use(`${API_V1}/leaderboard`,    require("./routes/leaderboard"));
-app.use(`${API_V1}/updates`,        require("./routes/updates"));
-app.use(`${API_V1}/subscriptions`,  require("./routes/subscriptions"));
-app.use(`${API_V1}/jobs`,           require("./routes/jobs"));
-app.use(`${API_V1}/stats`,          require("./routes/stats"));
-app.use(`${API_V1}/impact`,         require("./routes/impact"));
-app.use(`${API_V1}/integrity`,      require("./routes/integrity"));
-app.use(`${API_V1}/ratings`,        require("./routes/ratings"));
-app.use(`${API_V1}/notifications`,  require("./routes/notifications"));
-app.use(`${API_V1}/admin`,          require("./routes/admin"));
-app.use(`${API_V1}/network`,        require("./routes/network"));
-app.use(`${API_V1}/meta`,           require("./routes/meta"));
-app.use(`${API_V1}/realtime`,       require("./routes/realtime"));
-app.use(`${API_V1}/onboarding`,     require("./routes/onboarding"));
+const metaRouter = require("./routes/meta");
 
-// Legacy unversioned routes → redirect to /api/v1 with a deprecation notice.
-app.use("/api", (req, res, next) => {
-  // Already-versioned and Swagger UI requests are handled elsewhere.
-  if (req.path === "/v1" || req.path.startsWith("/v1/") ||
-      req.path === "/docs" || req.path.startsWith("/docs/")) {
-    return next();
-  }
-  res.set("Deprecation", "true");
-  res.set("Link", `<${API_V1}>; rel="successor-version"`);
-  // 308 preserves the request method and body for non-GET clients.
-  // req.url is relative to the "/api" mount and retains the query string.
-  return res.redirect(308, `${API_V1}${req.url}`);
-});
+mountApiVersion(app, "v1", [
+  { path: "/projects", router: require("./routes/projects") },
+  { path: "/donations", router: require("./routes/donations") },
+  { path: "/profiles", router: require("./routes/profiles") },
+  { path: "/leaderboard", router: require("./routes/leaderboard") },
+  { path: "/updates", router: require("./routes/updates") },
+  { path: "/subscriptions", router: require("./routes/subscriptions") },
+  { path: "/jobs", router: require("./routes/jobs") },
+  { path: "/stats", router: require("./routes/stats") },
+  { path: "/impact", router: require("./routes/impact") },
+  { path: "/integrity", router: require("./routes/integrity") },
+  { path: "/ratings", router: require("./routes/ratings") },
+  { path: "/notifications", router: require("./routes/notifications") },
+  { path: "/admin", router: require("./routes/admin") },
+  { path: "/network", router: require("./routes/network") },
+  { path: "/meta", router: metaRouter },
+  { path: "/realtime", router: require("./routes/realtime") },
+  { path: "/onboarding", router: require("./routes/onboarding") },
+]);
+
+// A deliberately small v2 preview proves that two representations can run at
+// once. It reuses v1 domain data and adapts only the external metadata shape.
+mountApiVersion(app, "v2", [
+  { path: "/meta", router: metaRouter, transform: metaV1ToV2 },
+]);
+
+// Version-neutral discovery remains stable even while major versions change.
+app.use("/api/versions", createLifecycleRouter());
 
 app.use(notFoundHandler);
 app.use(errorHandler);
