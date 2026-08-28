@@ -12,19 +12,37 @@ All API routes are served under a version prefix: **`/api/v1`**. The version
 prefix lets us ship breaking changes in a future `/api/v2` without disrupting
 existing clients.
 
-**Policy**
+The normative, mechanically enforceable rules live in the
+[API versioning and compatibility policy](api-versioning-policy.md). Changes
+and deprecations are announced in the [API lifecycle changelog](api-changelog.md)
+and at `GET /api/versions/changelog`.
+
+**Summary**
 
 - Resource routes live under `/api/v1/<resource>` (e.g. `/api/v1/projects`).
 - `/health` is unversioned (infrastructure/liveness check).
 - New non-breaking fields may be added to a version without a bump. Breaking
   changes (removing/renaming fields, changing semantics) introduce a new
   version (`/api/v2`) and the previous version is supported until deprecated.
-- **Legacy redirect:** unversioned `/api/v1/*` requests are answered with a
+- **Legacy redirect:** unversioned `/api/*` requests are answered with a
   `308 Permanent Redirect` to their `/api/v1/*` equivalent and carry a
-  `Deprecation: true` header plus a
-  `Link: </api/v1>; rel="successor-version"` header. The `308` status
+  `Deprecation: true` header, a
+  `Sunset: Tue, 31 Dec 2030 23:59:59 GMT` header, and links to the successor
+  and changelog. The sunset is an earliest retirement floor: the redirect is
+  kept longer unless the policy's 90-day usage gates pass. The `308` status
   preserves the HTTP method and body, so existing `POST`/`PATCH` clients keep
   working. New clients should call `/api/v1` directly.
+- Clients send `X-Client-Name`, `X-Client-Version`, and
+  `X-Client-API-Version`; completed requests are measured by endpoint and these
+  dimensions. `GET /api/v1/admin/api-usage` exposes the current authenticated
+  operational snapshot and structured `api_request` logs retain history.
+
+### Concurrent-version worked example
+
+`GET /api/v1/meta` serves the stable flat representation while
+`GET /api/v2/meta` concurrently serves an experimental nested representation.
+Both reuse the same domain result; the v2 transform is isolated at its mount so
+v1 cannot change accidentally. See the policy for the route/adapter mechanism.
 
 ---
 
@@ -178,7 +196,27 @@ other than the original reviewer. See the full
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/updates/:projectId` | Updates posted by a project |
+| GET | `/api/v1/updates/:projectId` | Public and public-under-review updates posted by a project |
+| POST | `/api/v1/updates` | Create an update; review mode follows project trust and notifications wait for approval |
+| PATCH | `/api/v1/updates/:updateId` | Edit an update, retain the previous revision, and return the edit to review |
+| GET | `/api/v1/updates/:updateId/history` | Donor-visible history of earlier public revisions |
+| POST | `/api/v1/updates/:updateId/reports` | Donor: report an update (`donorAddress`, fixed `reason`, optional `details`) |
+| GET | `/api/v1/updates/:updateId/reports` | Admin: inspect report reasons, details, and resolutions |
+| GET | `/api/v1/updates/moderation/queue` | Admin: pending, public-under-review, and appealed updates |
+| POST | `/api/v1/updates/:updateId/moderation` | Admin: `approve`, `reject`, `remove`, or `reinstate` with a reason |
+| GET | `/api/v1/updates/:updateId/moderation-history` | Admin: immutable actor/reason lifecycle audit |
+| POST | `/api/v1/updates/:updateId/appeals` | Project admin: appeal a rejected or removed update |
+| GET | `/api/v1/updates/moderation/appeals` | Admin: pending appeal queue |
+| POST | `/api/v1/updates/appeals/:appealId/decision` | Different moderator: grant or deny an appeal with a reason |
+| POST | `/api/v1/updates/:updateId/notifications/retry` | Admin: queue only publication channels not previously handed off |
+
+New standard-project updates use pre-publication review. Fully verified
+projects are visible during post-publication review, with a label. Email and
+push always wait for approval. Reports are restricted to project donors,
+rate-limited, deduplicated, and never remove content automatically. See the
+[project update content and moderation policy](project-update-moderation.md)
+for applicable rules, lifecycle, evidence standard, appeals, edit history, and
+the required follow-up when notified content is removed.
 
 ---
 

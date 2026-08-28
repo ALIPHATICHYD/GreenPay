@@ -24,6 +24,15 @@ const { initializeEventSourcing, shutdownEventSourcing } = require("./eventSourc
 const pool = require("./db/pool");
 const { createShutdownHandler } = require("./shutdown");
 const { logger } = require("./utils/logger");
+const { createApiUsageMiddleware } = require("./middleware/apiUsage");
+const {
+  API_V1,
+  apiVersionHeaders,
+  createLifecycleRouter,
+  legacyRedirect,
+  mountApiVersion,
+} = require("./versioning/lifecycle");
+const { metaV1ToV2 } = require("./versioning/metaV2");
 
 const app = express();
 const server = http.createServer(app);
@@ -66,6 +75,8 @@ app.use(helmet());
 // AsyncLocalStorage context is established before any route handler,
 // including the structured access log below, executes.
 app.use(correlationIdMiddleware);
+app.use(apiVersionHeaders);
+app.use(createApiUsageMiddleware());
 
 // Structured access log — replaces morgan("dev") so every request
 // record carries the same JSON shape as all other log output.
@@ -83,6 +94,12 @@ app.use(cookieParser());
 const origins = getAllowedOrigins();
 app.use(apiEnvelope);
 app.use(...createCorsMiddleware(origins));
+
+// Redirect the legacy surface before CSRF validation. The 308 does not mutate
+// state, and doing it here lets an old POST client reach v1 first and then use
+// the v1 CSRF flow instead of receiving an unrelated 403 with no lifecycle
+// headers.
+app.use("/api", legacyRedirect);
 
 app.use(csurf({
   cookie: {
@@ -112,11 +129,9 @@ app.set("io", io);
 // a dedicated limiter appropriate to its abuse profile (see individual route files).
 
 // ── API versioning ───────────────────────────────────────────────────────────
-// All routes are served under the `/api/v1` prefix. Legacy unversioned `/api/*`
-// requests are redirected to their `/api/v1/*` equivalent with a `Deprecation`
-// header so existing clients keep working. See docs/api.md for the policy.
-const API_V1 = "/api/v1";
-
+// Stable routes are served under `/api/v1`; isolated previews can be mounted
+// concurrently under a later major prefix. Legacy unversioned `/api/*`
+// requests redirect to v1 with full lifecycle signalling. See docs/api.md.
 app.get(`${API_V1}/csrf-token`, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
