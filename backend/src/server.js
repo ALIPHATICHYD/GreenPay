@@ -132,6 +132,7 @@ app.use(`${API_V1}/subscriptions`,  require("./routes/subscriptions"));
 app.use(`${API_V1}/jobs`,           require("./routes/jobs"));
 app.use(`${API_V1}/stats`,          require("./routes/stats"));
 app.use(`${API_V1}/impact`,         require("./routes/impact"));
+app.use(`${API_V1}/integrity`,      require("./routes/integrity"));
 app.use(`${API_V1}/ratings`,        require("./routes/ratings"));
 app.use(`${API_V1}/notifications`,  require("./routes/notifications"));
 app.use(`${API_V1}/admin`,          require("./routes/admin"));
