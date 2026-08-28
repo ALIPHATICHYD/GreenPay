@@ -2059,7 +2059,6 @@ paths:
         Standard projects enter pending pre-publication review. Fully verified
         projects enter published_pending_review and are visible immediately.
         Email and push notifications are held until approval in both modes.
-      security: [{ bearerAuth: [] }]
       operationId: createProjectUpdate
       parameters:
         - name: x-admin-key
@@ -2117,7 +2116,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /api/updates/{updateId}:
+  /api/v1/updates/{updateId}:
     patch:
       tags: [Updates]
       summary: Edit an update and retain the previous revision
@@ -2142,7 +2141,7 @@ paths:
         '200': { description: Updated revision is pending review; prior public snapshot retained }
         '409': { description: Moderation decision must be resolved before editing }
 
-  /api/updates/{updateId}/history:
+  /api/v1/updates/{updateId}/history:
     get:
       tags: [Updates]
       summary: Read earlier donor-visible revisions
@@ -2154,7 +2153,7 @@ paths:
       responses:
         '200': { description: Prior public snapshots that remain suitable for display }
 
-  /api/updates/{updateId}/reports:
+  /api/v1/updates/{updateId}/reports:
     get:
       tags: [Updates]
       summary: Inspect reports and resolutions for an update
@@ -2195,7 +2194,7 @@ paths:
         '403': { description: Address has no committed donation to the project }
         '409': { description: Donor already reported this update }
 
-  /api/updates/moderation/queue:
+  /api/v1/updates/moderation/queue:
     get:
       tags: [Updates]
       summary: List updates requiring moderation
@@ -2207,7 +2206,7 @@ paths:
       responses:
         '200': { description: Queue ordered by open report count then age }
 
-  /api/updates/{updateId}/moderation:
+  /api/v1/updates/{updateId}/moderation:
     post:
       tags: [Updates]
       summary: Record a reasoned moderation decision
@@ -2231,7 +2230,7 @@ paths:
         '200': { description: Decision and immutable actor/reason event recorded }
         '409': { description: Action is invalid from the current lifecycle state }
 
-  /api/updates/{updateId}/moderation-history:
+  /api/v1/updates/{updateId}/moderation-history:
     get:
       tags: [Updates]
       summary: Read the actor/reason moderation audit trail
@@ -2244,7 +2243,7 @@ paths:
       responses:
         '200': { description: Chronological immutable moderation events }
 
-  /api/updates/{updateId}/appeals:
+  /api/v1/updates/{updateId}/appeals:
     post:
       tags: [Updates]
       summary: Appeal a rejected or removed update
@@ -2267,7 +2266,7 @@ paths:
         '201': { description: Appeal queued for a different moderator }
         '409': { description: Update is not appealable or already has a pending appeal }
 
-  /api/updates/moderation/appeals:
+  /api/v1/updates/moderation/appeals:
     get:
       tags: [Updates]
       summary: List pending project update appeals
@@ -2275,7 +2274,7 @@ paths:
       responses:
         '200': { description: Oldest pending appeals first }
 
-  /api/updates/appeals/{appealId}/decision:
+  /api/v1/updates/appeals/{appealId}/decision:
     post:
       tags: [Updates]
       summary: Grant or deny an appeal as a different moderator
@@ -2299,7 +2298,7 @@ paths:
         '200': { description: Appeal decision recorded }
         '409': { description: Appeal already decided or same actor attempted review }
 
-  /api/updates/{updateId}/notifications/retry:
+  /api/v1/updates/{updateId}/notifications/retry:
     post:
       tags: [Updates]
       summary: Retry only publication channels that have not accepted the event
@@ -2312,7 +2311,7 @@ paths:
       responses:
         '200': { description: Missing notification channels queued }
 
-  /api/updates/{updateId}/translations/{language}:
+  /api/v1/updates/{updateId}/translations/{language}:
     put:
       tags: [Updates]
       summary: Create or replace a pending update translation
