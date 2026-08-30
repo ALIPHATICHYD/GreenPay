@@ -506,7 +506,9 @@ impl GreenPayContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
         env.storage().instance().set(&DataKey::ProjectCount, &0u32);
         env.storage().instance().set(&DataKey::DonationCount, &0u32);
         env.storage()
@@ -1471,11 +1473,17 @@ impl GreenPayContract {
         };
 
         if state.completed {
-            env.storage().instance().set(&DataKey::Version, &new_version);
-            env.storage().instance().set(&DataKey::MigrationState, &state);
+            env.storage()
+                .instance()
+                .set(&DataKey::Version, &new_version);
+            env.storage()
+                .instance()
+                .set(&DataKey::MigrationState, &state);
             0
         } else {
-            env.storage().instance().set(&DataKey::MigrationState, &state);
+            env.storage()
+                .instance()
+                .set(&DataKey::MigrationState, &state);
             Self::execute_migration_batch(&env, state, batch_limit)
         }
     }
@@ -1525,7 +1533,9 @@ impl GreenPayContract {
                 .instance()
                 .set(&DataKey::Version, &state.target_version);
         }
-        env.storage().instance().set(&DataKey::MigrationState, &state);
+        env.storage()
+            .instance()
+            .set(&DataKey::MigrationState, &state);
         state.total_items.saturating_sub(state.cursor)
     }
 }

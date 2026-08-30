@@ -101,7 +101,9 @@ impl EscrowContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
         env.storage().instance().set(&DataKey::JobCount, &0u32);
     }
 
@@ -509,11 +511,17 @@ impl EscrowContract {
         };
 
         if state.completed {
-            env.storage().instance().set(&DataKey::Version, &new_version);
-            env.storage().instance().set(&DataKey::MigrationState, &state);
+            env.storage()
+                .instance()
+                .set(&DataKey::Version, &new_version);
+            env.storage()
+                .instance()
+                .set(&DataKey::MigrationState, &state);
             0
         } else {
-            env.storage().instance().set(&DataKey::MigrationState, &state);
+            env.storage()
+                .instance()
+                .set(&DataKey::MigrationState, &state);
             Self::execute_migration_batch(&env, state, batch_limit)
         }
     }
@@ -563,7 +571,9 @@ impl EscrowContract {
                 .instance()
                 .set(&DataKey::Version, &state.target_version);
         }
-        env.storage().instance().set(&DataKey::MigrationState, &state);
+        env.storage()
+            .instance()
+            .set(&DataKey::MigrationState, &state);
         state.total_items.saturating_sub(state.cursor)
     }
 }

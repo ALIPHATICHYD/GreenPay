@@ -184,7 +184,9 @@ impl DaoGovernanceContract {
             dao_admin,
         };
         env.storage().instance().set(&DataKey::Config, &config);
-        env.storage().instance().set(&DataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
         env.storage().instance().set(&DataKey::ProposalCount, &0u64);
         env.storage().instance().set(&DataKey::TotalLocked, &0i128);
         env.storage()
@@ -864,8 +866,10 @@ impl DaoGovernanceContract {
         }
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
-        env.events()
-            .publish((Symbol::new(&env, "upgraded"), caller.clone()), new_wasm_hash);
+        env.events().publish(
+            (Symbol::new(&env, "upgraded"), caller.clone()),
+            new_wasm_hash,
+        );
 
         let total_proposals: u64 = env
             .storage()
@@ -881,11 +885,17 @@ impl DaoGovernanceContract {
         };
 
         if state.completed {
-            env.storage().instance().set(&DataKey::Version, &new_version);
-            env.storage().instance().set(&DataKey::MigrationState, &state);
+            env.storage()
+                .instance()
+                .set(&DataKey::Version, &new_version);
+            env.storage()
+                .instance()
+                .set(&DataKey::MigrationState, &state);
             0
         } else {
-            env.storage().instance().set(&DataKey::MigrationState, &state);
+            env.storage()
+                .instance()
+                .set(&DataKey::MigrationState, &state);
             Self::execute_migration_batch(&env, state, batch_limit)
         }
     }
@@ -921,7 +931,11 @@ impl DaoGovernanceContract {
     }
 
     fn execute_migration_batch(env: &Env, mut state: MigrationState, batch_limit: u32) -> u64 {
-        let batch_size = if batch_limit == 0 { 1 } else { batch_limit as u64 };
+        let batch_size = if batch_limit == 0 {
+            1
+        } else {
+            batch_limit as u64
+        };
         let mut processed = 0u64;
 
         while processed < batch_size && (state.cursor as u64) < state.total_items {
@@ -935,7 +949,9 @@ impl DaoGovernanceContract {
                 .instance()
                 .set(&DataKey::Version, &state.target_version);
         }
-        env.storage().instance().set(&DataKey::MigrationState, &state);
+        env.storage()
+            .instance()
+            .set(&DataKey::MigrationState, &state);
         state.total_items.saturating_sub(state.cursor as u64)
     }
 
